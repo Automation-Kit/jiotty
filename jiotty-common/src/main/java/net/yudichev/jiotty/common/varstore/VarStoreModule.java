@@ -1,8 +1,6 @@
 package net.yudichev.jiotty.common.varstore;
 
-import jakarta.inject.Singleton;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 
@@ -11,18 +9,19 @@ import java.nio.file.Path;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 public final class VarStoreModule extends BaseLifecycleComponentModule implements ExposedKeyModule<VarStore> {
-    private final BindingSpec<Path> pathSpec;
+    private final VarStoreImpl varStore;
 
-    public VarStoreModule(BindingSpec<Path> pathSpec) {
-        this.pathSpec = checkNotNull(pathSpec);
+    private VarStoreModule(Path path) {
+        varStore = new VarStoreImpl(path);
+    }
+
+    public VarStoreImpl varStore() {
+        return varStore;
     }
 
     @Override
     protected void configure() {
-        pathSpec.bind(Path.class)
-                .annotatedWith(VarStoreImpl.StoreFile.class)
-                .installedBy(this::installLifecycleComponentModule);
-        bind(getExposedKey()).to(VarStoreImpl.class).in(Singleton.class);
+        bind(getExposedKey()).toInstance(varStore);
         expose(getExposedKey());
     }
 
@@ -30,21 +29,21 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<VarStore>> {
+    public static final class Builder implements TypedBuilder<VarStoreModule> {
 
-        private BindingSpec<Path> pathSpec;
+        private Path path;
 
         private Builder() {
         }
 
-        public Builder setPath(BindingSpec<Path> pathSpec) {
-            this.pathSpec = checkNotNull(pathSpec);
+        public Builder setPath(Path path) {
+            this.path = checkNotNull(path);
             return this;
         }
 
         @Override
-        public ExposedKeyModule<VarStore> build() {
-            return new VarStoreModule(pathSpec);
+        public VarStoreModule build() {
+            return new VarStoreModule(path);
         }
     }
 }

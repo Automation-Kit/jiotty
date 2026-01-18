@@ -1,0 +1,349 @@
+/* Based on https://chatgpt.com/share/5e6dd846-4479-473a-8e0a-896e9cd12d4c */
+/* Basic Form Styling */
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f4;
+    color: #333;
+    margin: 0;
+    padding: 2px;
+}
+
+form {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Input and Textarea */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+textarea {
+    padding: 10px;
+    margin: 5px 0 10px 0;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 13px;
+    font-family: 'Courier New', Courier, monospace; /* Fixed-width font */
+}
+
+textarea {
+    width: 100%
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+textarea:focus {
+    border-color: #007BFF;
+    outline: none;
+    box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
+}
+
+/* Labels and Input in the Same Line */
+label {
+    font-weight: bold;
+    margin-right: 10px;
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.form-group {
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+}
+
+.form-group label {
+    flex: 0 0 auto; /* Label takes only the space it needs */
+    min-width: 100px; /* Minimum width for labels to keep them aligned */
+}
+
+.form-group input,
+.form-group textarea {
+    flex: 1 1 auto; /* Input elements take the remaining space */
+}
+
+/* textarea on a separate line from its label */
+.form-group:has(> textarea) {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.form-group:has(> textarea) > label {
+  margin-bottom: 0.5rem;
+}
+
+/* Turn chat-block (even when it’s also .form-group) into a column */
+.form-group.chat-block {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  width: 100% !important;
+}
+
+/* Force its direct children to fill the width */
+.form-group.chat-block > textarea,
+.form-group.chat-block > .input-group {
+  width: 100% !important;
+}
+
+/* Only in chat-blocks, let the Send button size to its content */
+.form-group.chat-block .input-group .btn {
+  width: auto !important;
+  /* optionally give it a fixed min-width */
+  min-width: 75px;
+  margin-left: 0.5rem !important; /* 8px margin */
+}
+/* Let the text input fill remaining space next to the button */
+.form-group.chat-block .input-group .form-control {
+  flex: 1 1 auto !important;
+}
+
+/* Allow the fieldset inside any .form-group to stretch full width */
+.form-group > fieldset {
+  flex: 1 1 auto !important;
+}
+
+/* 1) Apply 30% label / 70% control to everything except true stacks (textareas) */
+.form-group:not(:has(> textarea)) > label {
+  flex: 0 0 30% !important;
+  min-width: unset !important;
+}
+
+.form-group:not(:has(> textarea)) > .form-control,
+.form-group:not(:has(> textarea)) > .input-group {
+  flex: 1 1 70% !important;
+}
+
+/* 2) Also ensure selects get the same flex:1 behavior */
+.form-group > select {
+  flex: 1 1 auto;
+  width: auto;  /* let flex do the sizing */
+}
+
+/* Chat Send Button styling only */
+.form-group.chat-block .input-group .btn {
+  width: auto !important;      /* hug its text */
+  min-width: 75px;             /* give it a sensible size */
+  margin-left: 0.5rem !important;
+
+  /* the old “submit” styles, now scoped */
+  padding: 10px;
+  background-color: #007BFF;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.form-group.chat-block .input-group .btn:hover {
+  background-color: #0056b3;
+}
+
+/* Checkbox and Radio */
+input[type="checkbox"],
+input[type="radio"] {
+    margin-right: 10px;
+}
+
+input[type="checkbox"]:checked,
+input[type="radio"]:checked {
+    accent-color: #007BFF;
+}
+
+/* Responsive Design */
+@media (max-width: 800px) {
+    form {
+        padding: 15px;
+    }
+
+    input[type="submit"],
+    button {
+        padding: 12px;
+    }
+    /* Do not force vertical stacking; allow wrap via flex rules.
+       Textareas and chat blocks already stack via specific rules. */
+}
+
+/* status indicator for autosaves and chat sends */
+.save-status {
+  display: inline-block;
+  margin-left: 0.5em;
+  color: #28a745;
+  font-size: 0.9em;
+  white-space: nowrap; /* prevent reflow on wrap */
+  opacity: 0;
+  transition: opacity 0.25s ease-in-out;
+}
+
+.save-status.show {
+  opacity: 1;
+}
+
+/* error state stays red */
+.save-status.error {
+  color: #dc3545; /* bootstrap’s danger red */
+}
+/* ----- SPA layout rules moved from Java inline styles ----- */
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; }
+.container-root { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.tab-content { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+/* Only active panes should participate in layout; inactive ones must be fully hidden */
+.tab-content > .tab-pane { min-height: 0; }
+.tab-content > .tab-pane:not(.active):not(.show) { display: none !important; }
+.tab-content > .tab-pane.active.show { display: flex !important; flex: 1 1 auto; flex-direction: column; }
+.displayable-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* Charging pane fills remaining space */
+#charging-pane { display: flex; flex-direction: column; overflow: auto; }
+#charging-frame { width: 100%; height: 100%; border: 0; flex: 1 1 auto; display: block; }
+/* Options pane scroll behavior and width */
+#options-pane { overflow: auto; }
+#options-pane .options-container { width: 100%; max-width: 900px; padding: 0 12px; }
+@media (max-width: 576px) {
+  #options-pane .options-container { max-width: none; padding-left: 8px; padding-right: 8px; }
+}
+
+/* Reserve space for fixed bottom navigation when active */
+:root { --bottom-nav-height: 56px; /* approximate Bootstrap navbar height */
+        --bottom-nav-safe: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom)); }
+body.has-bottom-nav { padding-bottom: var(--bottom-nav-safe); }
+body.has-bottom-nav #options-pane { padding-bottom: var(--bottom-nav-safe); }
+.bottom-nav { padding-bottom: env(safe-area-inset-bottom); }
+
+/* Mobile subtabs chevron dropdown */
+@media (max-width: 767.98px) {
+  .mobile-subtabs .mobile-subtabs-menu {
+    display: none;
+    max-height: 50vh;
+    overflow: auto;
+  }
+  .mobile-subtabs.open .mobile-subtabs-menu {
+    display: block;
+  }
+  .mobile-subtabs .mobile-subtabs-toggle .mobile-subtabs-chevron {
+    transition: transform 0.2s ease;
+  }
+  .mobile-subtabs.open .mobile-subtabs-toggle .mobile-subtabs-chevron {
+    transform: rotate(180deg);
+  }
+  .mobile-subtabs .mobile-subtabs-item.active {
+    background-color: #e9ecef;
+  }
+}
+
+/* Full-Width Table Container */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+    background-color: #fff;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    overflow: hidden;
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+/* Table Header */
+thead th {
+    background-color: #007BFF;
+    color: white;
+    text-align: left;
+    padding: 12px;
+    font-size: 16px;
+}
+
+/* Table Rows and Cells */
+tbody tr:nth-child(odd) { background-color: #f9f9f9; }
+tbody tr:nth-child(even) { background-color: #ffffff; }
+
+tbody td {
+    padding: 12px;
+    border: 1px solid #ccc;
+    font-size: 14px;
+    vertical-align: top;
+}
+
+/* Hover Effect */
+tbody tr:hover { background-color: #f1f1f1; }
+
+/* Nested Tables */
+td table {
+    width: 100%;
+    border: 1px solid #ddd;
+    margin: 10px 0;
+    background-color: #fdfdfd;
+}
+
+td table thead th {
+    background-color: #0069d9;
+    color: white;
+    font-size: 16px;
+    padding: 10px;
+}
+
+td table tbody td {
+    padding: 12px;
+    font-size: 14px;
+    border: 1px solid #ccc;
+}
+
+td table tbody tr:nth-child(odd) { background-color: #f4f4f4; }
+
+td table tbody tr:nth-child(even) { background-color: #ffffff; }
+
+/* Highlight Important Data */
+.highlight {
+    background-color: #fffae5;
+    font-weight: bold;
+    color: #333;
+}
+
+/* Responsive adjustments for tables */
+@media (max-width: 768px) {
+    thead th, tbody td {
+        font-size: 12px;
+        padding: 8px;
+    }
+
+    td table thead th { font-size: 14px; }
+    td table tbody td { font-size: 12px; }
+    td table { margin: 5px 0; }
+}
+
+@media (max-width: 480px) {
+    thead th, tbody td {
+        font-size: 10px;
+        padding: 6px;
+    }
+
+    td table thead th { font-size: 12px; }
+    td table tbody td { font-size: 10px; }
+}
+
+/* --- Charging chart layout (merged) --- */
+@supports (height: 100dvh) {
+  #charging-pane { height: 100dvh; }
+}
+@supports (height: 100svh) {
+  #charging-pane { height: 100svh; }
+}
+#chargeChartContainer {
+  flex: 1 1 auto;
+  min-height: 0; /* allow canvas to compute height within flex parent */
+}
+#chargeChartContainer > canvas,
+#combinedChart {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}

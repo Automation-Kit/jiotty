@@ -8,8 +8,6 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
 /// Option for editing a time interval (duration).
 ///
 /// HTML has no native duration input, so we use a single-line text field with a friendly, flexible syntax:
@@ -25,12 +23,11 @@ public abstract class DurationOption extends BaseOption<Duration> {
 
     private final String label;
 
-    protected DurationOption(TaskExecutor executor, String key, String label, Duration defaultValue) {
-        super(executor, key, defaultValue);
-        this.label = checkNotNull(label);
+    public DurationOption(TaskExecutor executor, OptionMeta<Duration> meta) {
+        super(executor, meta);
+        label = meta.label();
     }
 
-    @Override
     public String getLabel() {
         return label;
     }
@@ -53,9 +50,9 @@ public abstract class DurationOption extends BaseOption<Duration> {
         String placeholder = "e.g. 1d 02:30, 2h 15m, 90m, 3600s or PT2H30M";
         String title = "Accepted: HH:MM[:SS], Nd HH:MM[:SS], unit forms (e.g. 2h 30m, 90m), or ISO-8601 (PT...)";
         return new OptionDtos.Duration("duration",
-                                       getKey(),
+                                       meta().key(),
                                        label,
-                                       tabName(),
+                                       meta().tabName(),
                                        getFormOrder(),
                                        getValue().map(FriendlyDurationFormat::formatHuman).orElse(null),
                                        placeholder,

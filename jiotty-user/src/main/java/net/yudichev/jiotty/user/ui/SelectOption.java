@@ -7,20 +7,17 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
 public abstract class SelectOption extends BaseOption<String> {
 
     private final String label;
     private final List<String> options;
 
-    protected SelectOption(TaskExecutor executor, String key, String label, Iterable<String> options, String defaultOption) {
-        super(executor, key, defaultOption);
-        this.label = checkNotNull(label);
+    protected SelectOption(TaskExecutor executor, OptionMeta<String> meta, Iterable<String> options) {
+        super(executor, meta);
+        label = meta().label();
         this.options = ImmutableList.copyOf(options);
     }
 
-    @Override
     public String getLabel() {
         return label;
     }
@@ -32,6 +29,6 @@ public abstract class SelectOption extends BaseOption<String> {
 
     @Override
     public OptionDtos.OptionDto toDto() {
-        return new OptionDtos.Select("select", getKey(), label, tabName(), getFormOrder(), options, getValue().orElse(null));
+        return new OptionDtos.Select("select", meta().key(), label, meta().tabName(), getFormOrder(), options, getValue().orElse(null));
     }
 }

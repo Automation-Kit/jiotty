@@ -8,17 +8,14 @@ import java.time.format.DateTimeParseException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
 public abstract class TimeOption extends BaseOption<LocalTime> {
     private final String label;
 
-    protected TimeOption(TaskExecutor executor, String key, String label, LocalTime defaultValue) {
-        super(executor, key, defaultValue);
-        this.label = checkNotNull(label);
+    protected TimeOption(TaskExecutor executor, OptionMeta<LocalTime> meta) {
+        super(executor, meta);
+        label = meta.label();
     }
 
-    @Override
     public String getLabel() {
         return label;
     }
@@ -36,6 +33,6 @@ public abstract class TimeOption extends BaseOption<LocalTime> {
 
     @Override
     public OptionDtos.OptionDto toDto() {
-        return new OptionDtos.Time("time", getKey(), label, tabName(), getFormOrder(), getValue().map(LocalTime::toString).orElse(null));
+        return new OptionDtos.Time("time", meta().key(), label, meta().tabName(), getFormOrder(), getValue().map(LocalTime::toString).orElse(null));
     }
 }

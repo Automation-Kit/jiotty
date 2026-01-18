@@ -8,26 +8,21 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 public interface Option<T> {
+
+    int DEFAULT_FORM_ORDER = 50;
+
+    OptionMeta<T> meta();
+
     TypeToken<T> getValueType();
 
-    String getKey();
-
-    default String getLabel() {
-        return getKey();
-    }
-
-    default int getFormOrder() {
-        return 50;
-    }
-
-    String tabName();
+    int getFormOrder();
 
     OptionDtos.OptionDto toDto();
 
     Optional<T> getValue();
 
     default T requireValue() {
-        return getValue().orElseThrow(() -> new IllegalStateException(getLabel() + " is required"));
+        return getValue().orElseThrow(() -> new IllegalStateException(meta().key() + " is required"));
     }
 
     Closeable addChangeListener(Consumer<Option<T>> listener);

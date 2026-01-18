@@ -5,17 +5,14 @@ import net.yudichev.jiotty.common.async.TaskExecutor;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
 public abstract class TextOption extends BaseOption<String> {
     private final String label;
 
-    protected TextOption(TaskExecutor executor, String key, String label, String defaultValue) {
-        super(executor, key, defaultValue);
-        this.label = checkNotNull(label);
+    protected TextOption(TaskExecutor executor, OptionMeta<String> meta) {
+        super(executor, meta);
+        label = meta.label();
     }
 
-    @Override
     public String getLabel() {
         return label;
     }
@@ -27,6 +24,6 @@ public abstract class TextOption extends BaseOption<String> {
 
     @Override
     public OptionDtos.OptionDto toDto() {
-        return new OptionDtos.Text("text", getKey(), label, tabName(), getFormOrder(), getValue().orElse(null));
+        return new OptionDtos.Text("text", meta().key(), label, meta().tabName(), getFormOrder(), getValue().orElse(null));
     }
 }

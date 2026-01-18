@@ -7,6 +7,7 @@ import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
+import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
@@ -64,7 +65,7 @@ public final class Application {
                 lal.log(null, FQCN, slf4jLevel, i18nMessage, null, record.getThrown());
             }
 
-            private String getMessageI18N(LogRecord record) {
+            private static String getMessageI18N(LogRecord record) {
                 String message = record.getMessage();
 
                 if (message == null) {
@@ -103,13 +104,16 @@ public final class Application {
     private final AtomicBoolean jvmShuttingDown = new AtomicBoolean();
     private final AtomicBoolean startedAllComponentsSuccessfully = new AtomicBoolean();
     private final AtomicBoolean runCalled = new AtomicBoolean();
-    private final Injector injector;
+    private final AtomicReference<Injector> injectorRef = new AtomicReference<>();
+    private final Supplier<Module> moduleSupplier;
+    private final ApplicationLifecycleControl applicationLifecycleControl;
 
     private CountDownLatch shutdownLatch;
     private Thread runThread;
 
     private Application(Supplier<Module> moduleSupplier) {
-        ApplicationLifecycleControl applicationLifecycleControl = new ApplicationLifecycleControl() {
+        this.moduleSupplier = moduleSupplier;
+        applicationLifecycleControl = new ApplicationLifecycleControl() {
             @Override
             public void initiateShutdown() {
                 logger.info("Application requested shutdown");
@@ -118,14 +122,20 @@ public final class Application {
 
             @Override
             public void initiateRestart() {
-                checkState(!jvmShuttingDown.get(), "Cannot initiate restart while JVM is shutting down");
-                checkState(restarting.compareAndSet(false, true), "Already restarting");
-                logger.info("Application requested restart");
-                initiateStop();
+                if (restarting.compareAndSet(false, true)) {
+                    checkState(!jvmShuttingDown.get(), "Cannot initiate restart while JVM is shutting down");
+                    logger.info("Application requested restart");
+                    initiateStop();
+                } else {
+                    logger.info("Ignoring restart request - application restart already in progress");
+                }
+            }
+
+            @Override
+            public boolean restarting() {
+                return restarting.get();
             }
         };
-
-        injector = Guice.createInjector(new ApplicationSupportModule(applicationLifecycleControl), moduleSupplier.get());
     }
 
     /// Start all [LifecycleComponent]s.
@@ -136,29 +146,38 @@ public final class Application {
     public void start() throws InterruptedException {
         startedAllComponentsSuccessfully.set(false);
         componentsAttemptedToStart.clear();
+        logger.info("Creating injector");
+        Injector injector = Guice.createInjector(new ApplicationSupportModule(applicationLifecycleControl), moduleSupplier.get());
+        injectorRef.set(injector);
         logger.info("Initialising components");
-        List<LifecycleComponent> allComponents = injector
-                .findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
-                .stream()
-                .map(lifecycleComponentBinding -> lifecycleComponentBinding.getProvider().get())
-                .collect(toImmutableList());
+        try {
+            List<LifecycleComponent> allComponents = injector
+                    .findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
+                    .stream()
+                    .map(lifecycleComponentBinding -> lifecycleComponentBinding.getProvider().get())
+                    .collect(toImmutableList());
 
-        logger.info("Starting components");
-        for (LifecycleComponent component : allComponents) {
-            if (Thread.interrupted()) {
-                throw new InterruptedException(String.format("Interrupted while starting; components attempted to start: %s out of %s",
-                                                             componentsAttemptedToStart.size(), allComponents.size()));
+            logger.info("Starting components");
+            for (LifecycleComponent component : allComponents) {
+                if (Thread.interrupted()) {
+                    throw new InterruptedException(String.format("Interrupted while starting; components attempted to start: %s out of %s",
+                                                                 componentsAttemptedToStart.size(), allComponents.size()));
+                }
+                componentsAttemptedToStart.add(component);
+                start(component);
             }
-            componentsAttemptedToStart.add(component);
-            start(component);
-        }
 
-        startedAllComponentsSuccessfully.set(true);
-        logger.info("Started");
+            startedAllComponentsSuccessfully.set(true);
+            logger.info("Started");
+        } catch (RuntimeException e) {
+            injectorRef.set(null);
+            throw e;
+        }
     }
 
-    public Injector getInjector() {
-        return injector;
+    /// @return `null` when the application is not started
+    public @Nullable Injector getInjector() {
+        return injectorRef.get();
     }
 
     /// Stop all components that have been started - must be called on same thread that called [#start()].

@@ -55,7 +55,7 @@ final class TeslaFleetManualRunner {
         telemetryHostname = args[9];
         caCertPath = Paths.get(args[10]);
         Application.builder()
-                   .addModule(() -> VarStoreModule.builder().setPath(literally(Paths.get(args[0]))).build())
+                   .addModule(() -> VarStoreModule.builder().setPath(Paths.get(args[0])).build())
                    .addModule(TimeModule::new)
                    .addModule(ExecutorModule::new)
                    .addModule(() -> KeyStoreAccessModule.builder()

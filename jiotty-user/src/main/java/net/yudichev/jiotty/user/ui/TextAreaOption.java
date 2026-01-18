@@ -8,20 +8,17 @@ import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
 public abstract class TextAreaOption extends BaseOption<String> {
     private static final Pattern LINES_PATTERN = Pattern.compile("[\\n\\r]+");
 
     private final String label;
     protected int rowCount = 3;
 
-    protected TextAreaOption(TaskExecutor executor, String key, String label, String defaultValue) {
-        super(executor, key, defaultValue);
-        this.label = checkNotNull(label);
+    protected TextAreaOption(TaskExecutor executor, OptionMeta<String> meta) {
+        super(executor, meta);
+        label = meta.label();
     }
 
-    @Override
     public String getLabel() {
         return label;
     }
@@ -41,6 +38,6 @@ public abstract class TextAreaOption extends BaseOption<String> {
 
     @Override
     public OptionDtos.OptionDto toDto() {
-        return new OptionDtos.TextArea("textarea", getKey(), label, tabName(), getFormOrder(), getValue().orElse(""), rowCount);
+        return new OptionDtos.TextArea("textarea", meta().key(), label, meta().tabName(), getFormOrder(), getValue().orElse(""), rowCount);
     }
 }

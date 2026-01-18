@@ -8,25 +8,17 @@ import com.fasterxml.jackson.datatype.guava.GuavaModule;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.reflect.TypeToken;
-import com.google.inject.BindingAnnotation;
-import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.lang.annotation.Retention;
-import java.lang.annotation.Target;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static java.lang.annotation.ElementType.FIELD;
-import static java.lang.annotation.ElementType.METHOD;
-import static java.lang.annotation.ElementType.PARAMETER;
-import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.nio.file.Files.createDirectories;
 import static java.nio.file.Files.createFile;
 import static java.nio.file.Files.isRegularFile;
@@ -48,8 +40,7 @@ public final class VarStoreImpl implements VarStore {
     private final Lock lock = new ReentrantLock();
     private final Path storeFileTmp;
 
-    @Inject
-    public VarStoreImpl(@StoreFile Path storeFile) {
+    public VarStoreImpl(Path storeFile) {
         this.storeFile = checkNotNull(storeFile);
         storeFileTmp = this.storeFile.resolveSibling("data.tmp");
         logger.info("Using store file {}", storeFile.toAbsolutePath());
@@ -92,11 +83,5 @@ public final class VarStoreImpl implements VarStore {
         }
 
         return configNode;
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface StoreFile {
     }
 }

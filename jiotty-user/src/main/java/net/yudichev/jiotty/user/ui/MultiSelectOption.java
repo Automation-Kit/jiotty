@@ -10,21 +10,19 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 
 public abstract class MultiSelectOption extends BaseOption<Set<String>> {
 
     private final String label;
     private final ImmutableMap<String, String> allOptions;
 
-    protected MultiSelectOption(TaskExecutor executor, String key, String label, ImmutableMap<String, String> allOptions, Set<String> defaultSelectedIds) {
-        super(executor, key, defaultSelectedIds);
-        this.label = checkNotNull(label);
+    protected MultiSelectOption(TaskExecutor executor, OptionMeta<Set<String>> meta, ImmutableMap<String, String> allOptions) {
+        super(executor, meta);
+        label = meta.label();
         checkArgument(allOptions.keySet().stream().noneMatch(id -> id.contains(",")), "Option id cannot include a comma");
         this.allOptions = ImmutableMap.copyOf(allOptions);
     }
 
-    @Override
     public String getLabel() {
         return label;
     }
@@ -38,9 +36,9 @@ public abstract class MultiSelectOption extends BaseOption<Set<String>> {
     @Override
     public OptionDtos.OptionDto toDto() {
         return new OptionDtos.MultiSelect("multiselect",
-                                          getKey(),
+                                          meta().key(),
                                           label,
-                                          tabName(),
+                                          meta().tabName(),
                                           getFormOrder(),
                                           allOptions,
                                           getValue().map(List::copyOf).orElseGet(List::of));

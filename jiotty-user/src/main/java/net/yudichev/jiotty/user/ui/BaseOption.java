@@ -14,20 +14,19 @@ import java.util.function.Consumer;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 public abstract class BaseOption<T> implements Option<T> {
-    private final String key;
-    @Nullable
-    private final T defaultValue;
     private final TaskExecutor executor;
+    private final OptionMeta<T> meta;
     private final Listeners<Option<T>> changeListeners = new Listeners<>();
-    @SuppressWarnings("ProtectedField") // optional field
-    protected int formOrder = Integer.MIN_VALUE;
-    protected String tabName = "Misc";
     private T value;
 
-    protected BaseOption(TaskExecutor executor, String key, @Nullable T defaultValue) {
+    protected BaseOption(TaskExecutor executor, OptionMeta<T> meta) {
         this.executor = checkNotNull(executor);
-        this.key = checkNotNull(key);
-        this.defaultValue = defaultValue;
+        this.meta = checkNotNull(meta);
+    }
+
+    @Override
+    public OptionMeta<T> meta() {
+        return meta;
     }
 
     @Override
@@ -36,18 +35,8 @@ public abstract class BaseOption<T> implements Option<T> {
     }
 
     @Override
-    public final String getKey() {
-        return key;
-    }
-
-    @Override
     public final int getFormOrder() {
-        return formOrder == Integer.MIN_VALUE ? Option.super.getFormOrder() : formOrder;
-    }
-
-    @Override
-    public final String tabName() {
-        return tabName;
+        return meta().formOrder();
     }
 
     @Override
@@ -67,7 +56,7 @@ public abstract class BaseOption<T> implements Option<T> {
 
     @Override
     public void applyDefault() {
-        setValueSync(defaultValue);
+        setValueSync(meta.defaultValue());
     }
 
     /// Process value change, validate it and return a new, enriched value
@@ -79,7 +68,7 @@ public abstract class BaseOption<T> implements Option<T> {
 
     @Override
     public String toString() {
-        return key + '=' + value;
+        return meta.key() + '=' + value;
     }
 
     @Override

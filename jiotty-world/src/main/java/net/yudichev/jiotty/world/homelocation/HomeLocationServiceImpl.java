@@ -8,6 +8,7 @@ import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.user.ui.OptionMeta;
 import net.yudichev.jiotty.user.ui.TextOption;
 import net.yudichev.jiotty.user.ui.UIServer;
 import org.slf4j.Logger;
@@ -81,7 +82,7 @@ final class HomeLocationServiceImpl extends BaseLifecycleComponent implements Ho
         private final DoubleConsumer valueConsumer;
 
         public NumberOption(String id, String label, DoubleConsumer valueConsumer) {
-            super(HomeLocationServiceImpl.this.executor, "homeLocation." + id, label, null);
+            super(HomeLocationServiceImpl.this.executor, new OptionMeta<>("Misc", "homeLocation." + id, label, null));
             this.valueConsumer = checkNotNull(valueConsumer);
         }
 

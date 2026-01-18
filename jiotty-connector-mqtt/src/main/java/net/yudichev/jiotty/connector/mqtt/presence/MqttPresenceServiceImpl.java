@@ -20,8 +20,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.connector.mqtt.presence.MqttPresenceServiceModule.Dependency;
-import static net.yudichev.jiotty.connector.mqtt.presence.MqttPresenceServiceModule.MqttTopic;
 import static net.yudichev.jiotty.connector.mqtt.presence.MqttPresenceServiceModule.Name;
+import static net.yudichev.jiotty.connector.mqtt.presence.MqttPresenceServiceModule.Topic;
 
 final class MqttPresenceServiceImpl extends BaseLifecycleComponent implements MqttPresenceService {
     private static final Logger logger = LoggerFactory.getLogger(MqttPresenceServiceImpl.class);
@@ -41,7 +41,7 @@ final class MqttPresenceServiceImpl extends BaseLifecycleComponent implements Mq
     @Inject
     public MqttPresenceServiceImpl(@Dependency Mqtt mqtt,
                                    @Name String name,
-                                   @MqttTopic String topic,
+                                   @Topic String topic,
                                    ExecutorFactory executorFactory) {
         this.mqtt = checkNotNull(mqtt);
         this.name = checkNotNull(name);

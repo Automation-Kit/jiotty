@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" name="viewport"/>
+    <title>Electricity Prices, Charges, and Journeys Chart</title>
+    <!-- Load order: Chart → date adapter → zoom plugin → displayable-sse -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.js"></script>
+    <script src="displayable-sse.js"></script>
+    <script src="long-term-charge-chart.js"></script>
+    <style>
+        html, body { height: 100%; margin: 0; padding: 0; }
+        body { display: flex; flex-direction: column; }
+        #chartContainer { flex: 1 1 auto; width: 100%; height: 100%; margin: 0; padding: 0; }
+        #combinedChart { width: 100% !important; height: 100% !important; display: block; }
+        canvas { touch-action: none; cursor: default; }
+    </style>
+</head>
+<body>
+<div id="chartContainer">
+    <canvas id="combinedChart"></canvas>
+</div>
+
+<script>
+    // Standalone page bootstrap: initialize and start the chart
+    window.addEventListener('DOMContentLoaded', function(){
+      try {
+        if (window.ChargeChart) {
+          window.ChargeChart.init('combinedChart');
+          if (window.ChargeChart.start) window.ChargeChart.start({ initialFetch: true });
+        }
+      } catch (e) { try { console.warn('ChargeChart init failed', e); } catch(_){} }
+    });
+</script>
+</body>
+</html>

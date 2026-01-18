@@ -153,22 +153,22 @@ final class UIServerImpl extends BaseLifecycleComponent implements UIServer {
     @Override
     public Closeable registerOption(Option<?> option) {
         return whenNotLifecycling(() -> {
-            checkArgument(!optionsByKey.containsKey(option.getKey()), "Option for key %s already registered: %s", option.getKey(), option);
+            checkArgument(!optionsByKey.containsKey(option.meta().key()), "Option for key %s already registered: %s", option.meta().key(), option);
             persistence.load(option); // may throw, so do not actually register until this succeeds
 
-            optionsByKey.put(option.getKey(), option);
-            List<Option<?>> options = getOptionsForTab(option.tabName());
+            optionsByKey.put(option.meta().key(), option);
+            List<Option<?>> options = getOptionsForTab(option.meta().tabName());
             options.add(option);
             options.sort(comparing(Option::getFormOrder));
             Closeable persistenceRegistration = option.addChangeListener(persistence::save);
             optionsPersistenceRegistrations.add(persistenceRegistration);
-            logger.info("Registered option {}", option.getKey());
+            logger.info("Registered option {}", option.meta().key());
             return idempotent(() -> whenNotLifecycling(() -> {
                 options.remove(option);
-                optionsByKey.remove(option.getKey());
+                optionsByKey.remove(option.meta().key());
                 Closeable.closeIfNotNull(persistenceRegistration);
                 optionsPersistenceRegistrations.remove(persistenceRegistration);
-                logger.info("Unregistered option {}", option.getKey());
+                logger.info("Unregistered option {}", option.meta().key());
             }));
         });
     }

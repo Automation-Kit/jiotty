@@ -18,7 +18,7 @@ class MieleModuleTest {
                                 .setClientId(literally("ci"))
                                 .setClientSecret(literally("cs"))
                                 .build();
-        Guice.createInjector(new TimeModule(), new ExecutorModule(), new VarStoreModule(literally(Paths.get("p"))), module)
+        Guice.createInjector(new TimeModule(), new ExecutorModule(), VarStoreModule.builder().setPath(Paths.get("p")).build(), module)
              .getBinding(MieleDishwasher.class);
     }
 }
