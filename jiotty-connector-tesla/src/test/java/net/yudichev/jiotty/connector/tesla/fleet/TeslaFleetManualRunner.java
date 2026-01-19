@@ -20,11 +20,12 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Map.entry;
+import static java.util.Map.ofEntries;
 import static net.yudichev.jiotty.common.inject.BindingSpec.exposedBy;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.keystore.KeyStoreEntryModule.keyStoreEntry;
@@ -33,11 +34,14 @@ import static net.yudichev.jiotty.common.net.SslCustomisation.TrustStore;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TBatteryLevel;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TChargeLimitSoc;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TDetailedChargeState;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TDriveRail;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TGear;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.THvacLeftTemperatureRequest;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.THvacPower;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.THvacRightTemperatureRequest;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TInsideTemp;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TLocation;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TVehicleSpeed;
 import static net.yudichev.jiotty.connector.tesla.fleet.TeslaVehicle.Endpoint.CHARGE_STATE;
 import static net.yudichev.jiotty.connector.tesla.fleet.TeslaVehicle.Endpoint.CLIMATE_STATE;
 import static net.yudichev.jiotty.connector.tesla.fleet.TeslaVehicle.Endpoint.LOCATION_DATA;
@@ -142,15 +146,18 @@ final class TeslaFleetManualRunner {
                                 case "tlmcfgget" -> car.telemetryGetConfig();
                                 case "tlmcfgdel" -> car.telemetryDeleteConfig();
                                 case "tlmcfgset" -> {
-                                    var fieldParams = Map.of(
-                                            TDetailedChargeState.NAME, TelemetryFieldParams.of(1),
-                                            TBatteryLevel.NAME, TelemetryFieldParams.builder().setIntervalSeconds(30).setMinimumDelta(0.5).build(),
-                                            TChargeLimitSoc.NAME, TelemetryFieldParams.of(1),
-                                            TLocation.NAME, TelemetryFieldParams.of(60),
-                                            THvacPower.NAME, TelemetryFieldParams.of(1),
-                                            TInsideTemp.NAME, TelemetryFieldParams.builder().setIntervalSeconds(1).setMinimumDelta(0.5).build(),
-                                            THvacLeftTemperatureRequest.NAME, TelemetryFieldParams.of(1),
-                                            THvacRightTemperatureRequest.NAME, TelemetryFieldParams.of(1));
+                                    var fieldParams = ofEntries(
+                                            entry(TDetailedChargeState.NAME, TelemetryFieldParams.of(1)),
+                                            entry(TBatteryLevel.NAME, TelemetryFieldParams.builder().setIntervalSeconds(30).setMinimumDelta(0.5).build()),
+                                            entry(TChargeLimitSoc.NAME, TelemetryFieldParams.of(1)),
+                                            entry(TLocation.NAME, TelemetryFieldParams.of(60)),
+                                            entry(THvacPower.NAME, TelemetryFieldParams.of(1)),
+                                            entry(TInsideTemp.NAME, TelemetryFieldParams.builder().setIntervalSeconds(1).setMinimumDelta(0.5).build()),
+                                            entry(THvacLeftTemperatureRequest.NAME, TelemetryFieldParams.of(1)),
+                                            entry(THvacRightTemperatureRequest.NAME, TelemetryFieldParams.of(1)),
+                                            entry(TVehicleSpeed.NAME, TelemetryFieldParams.builder().setIntervalSeconds(30).setMinimumDelta(5.0).build()),
+                                            entry(TGear.NAME, TelemetryFieldParams.of(1)),
+                                            entry(TDriveRail.NAME, TelemetryFieldParams.of(1)));
                                     yield teslaFleet.telemetryCreateConfig(
                                             TelemetryCreateConfigRequest
                                                     .builder()

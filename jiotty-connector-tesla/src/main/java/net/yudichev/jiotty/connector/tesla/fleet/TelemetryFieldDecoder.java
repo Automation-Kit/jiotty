@@ -6,11 +6,14 @@ import net.yudichev.jiotty.common.lang.Json;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TBatteryLevel;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TChargeLimitSoc;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TDetailedChargeState;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TDriveRail;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TGear;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.THvacLeftTemperatureRequest;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.THvacPower;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.THvacRightTemperatureRequest;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TInsideTemp;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TLocation;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TVehicleSpeed;
 
 final class TelemetryFieldDecoder {
     /// @return `null` if the `fieldName` is unsupported
@@ -24,6 +27,9 @@ final class TelemetryFieldDecoder {
             case TInsideTemp.NAME -> new TInsideTemp(decodeDouble(jsonData));
             case THvacLeftTemperatureRequest.NAME -> new THvacLeftTemperatureRequest(decodeDouble(jsonData));
             case THvacRightTemperatureRequest.NAME -> new THvacRightTemperatureRequest(decodeDouble(jsonData));
+            case TVehicleSpeed.NAME -> new TVehicleSpeed(decodeDouble(jsonData));
+            case TGear.NAME -> TGear.decode(jsonData);
+            case TDriveRail.NAME -> TDriveRail.decode(jsonData);
             default -> null;
         };
     }

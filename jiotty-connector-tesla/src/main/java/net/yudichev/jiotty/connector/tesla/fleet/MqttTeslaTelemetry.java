@@ -39,7 +39,7 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
     }
 
     @Override
-    public Closeable subscribeToMetrics(Consumer<TelemetryField> listener) {
+    public Closeable subscribeToMetrics(Consumer<? super TelemetryField> listener) {
         logger.debug("subscribing to {}", metricsTopicFilter);
         return mqtt.subscribe(metricsTopicFilter, 1, (topic, data) -> {
             //TODO:commerce this logs sensitive data (vin in the topic)
@@ -72,7 +72,7 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
     }
 
     @Override
-    public Closeable subscribeToConnectivity(Consumer<TelemetryConnectivityEvent> listener) {
+    public Closeable subscribeToConnectivity(Consumer<? super TelemetryConnectivityEvent> listener) {
         return mqtt.subscribe(connectivityTopicFilter, 1, (topic, data) -> {
             //TODO:commerce this logs sensitive data
             logger.debug("received {}={}", topic, data);

@@ -5,7 +5,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import java.util.function.Consumer;
 
 public interface TeslaTelemetry {
-    Closeable subscribeToMetrics(Consumer<TelemetryField> listener);
+    Closeable subscribeToMetrics(Consumer<? super TelemetryField> listener);
 
-    Closeable subscribeToConnectivity(Consumer<TelemetryConnectivityEvent> listener);
+    Closeable subscribeToConnectivity(Consumer<? super TelemetryConnectivityEvent> listener);
 }

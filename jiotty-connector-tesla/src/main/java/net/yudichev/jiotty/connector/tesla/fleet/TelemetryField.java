@@ -17,7 +17,10 @@ public sealed interface TelemetryField permits
         TelemetryField.THvacPower,
         TelemetryField.TInsideTemp,
         TelemetryField.THvacLeftTemperatureRequest,
-        TelemetryField.THvacRightTemperatureRequest {
+        TelemetryField.THvacRightTemperatureRequest,
+        TelemetryField.TVehicleSpeed,
+        TelemetryField.TGear,
+        TelemetryField.TDriveRail {
 
     @SuppressWarnings("PublicStaticCollectionField") // immutable
     ImmutableSet<String> ALL_NAMES = Stream.of(TelemetryField.class.getPermittedSubclasses())
@@ -54,6 +57,66 @@ public sealed interface TelemetryField permits
         public String toString() {
             // To look consistent with the other fields
             return "THvacPower[" + name() + ']';
+        }
+    }
+
+    enum TGear implements TelemetryField {
+        UNKNOWN,
+        INVALID,
+        P,
+        R,
+        N,
+        D,
+        SNA;
+
+        public static final String NAME = "Gear";
+
+        public static TGear decode(String jsonValue) {
+            return switch (Json.parse(jsonValue, String.class)) {
+                case "ShiftStateP" -> P;
+                case "ShiftStateR" -> R;
+                case "ShiftStateN" -> N;
+                case "ShiftStateD" -> D;
+                case "ShiftStateSNA" -> SNA;
+                case "ShiftStateInvalid" -> INVALID;
+                default -> UNKNOWN;
+            };
+        }
+
+        @Override
+        public String fieldName() {
+            return NAME;
+        }
+
+        @Override
+        public String toString() {
+            return "TGear[" + name() + ']';
+        }
+    }
+
+    enum TDriveRail implements TelemetryField {
+        UNKNOWN,
+        OFF,
+        ON;
+
+        public static final String NAME = "DriveRail";
+
+        public static TDriveRail decode(String jsonValue) {
+            return switch (jsonValue) {
+                case "true" -> ON;
+                case "false" -> OFF;
+                default -> UNKNOWN;
+            };
+        }
+
+        @Override
+        public String fieldName() {
+            return NAME;
+        }
+
+        @Override
+        public String toString() {
+            return "TDriveRail[" + name() + ']';
         }
     }
 
@@ -136,6 +199,15 @@ public sealed interface TelemetryField permits
 
     record THvacRightTemperatureRequest(double value) implements TelemetryField {
         public static final String NAME = "HvacRightTemperatureRequest";
+
+        @Override
+        public String fieldName() {
+            return NAME;
+        }
+    }
+
+    record TVehicleSpeed(double value) implements TelemetryField {
+        public static final String NAME = "VehicleSpeed";
 
         @Override
         public String fieldName() {
