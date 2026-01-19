@@ -5,15 +5,8 @@ Configuration:
       name: STDOUT
       PatternLayout:
         Pattern: "%d %p [%t] %C{1.} %m%n"
-    File:
-      name: FILE
-      fileName: ${sys:test.file.appender.path}
-      append: false
-      PatternLayout:
-        Pattern: "%c %m%n"
   Loggers:
     Root:
       level: info
       AppenderRef:
-        - ref: FILE
         - ref: STDOUT

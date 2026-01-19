@@ -55,8 +55,10 @@ public final class PersistingLog4jLevelConfigurator extends BaseLifecycleCompone
 
     @Override
     protected void doStop() {
-        levelsByLoggerName.clear();
-        resetAllLoggingLevels();
+        synchronized (levelsByLoggerName) {
+            resetAllLoggingLevels();
+            levelsByLoggerName.clear();
+        }
     }
 
     @Override
@@ -73,23 +75,23 @@ public final class PersistingLog4jLevelConfigurator extends BaseLifecycleCompone
     public void setLoggingLevels(Map<String, String> levelsByLoggerName) {
         LoggerLevels loggerLevels;
         synchronized (this.levelsByLoggerName) {
-            this.levelsByLoggerName.clear();
             resetAllLoggingLevels();
+            this.levelsByLoggerName.clear();
             levelsByLoggerName.forEach(this::doSetLoggingLevel);
             loggerLevels = LoggerLevels.of(this.levelsByLoggerName);
         }
         varStore.saveValue(storeKey, loggerLevels);
     }
 
-    private static void resetAllLoggingLevels() {
-        Configurator.reconfigure();
+    private void resetAllLoggingLevels() {
+        levelsByLoggerName.keySet().forEach(name -> Configurator.setLevel(name, (Level) null));
         log.info("Reset all logging levels");
     }
 
     private void doSetLoggingLevel(String loggerName, String logLevel) {
         var level = Level.toLevel(logLevel);
         Configurator.setLevel(loggerName, level);
-        var oldLevel = levelsByLoggerName.put(loggerName, level.name());
+        String oldLevel = levelsByLoggerName.put(loggerName, level.name());
         log.info("Set logger {} {} -> {}{}",
                  loggerName, oldLevel, level, level.name().equals(logLevel) ? "" : "(invalid level specified: " + logLevel + ")");
     }
@@ -100,8 +102,7 @@ public final class PersistingLog4jLevelConfigurator extends BaseLifecycleCompone
         synchronized (levelsByLoggerName) {
             String oldLevel = levelsByLoggerName.remove(loggerName);
             if (oldLevel != null) {
-                Configurator.reconfigure();
-                levelsByLoggerName.forEach(Configurator::setLevel);
+                Configurator.setLevel(loggerName, (Level) null);
                 log.info("Reset logger {} (was set to {})", loggerName, oldLevel);
             }
             loggerLevels = LoggerLevels.of(levelsByLoggerName);

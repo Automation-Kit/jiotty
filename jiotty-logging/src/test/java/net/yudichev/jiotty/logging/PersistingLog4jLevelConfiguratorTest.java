@@ -1,8 +1,14 @@
 package net.yudichev.jiotty.logging;
 
 import net.yudichev.jiotty.common.varstore.InMemoryVarStore;
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.FileAppender;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.config.LoggerConfig;
+import org.apache.logging.log4j.core.layout.PatternLayout;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -19,16 +25,44 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Isolated
 class PersistingLog4jLevelConfiguratorTest {
     private static final String LOGGER_NAME = PersistingLog4jLevelConfiguratorTest.class.getSimpleName() + "_logger";
+    private static final String FILE_APPENDER_NAME = "TEST_FILE";
     private static Path logFile;
     private static InMemoryVarStore varStore;
     private static Logger logger;
     private static PersistingLog4jLevelConfigurator configurator;
     private static int verificationCounter;
+    private static FileAppender fileAppender;
 
     @BeforeAll
     static void setUp() throws IOException {
         logFile = Files.createTempFile(PersistingLog4jLevelConfiguratorTest.class.getSimpleName(), ".log");
-        System.setProperty("test.file.appender.path", logFile.toString());
+
+        // Dynamically add FILE appender to Log4j configuration
+        LoggerContext context = (LoggerContext) LogManager.getContext(false);
+        Configuration config = context.getConfiguration();
+
+        PatternLayout layout = PatternLayout.newBuilder()
+                                            .withPattern("%c %m%n")
+                                            .withConfiguration(config)
+                                            .build();
+
+        fileAppender = FileAppender.newBuilder()
+                                   .setName(FILE_APPENDER_NAME)
+                                   .withFileName(logFile.toString())
+                                   .withAppend(false)
+                                   .setLayout(layout)
+                                   .setConfiguration(config)
+                                   .build();
+
+        fileAppender.start();
+        config.addAppender(fileAppender);
+
+        // Add the appender to the root logger
+        LoggerConfig rootLoggerConfig = config.getRootLogger();
+        rootLoggerConfig.addAppender(fileAppender, Level.TRACE, null);
+
+        context.updateLoggers();
+
         logger = LogManager.getLogger(LOGGER_NAME);
 
         varStore = new InMemoryVarStore();
@@ -38,7 +72,18 @@ class PersistingLog4jLevelConfiguratorTest {
 
     @AfterAll
     static void tearDown() throws IOException {
-        System.getProperties().remove("test.file.appender.path");
+        // Remove the dynamically added FILE appender
+        LoggerContext context = (LoggerContext) LogManager.getContext(false);
+        Configuration config = context.getConfiguration();
+
+        LoggerConfig rootLoggerConfig = config.getRootLogger();
+        rootLoggerConfig.removeAppender(FILE_APPENDER_NAME);
+
+        config.getAppenders().remove(FILE_APPENDER_NAME);
+        fileAppender.stop();
+
+        context.updateLoggers();
+
         Files.delete(logFile);
     }
 
