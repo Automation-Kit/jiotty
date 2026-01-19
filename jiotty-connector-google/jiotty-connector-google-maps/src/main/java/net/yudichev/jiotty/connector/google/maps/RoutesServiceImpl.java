@@ -16,11 +16,13 @@ import io.grpc.ClientCall;
 import io.grpc.ClientInterceptor;
 import io.grpc.ClientInterceptors;
 import io.grpc.ForwardingClientCall;
+import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.geo.LatLon;
+import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Either;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,56 +33,80 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static net.yudichev.jiotty.connector.google.maps.Bindings.ApiKey;
 
-public final class RoutesServiceImpl implements RoutesService {
+public final class RoutesServiceImpl extends BaseLifecycleComponent implements RoutesService {
     private static final Logger logger = LoggerFactory.getLogger(RoutesServiceImpl.class);
     private static final Duration CALL_DEADLINE = Duration.ofSeconds(10);
     private final AtomicInteger requestIdGen = new AtomicInteger();
-    private final RoutesGrpc.RoutesFutureStub stub;
+    private final String apiKey;
+
+    private ManagedChannel channel;
+    private RoutesGrpc.RoutesFutureStub stub;
 
     @Inject
     public RoutesServiceImpl(@ApiKey String apiKey) {
-        Channel channel = NettyChannelBuilder.forAddress("routes.googleapis.com", 443).build();
-        channel = ClientInterceptors.intercept(channel, new RoutesInterceptor(apiKey));
-        stub = RoutesGrpc.newFutureStub(channel);
+        this.apiKey = checkNotNull(apiKey);
+    }
+
+    @Override
+    protected void doStart() {
+        channel = NettyChannelBuilder.forAddress("routes.googleapis.com", 443).build();
+        stub = RoutesGrpc.newFutureStub(ClientInterceptors.intercept(channel, new RoutesInterceptor(apiKey)));
+    }
+
+    @Override
+    protected void doStop() {
+        channel.shutdownNow();
+        try {
+            if (!channel.awaitTermination(5, TimeUnit.SECONDS)) {
+                logger.warn("Channel did not terminate in 5 seconds");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override
     public CompletableFuture<Routes> computeRoutes(RouteParameters parameters) {
-        var builder = ComputeRoutesRequest.newBuilder()
-                                          .setOrigin(createWaypoint(parameters.originLocation()))
-                                          .setDestination(createWaypoint(parameters.destinationLocation()))
-                                          .setTravelMode(RouteTravelMode.DRIVE)
-                                          .setRoutingPreference(RoutingPreference.TRAFFIC_AWARE);
-        parameters.departureTime().ifPresent(departure -> builder.setDepartureTime(toProto(departure)));
-        parameters.arrivalTime().ifPresent(arrival -> builder.setArrivalTime(toProto(arrival)));
-        ComputeRoutesRequest request = builder.build();
-        int requestId = requestIdGen.incrementAndGet();
-        logger.debug("[{}] Sending request: {}", requestId, request);
-        ListenableFuture<ComputeRoutesResponse> future = stub.withDeadlineAfter(CALL_DEADLINE).computeRoutes(request);
-        var resultFuture = new CompletableFuture<Routes>();
-        future.addListener(() -> {
-            ComputeRoutesResponse response;
-            try {
-                response = future.get();
-                logger.debug("[{}] Succeed: {}", requestId, response);
-                List<Route> routeList = new ArrayList<>(response.getRoutesCount());
-                for (int i = 0; i < response.getRoutesCount(); i++) {
-                    routeList.add(fromProto(response.getRoutes(i)));
+        return whenStartedAndNotLifecycling(() -> {
+
+            var builder = ComputeRoutesRequest.newBuilder()
+                                              .setOrigin(createWaypoint(parameters.originLocation()))
+                                              .setDestination(createWaypoint(parameters.destinationLocation()))
+                                              .setTravelMode(RouteTravelMode.DRIVE)
+                                              .setRoutingPreference(RoutingPreference.TRAFFIC_AWARE);
+            parameters.departureTime().ifPresent(departure -> builder.setDepartureTime(toProto(departure)));
+            parameters.arrivalTime().ifPresent(arrival -> builder.setArrivalTime(toProto(arrival)));
+            ComputeRoutesRequest request = builder.build();
+            int requestId = requestIdGen.incrementAndGet();
+            logger.debug("[{}] Sending request: {}", requestId, request);
+            ListenableFuture<ComputeRoutesResponse> future = stub.withDeadlineAfter(CALL_DEADLINE).computeRoutes(request);
+            var resultFuture = new CompletableFuture<Routes>();
+            future.addListener(() -> {
+                ComputeRoutesResponse response;
+                try {
+                    response = future.get();
+                    logger.debug("[{}] Succeed: {}", requestId, response);
+                    List<Route> routeList = new ArrayList<>(response.getRoutesCount());
+                    for (int i = 0; i < response.getRoutesCount(); i++) {
+                        routeList.add(fromProto(response.getRoutes(i)));
+                    }
+                    resultFuture.complete(Routes.builder()
+                                                .setRoutes(routeList)
+                                                .build());
+                } catch (InterruptedException | ExecutionException e) {
+                    logger.debug("[{}] Failed", requestId, e);
+                    resultFuture.completeExceptionally(e);
                 }
-                resultFuture.complete(Routes.builder()
-                                            .setRoutes(routeList)
-                                            .build());
-            } catch (InterruptedException | ExecutionException e) {
-                logger.debug("[{}] Failed", requestId, e);
-                resultFuture.completeExceptionally(e);
-            }
-        }, directExecutor());
-        return resultFuture;
+            }, directExecutor());
+            return resultFuture;
+        });
     }
 
     private static Waypoint.Builder createWaypoint(Either<String, LatLon> addressOrLatLon) {

@@ -23,7 +23,7 @@ public final class RoutesServiceModule extends BaseLifecycleComponentModule impl
     protected void configure() {
         apiKeySpec.bind(String.class).annotatedWith(Bindings.ApiKey.class).installedBy(this::installLifecycleComponentModule);
 
-        bind(exposedKey).to(RoutesServiceImpl.class);
+        bind(exposedKey).to(registerLifecycleComponent(RoutesServiceImpl.class));
         expose(exposedKey);
     }
 
