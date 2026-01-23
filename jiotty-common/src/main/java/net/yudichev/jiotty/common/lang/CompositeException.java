@@ -12,8 +12,8 @@ import static com.google.common.collect.ImmutableList.builder;
 public final class CompositeException extends RuntimeException {
     private CompositeException(Collection<RuntimeException> exceptions) {
         super(exceptions.stream()
-                .map(Throwable::getMessage)
-                .collect(Collectors.joining("; ")));
+                        .map(Throwable::getMessage)
+                        .collect(Collectors.joining("; ")));
     }
 
     public static <T> void runForAll(Iterable<? extends T> items, Consumer<? super T> consumer) {
@@ -26,8 +26,11 @@ public final class CompositeException extends RuntimeException {
             }
         }
         List<RuntimeException> exceptions = exceptionListBuilder.build();
-        if (!exceptions.isEmpty()) {
-            throw new CompositeException(exceptions);
+        switch (exceptions.size()) {
+            case 0 -> {
+            }
+            case 1 -> throw exceptions.getFirst();
+            default -> throw new CompositeException(exceptions);
         }
     }
 }

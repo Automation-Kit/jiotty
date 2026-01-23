@@ -50,24 +50,19 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
                 return;
             }
             String fieldName = topic.substring(idx + 1);
-            if ("null".equals(data)) {
-                // suspect a bug in fleet-telemetry's mqtt dispatcher; 'null' is valid json
-                logger.debug("field {} has value 'null', ignoring", fieldName);
-            } else {
-                TelemetryField field;
-                try {
-                    field = TelemetryFieldDecoder.decode(fieldName, data);
-                } catch (RuntimeException e) {
-                    //TODO:commerce alert/antispam, also mask VIN
-                    logger.warn("[{}] failed decoding field data {}={}", vin, fieldName, data, e);
-                    return;
-                }
-                if (field == null) {
-                    logger.debug("Unsupported field: {}", fieldName);
-                    return;
-                }
-                listener.accept(field);
+            TelemetryField field;
+            try {
+                field = TelemetryFieldDecoder.decode(fieldName, data);
+            } catch (RuntimeException e) {
+                //TODO:commerce alert/antispam, also mask VIN
+                logger.warn("[{}] failed decoding field data {}={}", vin, fieldName, data, e);
+                return;
             }
+            if (field == null) {
+                logger.debug("Unsupported field: {}", fieldName);
+                return;
+            }
+            listener.accept(field);
         });
     }
 

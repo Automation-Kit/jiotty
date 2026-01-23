@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
 import com.google.common.collect.ImmutableSet;
+import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
@@ -44,7 +45,7 @@ public sealed interface TelemetryField permits
                 case "HvacPowerStateOn" -> ON;
                 case "HvacPowerStatePrecondition" -> PRECONDITION;
                 case "HvacPowerStateOverheatProtect" -> OVERHEAT_PROTECT;
-                default -> UNKNOWN;
+                case null, default -> UNKNOWN;
             };
         }
 
@@ -79,7 +80,7 @@ public sealed interface TelemetryField permits
                 case "ShiftStateD" -> D;
                 case "ShiftStateSNA" -> SNA;
                 case "ShiftStateInvalid" -> INVALID;
-                default -> UNKNOWN;
+                case null, default -> UNKNOWN;
             };
         }
 
@@ -120,6 +121,50 @@ public sealed interface TelemetryField permits
         }
     }
 
+    sealed interface TBatteryLevel extends TelemetryField permits Invalid, TBatteryLevelValue {
+
+        String NAME = "BatteryLevel";
+        TBatteryLevel INVALID = new Invalid(NAME);
+    }
+
+    sealed interface TLocation extends TelemetryField permits Invalid, TLocationValue {
+        String NAME = "Location";
+        TLocation INVALID = new Invalid(NAME);
+    }
+
+    sealed interface TChargeLimitSoc extends TelemetryField permits TChargeLimitSocValue, Invalid {
+        String NAME = "ChargeLimitSoc";
+        TChargeLimitSoc INVALID = new Invalid(NAME);
+    }
+
+    sealed interface TInsideTemp extends TelemetryField permits TInsideTempValue, Invalid {
+        String NAME = "InsideTemp";
+        TInsideTemp INVALID = new Invalid(NAME);
+    }
+
+    sealed interface THvacLeftTemperatureRequest extends TelemetryField permits THvacLeftTemperatureRequestValue, Invalid {
+        String NAME = "HvacLeftTemperatureRequest";
+        THvacLeftTemperatureRequest INVALID = new Invalid(NAME);
+    }
+
+    sealed interface THvacRightTemperatureRequest extends TelemetryField permits THvacRightTemperatureRequestValue, Invalid {
+        String NAME = "HvacRightTemperatureRequest";
+        THvacRightTemperatureRequest INVALID = new Invalid(NAME);
+    }
+
+    sealed interface TVehicleSpeed extends TelemetryField permits TVehicleSpeedValue, Invalid {
+        String NAME = "VehicleSpeed";
+        TVehicleSpeed INVALID = new Invalid(NAME);
+    }
+
+    record Invalid(String fieldName)
+            implements TBatteryLevel, TLocation, TChargeLimitSoc, TInsideTemp, THvacLeftTemperatureRequest, THvacRightTemperatureRequest, TVehicleSpeed {
+        @Override
+        public String toString() {
+            return fieldName + "[INVALID]";
+        }
+    }
+
     record TDetailedChargeState(TeslaChargingState state) implements TelemetryField {
         public static final TDetailedChargeState DISCONNECTED = new TDetailedChargeState(TeslaChargingState.DISCONNECTED);
         public static final TDetailedChargeState NO_POWER = new TDetailedChargeState(TeslaChargingState.NO_POWER);
@@ -130,7 +175,7 @@ public sealed interface TelemetryField permits
         public static final TDetailedChargeState UNKNOWN = new TDetailedChargeState(TeslaChargingState.UNKNOWN);
         public static final String NAME = "DetailedChargeState";
 
-        public static TDetailedChargeState decode(String jsonValue) {
+        public static TDetailedChargeState decode(@Nullable String jsonValue) {
             return switch (Json.parse(jsonValue, String.class)) {
                 case "DetailedChargeStateDisconnected" -> DISCONNECTED;
                 case "DetailedChargeStateNoPower" -> NO_POWER;
@@ -138,7 +183,7 @@ public sealed interface TelemetryField permits
                 case "DetailedChargeStateCharging" -> CHARGING;
                 case "DetailedChargeStateComplete" -> COMPLETE;
                 case "DetailedChargeStateStopped" -> STOPPED;
-                default -> UNKNOWN;
+                case null, default -> UNKNOWN;
             };
         }
 
@@ -148,8 +193,7 @@ public sealed interface TelemetryField permits
         }
     }
 
-    record TBatteryLevel(double value) implements TelemetryField {
-        public static final String NAME = "BatteryLevel";
+    record TBatteryLevelValue(double value) implements TBatteryLevel {
 
         @Override
         public String fieldName() {
@@ -157,8 +201,7 @@ public sealed interface TelemetryField permits
         }
     }
 
-    record TChargeLimitSoc(int soc) implements TelemetryField {
-        public static final String NAME = "ChargeLimitSoc";
+    record TChargeLimitSocValue(int soc) implements TChargeLimitSoc {
 
         @Override
         public String fieldName() {
@@ -166,49 +209,35 @@ public sealed interface TelemetryField permits
         }
     }
 
-    record TLocation(LatLon latLon) implements TelemetryField {
-        public static final String NAME = "Location";
-
-        public static TLocation decode(TelemetryLocation jsonValue) {
-            return new TLocation(new LatLon(jsonValue.latitude(), jsonValue.longitude()));
-        }
-
+    record TLocationValue(LatLon latLon) implements TLocation {
         @Override
         public String fieldName() {
             return NAME;
         }
     }
 
-    record TInsideTemp(double value) implements TelemetryField {
-        public static final String NAME = "InsideTemp";
-
+    record TInsideTempValue(double value) implements TInsideTemp {
         @Override
         public String fieldName() {
             return NAME;
         }
     }
 
-    record THvacLeftTemperatureRequest(double value) implements TelemetryField {
-        public static final String NAME = "HvacLeftTemperatureRequest";
-
+    record THvacLeftTemperatureRequestValue(double value) implements THvacLeftTemperatureRequest {
         @Override
         public String fieldName() {
             return NAME;
         }
     }
 
-    record THvacRightTemperatureRequest(double value) implements TelemetryField {
-        public static final String NAME = "HvacRightTemperatureRequest";
-
+    record THvacRightTemperatureRequestValue(double value) implements THvacRightTemperatureRequest {
         @Override
         public String fieldName() {
             return NAME;
         }
     }
 
-    record TVehicleSpeed(double value) implements TelemetryField {
-        public static final String NAME = "VehicleSpeed";
-
+    record TVehicleSpeedValue(double value) implements TVehicleSpeed {
         @Override
         public String fieldName() {
             return NAME;
