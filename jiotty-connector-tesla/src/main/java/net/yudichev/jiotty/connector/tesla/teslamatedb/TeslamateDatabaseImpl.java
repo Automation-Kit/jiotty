@@ -46,7 +46,6 @@ final class TeslamateDatabaseImpl extends BaseLifecycleComponent implements Tesl
                                                       end_position.longitude as end_long,
                                                       duration_min,
                                                       drives.id as drive_id,
-                                                      distance,
                                                       start_position.battery_level as start_battery_level,
                                                       end_position.battery_level as end_battery_level --,
                                                       -- outside_temp_avg,
@@ -197,7 +196,6 @@ final class TeslamateDatabaseImpl extends BaseLifecycleComponent implements Tesl
                                                          .setEndInstant(rs.getTimestamp("end_date").toInstant())
                                                          .setStartLocation(new LatLon(rs.getDouble("start_lat"), rs.getDouble("start_long")))
                                                          .setEndLocation(new LatLon(rs.getDouble("end_lat"), rs.getDouble("end_long")))
-                                                         .setDistanceKm(rs.getDouble("distance"))
                                                          .setStartSoC(rs.getInt("start_battery_level"))
                                                          .setEndSoC(rs.getInt("end_battery_level"))
                                                          .build());

@@ -21,8 +21,6 @@ abstract class BaseHistoricalDrive {
 
     public abstract LatLon endLocation();
 
-    public abstract double distanceKm();
-
     public abstract int startSoC();
 
     public abstract int endSoC();
@@ -32,12 +30,10 @@ abstract class BaseHistoricalDrive {
         return Duration.between(startInstant(), endInstant());
     }
 
-    @SuppressWarnings("StringConcatenationMissingWhitespace")
     public String toString() {
         return "HistoricalDrive{"
                + id() + ','
                + startLocation() + '@' + startInstant() + ' ' + startSoC() + "% -> "
-               + endLocation() + '@' + endInstant() + ' ' + endSoC() + "% ("
-               + distanceKm() + "km)}";
+               + endLocation() + '@' + endInstant() + ' ' + endSoC() + '%';
     }
 }
