@@ -24,7 +24,7 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
     private final BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec;
     private final BindingSpec<Set<String>> oauthScopesSpec;
 
-    public TeslaFleetModule(BindingSpec<String> clientIdSpec,
+    private TeslaFleetModule(BindingSpec<String> clientIdSpec,
                             BindingSpec<String> clientSecretSpec,
                             BindingSpec<String> baseUrlSpec,
                             BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec,
