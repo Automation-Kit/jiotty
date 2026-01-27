@@ -94,7 +94,7 @@ public abstract class BaseServerNode extends BaseNode implements ServerNode {
             runner.executor().execute(() -> {
                 boolean wasNotAlreadyTriggered = trigger.getAsBoolean();
                 if (wasNotAlreadyTriggered) {
-                    runner.scheduleNewWave(triggeredBy);
+                    runner.scheduleNewWave(name + ": " + triggeredBy);
                 } else {
                     logger.debug("{}: not triggering as node is already pending trigger, tiggeredBy was: {}", name, triggeredBy);
                 }
