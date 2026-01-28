@@ -14,6 +14,8 @@ import java.nio.file.Path;
 import java.security.KeyStore;
 import java.util.Arrays;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 public record SslCustomisation(SSLSocketFactory socketFactory, X509TrustManager trustManager) {
     public static SslCustomisation fromTrustStore(TrustStore trustStore) {
         return fromTrustStore(trustStore, () -> null);
@@ -57,5 +59,10 @@ public record SslCustomisation(SSLSocketFactory socketFactory, X509TrustManager 
         }
     }
 
-    public record TrustStore(Path path, String password) {}
+    public record TrustStore(Path path, String password) {
+        public TrustStore {
+            checkNotNull(path);
+            checkNotNull(password);
+        }
+    }
 }
