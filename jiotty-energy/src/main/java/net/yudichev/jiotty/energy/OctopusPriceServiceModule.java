@@ -13,6 +13,7 @@ public final class OctopusPriceServiceModule extends BaseLifecycleComponentModul
     protected void configure() {
         installLifecycleComponentModule(new ExecutorProviderModule("Prices", Bindings.ExecutorProvider.class));
         installLifecycleComponentModule(OctopusEnergyModule.builder()
+                                                           // TODO:commerce these are user options
                                                            .setApiKey(keyStoreEntry("octopus-api-key"))
                                                            .setAccountId(keyStoreEntry("octopus-account"))
                                                            .build());
