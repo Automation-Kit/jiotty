@@ -94,10 +94,6 @@
             <groupId>org.slf4j</groupId>
             <artifactId>jul-to-slf4j</artifactId>
         </dependency>
-        <dependency>
-            <groupId>uk.org.lidalia</groupId>
-            <artifactId>sysout-over-slf4j</artifactId>
-        </dependency>
 
         <!-- test dependencies -->
         <dependency>
