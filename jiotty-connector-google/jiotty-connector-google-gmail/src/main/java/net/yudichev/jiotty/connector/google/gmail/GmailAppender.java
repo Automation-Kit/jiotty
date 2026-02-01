@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.net.InetAddress;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Properties;
@@ -64,12 +65,24 @@ public final class GmailAppender extends AbstractAppender {
                           String applicationName,
                           Boolean addHostNameToSubject,
                           String credentialsResourcePath,
+                          String credentialsFilePath,
                           Property[] properties) {
         super(name, filter, layout, ignoreExceptions, properties);
         this.emailAddress = checkNotNull(emailAddress, "emailAddress attribute is required");
-        checkNotNull(credentialsResourcePath);
-        credentialsUrl = GmailAppender.class.getClassLoader().getResource(credentialsResourcePath);
-        checkArgument(credentialsUrl != null, "Credentials resource not found at %s", credentialsResourcePath);
+        boolean hasResourcePath = credentialsResourcePath != null;
+        boolean hasFilePath = credentialsFilePath != null;
+        checkArgument(!hasResourcePath || !hasFilePath,
+                      "Specify either credentialsResourcePath or credentialsFilePath, not both");
+        checkArgument(hasResourcePath || hasFilePath,
+                      "Either credentialsResourcePath or credentialsFilePath is required");
+        if (hasResourcePath) {
+            credentialsUrl = GmailAppender.class.getClassLoader().getResource(credentialsResourcePath);
+            checkArgument(credentialsUrl != null, "Credentials resource not found at %s", credentialsResourcePath);
+        } else {
+            Path credentialsPath = Paths.get(credentialsFilePath);
+            checkArgument(Files.exists(credentialsPath), "Credentials file not found at %s", credentialsFilePath);
+            credentialsUrl = getAsUnchecked(() -> credentialsPath.toUri().toURL());
+        }
         this.applicationName = checkNotNull(applicationName, "applicationName attribute is required")
                 + (TRUE.equals(addHostNameToSubject) ? " @ " + getAsUnchecked(() -> InetAddress.getLocalHost().getHostName()) : "");
         authDataStorePath = authDataStoreRootDir == null ?
@@ -88,6 +101,7 @@ public final class GmailAppender extends AbstractAppender {
                                                @PluginAttribute("applicationName") String applicationName,
                                                @PluginAttribute("addHostNameToSubject") Boolean addHostNameToSubject,
                                                @PluginAttribute("credentialsResourcePath") String credentialsResourcePath,
+                                               @PluginAttribute("credentialsFilePath") String credentialsFilePath,
                                                @PluginElement("Layout") Layout<? extends Serializable> layout,
                                                @PluginElement("Filters") Filter filter) {
 
@@ -105,6 +119,7 @@ public final class GmailAppender extends AbstractAppender {
                                  applicationName,
                                  addHostNameToSubject,
                                  credentialsResourcePath,
+                                 credentialsFilePath,
                                  null);
     }
 
