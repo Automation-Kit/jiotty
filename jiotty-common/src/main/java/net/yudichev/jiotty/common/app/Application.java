@@ -15,7 +15,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 import org.slf4j.spi.LocationAwareLogger;
-import uk.org.lidalia.sysoutslf4j.context.SysOutOverSLF4J;
 
 import java.text.MessageFormat;
 import java.util.List;
@@ -95,7 +94,6 @@ public final class Application {
             }
         });
 
-        SysOutOverSLF4J.sendSystemOutAndErrToSLF4J();
         java.util.logging.Logger.getLogger("").setLevel(Level.FINEST);
     }
 
