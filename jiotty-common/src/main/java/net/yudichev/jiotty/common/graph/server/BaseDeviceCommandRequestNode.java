@@ -45,7 +45,8 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
             return false;
         }
 
-        if (shouldForgetRequest()) {
+        if (shouldForgetRequest(request)) {
+            logger.debug("Asked to forget request {}", request);
             resetRetryState();
             request = null;
             return true;
@@ -143,7 +144,7 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     }
 
     /// Called in-wave before anything else - return true to immediately forget the request and reset to an idle state
-    protected boolean shouldForgetRequest() {
+    protected boolean shouldForgetRequest(DeviceRequest<R> request) {
         return false;
     }
 
