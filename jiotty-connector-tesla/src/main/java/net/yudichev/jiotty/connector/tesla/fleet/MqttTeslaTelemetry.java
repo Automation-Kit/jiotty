@@ -18,6 +18,8 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaTelemetry.BrokerConnectionStatus.CONNECTED;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaTelemetry.BrokerConnectionStatus.DISCONNECTED;
 
 /// Feeds data from the MQTT dispatcher of the [Tesla Fleet Telemetry Server](https://github.com/teslamotors/fleet-telemetry)
 public final class MqttTeslaTelemetry implements TeslaTelemetry {
@@ -78,6 +80,14 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
                 logger.warn("[{}] failed decoding connectivity data {}", vin, data, e);
             }
         });
+    }
+
+    @Override
+    public Closeable subscribeToBrokerConnectionStatus(Consumer<BrokerConnectionStatus> listener) {
+        return mqtt.subscribeToConnectionStatus(status -> listener.accept(switch (status) {
+            case Mqtt.Connected _ -> CONNECTED;
+            case Mqtt.Disconnected _ -> DISCONNECTED;
+        }));
     }
 
     @BindingAnnotation

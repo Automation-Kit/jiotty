@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.connector.mqtt;
 
 import com.google.inject.BindingAnnotation;
+import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.AsyncOperationFailureHandler;
 import net.yudichev.jiotty.common.async.AsyncOperationRetry;
@@ -10,6 +11,7 @@ import net.yudichev.jiotty.common.async.Scheduler;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.lang.backoff.NanoClock;
@@ -33,6 +35,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -65,9 +68,11 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     private final IMqttAsyncClient client;
     private final ExecutorFactory executorFactory;
     private final String name;
-    private final double connectBackoffRandmisationFactor;
+    private final double connectBackoffRandomisationFactor;
     private final NanoClock nanoClock;
+    private final Listeners<ConnectionStatus> connectionStatusListeners = new Listeners<>();
     private SchedulingExecutor executor;
+    private @Nullable ConnectionStatus connectionStatus;
 
     @Inject
     MqttImpl(IMqttAsyncClient client,
@@ -82,7 +87,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
              ThresholdThrottlingConsumerFactory<Throwable> throttledLoggerFactory,
              Consumer<MqttConnectOptions> mqttConnectOptionsCustomiser,
              NanoClock nanoClock,
-             double connectBackoffRandmisationFactor) {
+             double connectBackoffRandomisationFactor) {
         this.executorFactory = checkNotNull(executorFactory);
         this.throttledLoggerFactory = checkNotNull(throttledLoggerFactory);
         mqttConnectOptions = new MqttConnectOptions();
@@ -92,7 +97,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         this.client = client;
         name = super.name() + " " + client.getClientId() + " " + client.getServerURI();
         this.nanoClock = checkNotNull(nanoClock);
-        this.connectBackoffRandmisationFactor = connectBackoffRandmisationFactor;
+        this.connectBackoffRandomisationFactor = connectBackoffRandomisationFactor;
     }
 
     @Override
@@ -108,11 +113,11 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                                                           .setInitialIntervalMillis(1000)
                                                           .setMaxIntervalMillis(30_000)
                                                           .setMaxElapsedTimeMillis(Integer.MAX_VALUE)
-                                                          .setRandomizationFactor(connectBackoffRandmisationFactor)
+                                                          .setRandomizationFactor(connectBackoffRandomisationFactor)
                                                           .build());
         AsyncOperationRetry asyncOperationRetry = new AsyncOperationRetryImpl(AsyncOperationFailureHandler.forBackoff(backoff, logger));
         executor.execute(() -> {
-            client.setCallback(new ResubscribeOnReconnectCallback());
+            client.setCallback(new ConnectionStatusCallback());
             CompletableFuture<Void> connectFuture = asyncOperationRetry
                     .withBackOffAndRetry("MQTT Connect to " + client.getServerURI(),
                                          () -> {
@@ -206,6 +211,11 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     }
 
     @Override
+    public Closeable subscribeToConnectionStatus(Consumer<ConnectionStatus> listener) {
+        return connectionStatusListeners.addListener(executor, () -> Optional.ofNullable(connectionStatus), listener);
+    }
+
+    @Override
     protected void doStop() {
         closeIfNotNull(executor);
         // disconnect must not be scheduled to the executor that is potentially blocked on connect; this method also seems to be thread safe
@@ -263,7 +273,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     }
 
 
-    private class ResubscribeOnReconnectCallback implements MqttCallbackExtended {
+    private class ConnectionStatusCallback implements MqttCallbackExtended {
         private final Consumer<Throwable> throttledErrorLogger = throttledLoggerFactory.create(5, Duration.ofMinutes(1), e ->
                 logger.error("{} lost connection to {} too often (suppressing this error for 1 minute)", client.getClientId(), client.getServerURI(), e));
         private final BackOff backOff = new ExponentialBackOff.Builder()
@@ -276,32 +286,35 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         @Override
         public void connectComplete(boolean reconnect, String serverURI) {
             logger.info("{} completed connection to {}, reconnected={}", client.getClientId(), serverURI, reconnect);
-            if (reconnect) {
-                restoreSubscriptions();
-            }
+            executor.execute(() -> {
+                connectionStatusListeners.notify(connectionStatus = new Connected(reconnect));
+                if (reconnect) {
+                    restoreSubscriptions();
+                }
+            });
         }
 
         private void restoreSubscriptions() {
-            executor.execute(() -> {
-                logger.info("Restoring subscriptions: {}", subscriptionsByFilter);
-                try {
-                    subscriptionsByFilter.forEach((topicFilter, subscriptions) ->
-                                                          subscriptions.forEach(subscription -> doSubscribe(topicFilter,
-                                                                                                            subscription.qos(),
-                                                                                                            subscription.dataCallback())));
-                    backOff.reset();
-                } catch (RuntimeException e) {
-                    long nextRetryInMs = backOff.nextBackOffMillis();
-                    logger.info("Re-subscription failed, will re-try in {}ms", nextRetryInMs, e);
-                    subRetryTimerHandle = executor.schedule(Duration.ofMillis(nextRetryInMs), this::restoreSubscriptions);
-                }
-            });
+            // executor thread
+            logger.info("Restoring subscriptions: {}", subscriptionsByFilter);
+            try {
+                subscriptionsByFilter.forEach((topicFilter, subscriptions) ->
+                                                      subscriptions.forEach(subscription -> doSubscribe(topicFilter,
+                                                                                                        subscription.qos(),
+                                                                                                        subscription.dataCallback())));
+                backOff.reset();
+            } catch (RuntimeException e) {
+                long nextRetryInMs = backOff.nextBackOffMillis();
+                logger.info("Re-subscription failed, will re-try in {}ms", nextRetryInMs, e);
+                subRetryTimerHandle = executor.schedule(Duration.ofMillis(nextRetryInMs), this::restoreSubscriptions);
+            }
         }
 
         @Override
         public void connectionLost(Throwable cause) {
             logger.info("{} lost connection to {}", client.getClientId(), client.getServerURI(), cause);
             executor.execute(() -> {
+                connectionStatusListeners.notify(connectionStatus = new Disconnected(cause));
                 subRetryTimerHandle.close();
                 throttledErrorLogger.accept(cause);
             });

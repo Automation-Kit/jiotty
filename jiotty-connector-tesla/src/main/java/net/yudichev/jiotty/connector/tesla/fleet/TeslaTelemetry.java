@@ -8,4 +8,8 @@ public interface TeslaTelemetry {
     Closeable subscribeToMetrics(Consumer<? super TelemetryField> listener);
 
     Closeable subscribeToConnectivity(Consumer<? super TelemetryConnectivityEvent> listener);
+
+    Closeable subscribeToBrokerConnectionStatus(Consumer<BrokerConnectionStatus> listener);
+
+    enum BrokerConnectionStatus {CONNECTED, DISCONNECTED}
 }

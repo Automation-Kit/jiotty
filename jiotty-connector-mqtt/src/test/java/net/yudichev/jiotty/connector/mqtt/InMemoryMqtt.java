@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /// Basic in-memory [Mqtt] implementation for tests.
@@ -16,6 +17,8 @@ public final class InMemoryMqtt implements Mqtt {
     private final Map<String, String> dataByTopic = new HashMap<>();
     private final Map<Pattern, Listeners<TopicAndData>> listenersByFilter = new HashMap<>();
     private final Object lock = new Object();
+    private final Listeners<ConnectionStatus> connectionStatusListeners = new Listeners<>();
+    private ConnectionStatus connectionStatus = new Connected(false);
 
     @Override
     public Closeable subscribe(String topicFilter, int qos, BiConsumer<String, String> dataCallback) {
@@ -67,8 +70,23 @@ public final class InMemoryMqtt implements Mqtt {
         return CompletableFuture.completedFuture(null);
     }
 
+    @Override
+    public Closeable subscribeToConnectionStatus(Consumer<ConnectionStatus> listener) {
+        synchronized (lock) {
+            listener.accept(connectionStatus);
+        }
+        return connectionStatusListeners.addListener(listener);
+    }
+
     public int subscriberCount() {
         return listenersByFilter.values().stream().map(Listeners::size).mapToInt(Integer::intValue).sum();
+    }
+
+    public void setConnectionStatus(ConnectionStatus connectionStatus) {
+        synchronized (lock) {
+            this.connectionStatus = connectionStatus;
+            connectionStatusListeners.notify(connectionStatus);
+        }
     }
 
     private record TopicAndData(String topic, String data) {

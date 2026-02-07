@@ -18,10 +18,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -33,6 +36,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class MqttImplTest {
     private static final String TOPIC_FILTER = "/topic/+";
+    private final List<Mqtt.ConnectionStatus> receivedConnectionStatuses = new ArrayList<>();
     @Mock
     private IMqttAsyncClient client;
     @Mock
@@ -85,10 +89,23 @@ class MqttImplTest {
     @Test
     void resubscribesOnReconnect() throws MqttException {
         IMqttMessageListener messageListener = doSubscribe();
+        var subscription = mqtt.subscribeToConnectionStatus(receivedConnectionStatuses::add);
+        clock.tick();
+        assertThat(receivedConnectionStatuses).singleElement().isEqualTo(new Mqtt.Connected(false));
+        receivedConnectionStatuses.clear();
 
-        mqttCallback.connectionLost(new RuntimeException("oops"));
+        var exception = new RuntimeException("oops");
+        mqttCallback.connectionLost(exception);
+        clock.tick();
+        assertThat(receivedConnectionStatuses).singleElement().isEqualTo(new Mqtt.Disconnected(exception));
+        receivedConnectionStatuses.clear();
+
         mqttCallback.connectComplete(true, "serverUri");
         clock.tick();
+        assertThat(receivedConnectionStatuses).singleElement().isEqualTo(new Mqtt.Connected(true));
+        receivedConnectionStatuses.clear();
+
+        subscription.close();
 
         verify(client).subscribe(TOPIC_FILTER, 2, messageListener);
     }
