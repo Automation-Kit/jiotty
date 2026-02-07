@@ -33,21 +33,14 @@ import static net.yudichev.jiotty.common.inject.TypeLiterals.asTypeLiteral;
 /// Source and target bindings should have different annotations, otherwise binding conflict will occur.
 ///
 /// To reference the source binding, use one of the static factory methods:
-/// <ol>
-///   - If source binding is not a binding per se, but is
-///     <ol>
-///   - an actual instance of [T] — use [#literally(Object)]
-///   - supplied by a concrete [Provider]`<`[T]`>` instance, use [#providedBy(Provider)]
-/// </ol>
-///   - If source binding is exposed elsewhere:
-///     <ol>
-///   - source binding is a binding of type [T] annotated with a specified binding annotation — use [#annotatedWith(Annotation)] )} or overloads
-///   - source binding is a binding to a [Provider] of type [T] - use [#providedBy(Key)] or overloads
-///   - source binding is a binding of a [Key] or a type — use [#boundTo(Key)] or overloads
-///   - source binding is a binding of type [T] exposed in a specified module — use [#exposedBy(ExposedKeyModule)]
-/// </ol>
-///
-/// </ol>
+/// - If source binding is not a binding per se, but is
+///    - an actual instance of [T] — use [#literally(Object)]
+///    - supplied by a concrete [Provider]`<`[T]`>` instance, use [#providedBy(Provider)]
+/// - If source binding is exposed elsewhere:
+///    - source binding is a binding of type [T] annotated with a specified binding annotation — use [#annotatedWith(Annotation)] or overloads
+///    - source binding is a binding to a [Provider] of type [T] - use [#providedBy(Key)] or overloads
+///    - source binding is a binding of a [Key] or a type — use [#boundTo(Key)] or overloads
+///    - source binding is a binding of type [T] exposed in a specified module — use [#exposedBy(ExposedKeyModule)]
 ///
 /// @param <T> the value type
 public abstract class BindingSpec<T> {
@@ -199,7 +192,7 @@ public abstract class BindingSpec<T> {
         return bind(TypeLiteral.get(type));
     }
 
-    protected abstract TargetBindingServiceModule<T> createTargetBindingServiceModule(Key<T> targetKey, Consumer<ScopedBindingBuilder> scopeSpecifier);
+    abstract TargetBindingServiceModule<T> createTargetBindingServiceModule(Key<T> targetKey, Consumer<ScopedBindingBuilder> scopeSpecifier);
 
     public interface BindingMethodChoice<T> {
         /// Creates the target binding in the current module by installing an inner module exposing the target hey.
