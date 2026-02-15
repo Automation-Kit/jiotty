@@ -200,7 +200,12 @@
             </dependency>
             <dependency>
                 <groupId>${project.groupId}</groupId>
-                <artifactId>jiotty-persistence</artifactId>
+                <artifactId>jiotty-persistence-psql</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>jiotty-persistence-recording</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

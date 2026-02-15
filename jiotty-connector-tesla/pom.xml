@@ -20,7 +20,7 @@
         </dependency>
         <dependency>
             <groupId>net.yudichev.jiotty</groupId>
-            <artifactId>jiotty-persistence</artifactId>
+            <artifactId>jiotty-persistence-psql</artifactId>
         </dependency>
         <dependency>
             <groupId>net.yudichev.jiotty</groupId>

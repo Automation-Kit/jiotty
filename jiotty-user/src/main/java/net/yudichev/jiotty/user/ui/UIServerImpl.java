@@ -57,8 +57,8 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 final class UIServerImpl extends BaseLifecycleComponent implements UIServer {
     private static final Logger logger = LoggerFactory.getLogger(UIServerImpl.class);
     private static final Pattern TAB_NAME_TO_ID_CONVERSION_PATTERN = Pattern.compile("[^A-Za-z0-9_-]");
-    private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory())
-            .registerModule(new JavaTimeModule());
+    private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory()).registerModule(new JavaTimeModule());
+
     private final Map<String, Displayable> displayablesById = new LinkedHashMap<>();
     private final Map<String, List<Option<?>>> optionsByTabName = new HashMap<>();
     private final Map<String, Option<?>> optionsByKey = new HashMap<>();
@@ -68,6 +68,7 @@ final class UIServerImpl extends BaseLifecycleComponent implements UIServer {
     private final ExecutorFactory executorFactory;
     private final Set<SseClient> sseClients = new HashSet<>();
     private final AtomicInteger sseClientIdGenerator = new AtomicInteger();
+
     private SchedulingExecutor executor;
     private Closeable sseHeartbeat = Closeable.noop();
 
@@ -301,7 +302,7 @@ final class UIServerImpl extends BaseLifecycleComponent implements UIServer {
         }
     }
 
-    private void startSse(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    private void startDisplayablesSse(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         int clientIdSeqNum = sseClientIdGenerator.incrementAndGet();
         String clientId = clientIdSeqNum + "/" + req.getRemoteHost() + ":" + req.getRemotePort();
         AsyncContext asyncContext = req.startAsync();
@@ -539,7 +540,7 @@ final class UIServerImpl extends BaseLifecycleComponent implements UIServer {
                 case "/options" -> whenStartedAndNotLifecycling(() -> asUnchecked(() -> writeOptionsJson(resp)));
                 case "/displayables" -> whenStartedAndNotLifecycling(() -> asUnchecked(() -> writeDisplayablesListJson(resp)));
                 case "/displayables/item" -> whenStartedAndNotLifecycling(() -> asUnchecked(() -> writeDisplayableItemJson(req, resp)));
-                case "/displayables/stream" -> whenStartedAndNotLifecycling(() -> asUnchecked(() -> startSse(req, resp)));
+                case "/displayables/stream" -> whenStartedAndNotLifecycling(() -> asUnchecked(() -> startDisplayablesSse(req, resp)));
                 case null, default -> {
                     resp.setCharacterEncoding("utf-8");
                     resp.setContentType("application/json");
