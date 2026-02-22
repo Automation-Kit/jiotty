@@ -38,7 +38,7 @@ class PostgresqlDestinationImplTest {
     private static final String SAMPLE_TABLE_NAME = "recorder_data_sample";
     private static final String SAMPLE_AUX_TABLE_NAME = "recorder_data_sample_init";
     @RegisterExtension
-    private final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
+    private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
     private DataSource dataSource;
     private SingleThreadedSchedulingExecutor domainExecutor;
     private SingleThreadedSchedulingExecutor recordingExecutor;

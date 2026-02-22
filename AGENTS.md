@@ -8,6 +8,7 @@
 - Use `Closeable.closeIfNotNull(...)`/`Closeable.closeSafelyIfNotNull(...)` (varargs) for test cleanup; prefer `Closeable.forActions(...)` for teardown steps.
 - Use `MoreThrowables.asUnchecked(...)`/`getAsUnchecked(...)` instead of try/catch that only wraps checked exceptions in `RuntimeException`.
 - Always statically import `TimeUnit` constants (for example, `SECONDS`) instead of `TimeUnit.SECONDS`.
+- In tests, reuse production constants by making them package-private instead of re-declaring them.
 - If a scenario suggests a possible bug but is not certain, ask for confirmation before encoding it in a test.
 - Build comprehensive coverage with edge cases and failure/timeout paths.
 - Run jacoco or similar tool to uncover branches that do not have coverage and add tests for such scenarios. If the scenario is not possible, then analyse why
@@ -38,6 +39,7 @@
   break before the first parameter, unless adding it makes the whole thing fit on one line.
 - Always statically import static methods in `net.yudichev.jiotty.common.inject.BindingSpec`.
 - Generally, do not create private constants that are only used once. This creates indirection that makes the code harder to read.
+- When the same logic repeats in a class, extract a helper method instead of duplicating the snippet.
 - Do not store values as fields if they are only used to build other fields in the constructor; keep them as constructor-local variables.
 - in all methods, private or public, use `jakarta.annotation.Nullable` on values that can be nullable by design, both return value types and method parameters.
   For return types, add annotation on the type, not on the method, i.e. place it immediately before the return type.

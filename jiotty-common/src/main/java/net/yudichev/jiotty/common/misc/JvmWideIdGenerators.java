@@ -10,6 +10,8 @@ public final class JvmWideIdGenerators {
     private JvmWideIdGenerators() {
     }
 
+    /// @return an ID that is unique within this JVM. Must not be used to generate IDs that live beyond the scope of the current JVM, such as persistence ///
+    /// IDs.
     public static LongSupplier generatorFor(String owner) {
         return GENERATORS_BY_OWNER.computeIfAbsent(owner, _ -> new LongSupplier() {
             private long nextId;

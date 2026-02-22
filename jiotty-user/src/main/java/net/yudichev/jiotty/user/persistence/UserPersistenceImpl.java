@@ -6,6 +6,7 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.misc.UniqueId;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
@@ -25,7 +26,6 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -48,7 +48,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     private static final List<String> BASE_INIT_STATEMENTS = List.of(
             """
             CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%user (
-                id uuid PRIMARY KEY,
+                id text PRIMARY KEY,
                 email text UNIQUE,
                 display_name text NOT NULL,
                 timezone text NOT NULL,
@@ -58,7 +58,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
             );""",
             """
             CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%identity (
-                user_id uuid NOT NULL REFERENCES %DOMAIN_PREFIX%user(id),
+                user_id text NOT NULL REFERENCES %DOMAIN_PREFIX%user(id),
                 provider text NOT NULL,
                 provider_user_id text NOT NULL,
                 created_at timestamptz NOT NULL,
@@ -157,8 +157,8 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     @Override
-    public CompletableFuture<Optional<UserProfile>> getById(UUID userId) {
-        checkNotNull(userId, "userId");
+    public CompletableFuture<Optional<UserProfile>> getById(String userId) {
+        validateUserId(userId);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doGetById(userId)));
     }
 
@@ -168,15 +168,15 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     @Override
-    public CompletableFuture<UserProfile> updateProfile(UUID userId, UserProfileUpdate update) {
-        checkNotNull(userId, "userId");
+    public CompletableFuture<UserProfile> updateProfile(String userId, UserProfileUpdate update) {
+        validateUserId(userId);
         checkNotNull(update, "update");
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doUpdateProfile(userId, update)));
     }
 
     @Override
-    public CompletableFuture<Void> linkIdentity(UUID userId, UserIdentity identity) {
-        checkNotNull(userId, "userId");
+    public CompletableFuture<Void> linkIdentity(String userId, UserIdentity identity) {
+        validateUserId(userId);
         checkNotNull(identity, "identity");
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
             doLinkIdentity(userId, identity);
@@ -185,14 +185,14 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     @Override
-    public CompletableFuture<List<UserIdentityRecord>> listIdentities(UUID userId) {
-        checkNotNull(userId, "userId");
+    public CompletableFuture<List<UserIdentityRecord>> listIdentities(String userId) {
+        validateUserId(userId);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doListIdentities(userId)));
     }
 
     @Override
-    public CompletableFuture<Void> softDelete(UUID userId) {
-        checkNotNull(userId, "userId");
+    public CompletableFuture<Void> softDelete(String userId) {
+        validateUserId(userId);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
             doSoftDelete(userId);
             return null;
@@ -210,7 +210,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                         return existing.get();
                     }
                     Instant now = Instant.now();
-                    UUID userId = UUID.randomUUID();
+                    String userId = UniqueId.generate('u');
                     insertUser(connection, userId, profile, now);
                     insertIdentity(connection, userId, identity, now);
                     connection.commit();
@@ -243,7 +243,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private Optional<UserProfile> doGetById(UUID userId) {
+    private Optional<UserProfile> doGetById(String userId) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 return selectUserById(connection, userId);
@@ -270,7 +270,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private UserProfile doUpdateProfile(UUID userId, UserProfileUpdate update) {
+    private UserProfile doUpdateProfile(String userId, UserProfileUpdate update) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
@@ -281,7 +281,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                         stmt.setString(2, update.displayName());
                         stmt.setString(3, update.timezone().getId());
                         stmt.setTimestamp(4, Timestamp.from(now));
-                        stmt.setObject(5, userId);
+                        stmt.setString(5, userId);
                     });
                     Optional<UserProfile> updated = selectUserById(connection, userId);
                     checkState(updated.isPresent(), "User %s not found after update", userId);
@@ -299,7 +299,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private void doLinkIdentity(UUID userId, UserIdentity identity) {
+    private void doLinkIdentity(String userId, UserIdentity identity) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
@@ -315,7 +315,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                             updateIdentityDeletedAt(connection, userId, identity.provider(), null, now);
                         }
                     } else {
-                        Optional<UUID> existing = selectIdentityByProviderUserId(connection, identity);
+                        Optional<String> existing = selectIdentityByProviderUserId(connection, identity);
                         checkState(existing.isEmpty(), "Identity %s already linked to another user", identity);
                         insertIdentity(connection, userId, identity, now);
                     }
@@ -332,11 +332,11 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private List<UserIdentityRecord> doListIdentities(UUID userId) {
+    private List<UserIdentityRecord> doListIdentities(String userId) {
         try {
             try (Connection connection = dataSource.getConnection();
                  PreparedStatement stmt = connection.prepareStatement(listIdentitiesSql)) {
-                stmt.setObject(1, userId);
+                stmt.setString(1, userId);
                 try (ResultSet rs = stmt.executeQuery()) {
                     var result = new ArrayList<UserIdentityRecord>();
                     while (rs.next()) {
@@ -350,7 +350,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private void doSoftDelete(UUID userId) {
+    private void doSoftDelete(String userId) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
@@ -362,7 +362,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                                         stmt -> {
                                             stmt.setTimestamp(1, Timestamp.from(now));
                                             stmt.setTimestamp(2, Timestamp.from(now));
-                                            stmt.setObject(3, userId);
+                                            stmt.setString(3, userId);
                                         });
                     checkState(rows == 1, "User %s not found or already deleted", userId);
                     doUpdate(connection,
@@ -371,7 +371,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                              stmt -> {
                                  stmt.setTimestamp(1, Timestamp.from(now));
                                  stmt.setTimestamp(2, Timestamp.from(now));
-                                 stmt.setObject(3, userId);
+                                 stmt.setString(3, userId);
                              });
                     connection.commit();
                 } catch (SQLException e) {
@@ -396,18 +396,18 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private Optional<UserProfile> selectUserById(Connection connection, UUID userId) throws SQLException {
+    private Optional<UserProfile> selectUserById(Connection connection, String userId) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(selectUserByIdSql)) {
-            stmt.setObject(1, userId);
+            stmt.setString(1, userId);
             try (ResultSet rs = stmt.executeQuery()) {
                 return rs.next() ? Optional.of(mapUserProfile(rs)) : Optional.empty();
             }
         }
     }
 
-    private boolean userExists(Connection connection, UUID userId) throws SQLException {
+    private boolean userExists(Connection connection, String userId) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(userExistsSql)) {
-            stmt.setObject(1, userId);
+            stmt.setString(1, userId);
             try (ResultSet rs = stmt.executeQuery()) {
                 return rs.next();
             }
@@ -415,10 +415,10 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     private Optional<IdentityLinkRecord> selectIdentityByUserAndProvider(Connection connection,
-                                                                         UUID userId,
+                                                                         String userId,
                                                                          String provider) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(selectIdentityByUserAndProviderSql)) {
-            stmt.setObject(1, userId);
+            stmt.setString(1, userId);
             stmt.setString(2, provider);
             try (ResultSet rs = stmt.executeQuery()) {
                 if (!rs.next()) {
@@ -431,18 +431,18 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private Optional<UUID> selectIdentityByProviderUserId(Connection connection, UserIdentity identity) throws SQLException {
+    private Optional<String> selectIdentityByProviderUserId(Connection connection, UserIdentity identity) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(selectIdentityByProviderUserIdSql)) {
             stmt.setString(1, identity.provider());
             stmt.setString(2, identity.providerUserId());
             try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? Optional.of(rs.getObject(1, UUID.class)) : Optional.empty();
+                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
             }
         }
     }
 
     private void updateIdentityDeletedAt(Connection connection,
-                                         UUID userId,
+                                         String userId,
                                          String provider,
                                          @Nullable Instant deletedAt,
                                          Instant updatedAt) throws SQLException {
@@ -452,16 +452,16 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                      // TODO: deletedAt is always null today; add coverage if identity deletion is introduced.
                      stmt.setTimestamp(1, deletedAt == null ? null : Timestamp.from(deletedAt));
                      stmt.setTimestamp(2, Timestamp.from(updatedAt));
-                     stmt.setObject(3, userId);
+                     stmt.setString(3, userId);
                      stmt.setString(4, provider);
                  });
     }
 
-    private void insertUser(Connection connection, UUID userId, UserProfileInput profile, Instant now) throws SQLException {
+    private void insertUser(Connection connection, String userId, UserProfileInput profile, Instant now) throws SQLException {
         doUpdate(connection,
                  insertUserSql,
                  stmt -> {
-                     stmt.setObject(1, userId);
+                     stmt.setString(1, userId);
                      stmt.setString(2, profile.email());
                      stmt.setString(3, profile.displayName());
                      stmt.setString(4, profile.timezone().getId());
@@ -470,11 +470,11 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                  });
     }
 
-    private void insertIdentity(Connection connection, UUID userId, UserIdentity identity, Instant now) throws SQLException {
+    private void insertIdentity(Connection connection, String userId, UserIdentity identity, Instant now) throws SQLException {
         doUpdate(connection,
                  insertIdentitySql,
                  stmt -> {
-                     stmt.setObject(1, userId);
+                     stmt.setString(1, userId);
                      stmt.setString(2, identity.provider());
                      stmt.setString(3, identity.providerUserId());
                      stmt.setTimestamp(4, Timestamp.from(now));
@@ -483,7 +483,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     private static UserProfile mapUserProfile(ResultSet rs) throws SQLException {
-        UUID id = rs.getObject("id", UUID.class);
+        String id = checkNotNull(rs.getString("id"), "id");
         String email = rs.getString("email");
         String displayName = checkNotNull(rs.getString("display_name"), "display_name");
         String timezoneId = checkNotNull(rs.getString("timezone"), "timezone");
@@ -515,6 +515,11 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
 
     private static boolean isUniqueViolation(SQLException exception) {
         return UNIQUE_VIOLATION_SQL_STATE.equals(exception.getSQLState());
+    }
+
+    private static void validateUserId(String userId) {
+        checkNotNull(userId, "userId");
+        checkArgument(!userId.isBlank(), "userId must not be blank");
     }
 
     private static void rollbackQuietly(Connection connection) {

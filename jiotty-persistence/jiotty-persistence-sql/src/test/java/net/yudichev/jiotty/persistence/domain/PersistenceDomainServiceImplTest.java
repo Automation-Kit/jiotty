@@ -30,7 +30,7 @@ class PersistenceDomainServiceImplTest {
     private static final String SELECT_COLUMN_EXISTS_SQL =
             "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=? AND column_name=?";
     @RegisterExtension
-    private final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
+    private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
     private DataSource dataSource;
     private SingleThreadedSchedulingExecutor executor;
     private PersistenceDomainServiceImpl service;

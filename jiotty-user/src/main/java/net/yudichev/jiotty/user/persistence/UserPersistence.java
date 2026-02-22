@@ -6,7 +6,6 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -31,7 +30,7 @@ public interface UserPersistence {
     ///
     /// @param userId internal user id
     /// @return empty if the user does not exist or is deleted
-    CompletableFuture<Optional<UserProfile>> getById(UUID userId);
+    CompletableFuture<Optional<UserProfile>> getById(String userId);
 
     /// Lists active user profiles (deleted users are excluded).
     CompletableFuture<List<UserProfile>> listAllProfiles();
@@ -41,7 +40,7 @@ public interface UserPersistence {
     /// @param userId internal user id
     /// @param update new profile values (email may be null to clear it)
     /// @return the updated user profile
-    CompletableFuture<UserProfile> updateProfile(UUID userId, UserProfileUpdate update);
+    CompletableFuture<UserProfile> updateProfile(String userId, UserProfileUpdate update);
 
     /// Links a provider identity to an existing user.
     ///
@@ -49,18 +48,18 @@ public interface UserPersistence {
     ///
     /// @param userId   internal user id
     /// @param identity provider identity to link
-    CompletableFuture<Void> linkIdentity(UUID userId, UserIdentity identity);
+    CompletableFuture<Void> linkIdentity(String userId, UserIdentity identity);
 
     /// Lists active identities for a user.
     ///
     /// @param userId internal user id
     /// @return active identity records (deleted identities are excluded)
-    CompletableFuture<List<UserIdentityRecord>> listIdentities(UUID userId);
+    CompletableFuture<List<UserIdentityRecord>> listIdentities(String userId);
 
     /// Soft-deletes the user and all linked identities.
     ///
     /// @param userId internal user id
-    CompletableFuture<Void> softDelete(UUID userId);
+    CompletableFuture<Void> softDelete(String userId);
 
     /// Provider identity used to authenticate a user.
     ///
@@ -83,7 +82,7 @@ public interface UserPersistence {
     /// @param timezone    user's preferred time zone
     /// @param createdAt   creation time in storage
     /// @param updatedAt   last update time in storage
-    record UserProfile(UUID id,
+    record UserProfile(String id,
                        @Nullable String email,
                        String displayName,
                        ZoneId timezone,
@@ -91,6 +90,7 @@ public interface UserPersistence {
                        Instant updatedAt) {
         public UserProfile {
             checkNotNull(id, "id");
+            checkArgument(!id.isBlank(), "id must not be blank");
             if (email != null) {
                 checkArgument(!email.isBlank(), "email must not be blank");
             }
