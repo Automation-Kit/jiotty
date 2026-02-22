@@ -3,7 +3,8 @@ package net.yudichev.jiotty.persistence.recording;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
-import net.yudichev.jiotty.persistence.psql.PsqlDataSourceFactory;
+import net.yudichev.jiotty.persistence.db.DataSourceFactory;
+import net.yudichev.jiotty.persistence.domain.PersistenceDomainService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,8 +17,10 @@ final class ReadOnlyPostgresqlDestination extends PostgresqlDestinationImpl {
     private static final Logger logger = LoggerFactory.getLogger(ReadOnlyPostgresqlDestination.class);
 
     @Inject
-    public ReadOnlyPostgresqlDestination(@PsqlExecutor Provider<SchedulingExecutor> executorProvider, @Dependency PsqlDataSourceFactory dataSourceFactory) {
-        super(executorProvider, dataSourceFactory);
+    public ReadOnlyPostgresqlDestination(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,
+                                         @Dependency DataSourceFactory dataSourceFactory,
+                                         PersistenceDomainService persistenceDomainService) {
+        super(executorProvider, dataSourceFactory, persistenceDomainService);
     }
 
     @Override

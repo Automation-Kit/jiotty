@@ -5,7 +5,7 @@
     <parent>
         <groupId>net.yudichev.jiotty</groupId>
         <artifactId>jiotty-parent</artifactId>
-        <version>3.2.0-SNAPSHOT</version>
+        <version>3.3.0-SNAPSHOT</version>
         <relativePath>../jiotty-parent</relativePath>
     </parent>
     <modelVersion>4.0.0</modelVersion>
@@ -16,6 +16,10 @@
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>jiotty-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-persistence-sql</artifactId>
         </dependency>
         <dependency>
             <groupId>com.google.errorprone</groupId>
@@ -70,6 +74,13 @@
             <type>test-jar</type>
         </dependency>
         <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-persistence-sql</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
             <scope>test</scope>
@@ -96,6 +107,11 @@
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.zonky.test</groupId>
+            <artifactId>embedded-postgres</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

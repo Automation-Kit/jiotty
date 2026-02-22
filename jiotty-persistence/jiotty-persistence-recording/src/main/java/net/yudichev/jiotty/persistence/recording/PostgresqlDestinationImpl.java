@@ -6,9 +6,11 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ThrowingConsumer;
-import net.yudichev.jiotty.common.lang.ThrowingFunction;
-import net.yudichev.jiotty.persistence.psql.CloseableDataSource;
-import net.yudichev.jiotty.persistence.psql.PsqlDataSourceFactory;
+import net.yudichev.jiotty.persistence.db.CloseableDataSource;
+import net.yudichev.jiotty.persistence.db.DataSourceFactory;
+import net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig;
+import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
+import net.yudichev.jiotty.persistence.domain.PersistenceDomainService;
 import net.yudichev.jiotty.persistence.recording.RecordingModule.PsqlExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +23,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Calendar;
+import java.util.List;
 import java.util.Objects;
 import java.util.TimeZone;
 import java.util.concurrent.CompletableFuture;
@@ -29,6 +32,7 @@ import java.util.regex.Pattern;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.stream.Collectors.joining;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.persistence.recording.RecordingModule.Dependency;
 
 @SuppressWarnings({"JDBCPrepareStatementWithNonConstantString", "JDBCExecuteWithNonConstantString"})
@@ -37,16 +41,19 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
 
     private final Provider<SchedulingExecutor> executorProvider;
     private final Calendar calendar;
-    private final PsqlDataSourceFactory dataSourceFactory;
+    private final DataSourceFactory dataSourceFactory;
+    private final PersistenceDomainService persistenceDomainService;
 
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
 
     @Inject
     public PostgresqlDestinationImpl(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,
-                                     @Dependency PsqlDataSourceFactory dataSourceFactory) {
+                                     @Dependency DataSourceFactory dataSourceFactory,
+                                     PersistenceDomainService persistenceDomainService) {
         this.executorProvider = checkNotNull(executorProvider);
         this.dataSourceFactory = checkNotNull(dataSourceFactory);
+        this.persistenceDomainService = checkNotNull(persistenceDomainService);
         calendar = Calendar.getInstance();
         calendar.setTimeZone(TimeZone.getTimeZone(ZoneOffset.UTC));
     }
@@ -89,7 +96,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
         protected SqlBase(PsqlConfig<R> config) {
             this.config = checkNotNull(config);
             typeName = config.typeId();
-            tableName = "recorder_data_" + typeName;
+            tableName = "recorder_data_" + config.domainConfig().domain().name(); // not using domain prefix for historical reasons
         }
 
         protected static void execute(Connection connection, String sql) throws SQLException {
@@ -99,15 +106,15 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
             }
         }
 
-        protected static <T> T doQuery(Connection connection,
-                                       String sql,
-                                       ThrowingConsumer<PreparedStatement, SQLException> paramSetter,
-                                       ThrowingFunction<ResultSet, T, SQLException> resultMapper) {
+        protected static void doQuery(Connection connection,
+                                      String sql,
+                                      ThrowingConsumer<PreparedStatement, SQLException> paramSetter,
+                                      ThrowingConsumer<ResultSet, SQLException> resultMapper) {
             try (PreparedStatement stmt = connection.prepareStatement(sql)) {
                 paramSetter.accept(stmt);
                 logger.debug("Executing {}", sql);
                 try (var resultSet = stmt.executeQuery()) {
-                    return resultMapper.apply(resultSet);
+                    resultMapper.accept(resultSet);
                 }
             } catch (SQLException e) {
                 throw new RuntimeException(e);
@@ -117,66 +124,58 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
 
     private class RecorderImpl<R> extends SqlBase<R> implements Recorder<R> {
         protected static final Pattern TABLE_NAME_PATTERN = Pattern.compile("%TABLE_NAME%");
-        private final String columnNames;
-        private final String columnsWithTypes;
-        private final String insertPlaceholders;
-        private boolean disabled;
 
+        private final String creatTableSql;
+        private final String insertSql;
+
+        private boolean disabled;
         private R lastRecorded;
 
         public RecorderImpl(PsqlConfig<R> config) {
             super(config);
-            columnsWithTypes = this.config.columns()
-                                          .stream()
-                                          .map(column -> column.name() + ' ' + column.sqlType() + (column.nullable() ? "" : " NOT NULL"))
-                                          .collect(joining(", "));
-            columnNames = TIMESTAMP_COL_NAME + ", " + this.config.columns().stream().map(Column::name).collect(joining(", "));
-            insertPlaceholders = this.config.columns().stream().map(Column::valuePlaceholder).collect(joining(", "));
+            String columnNames = TIMESTAMP_COL_NAME + ", " + this.config.columns().stream().map(Column::name).collect(joining(", "));
+            String insertPlaceholders = this.config.columns().stream().map(Column::valuePlaceholder).collect(joining(", "));
+            String columnsWithTypes = this.config.columns()
+                                                 .stream()
+                                                 .map(column -> column.name() + ' ' + column.sqlType() + (column.nullable() ? "" : " NOT NULL"))
+                                                 .collect(joining(", "));
+            creatTableSql = "CREATE TABLE IF NOT EXISTS " + tableName +
+                            " (id serial, " + TIMESTAMP_COL_NAME + " timestamptz, " + columnsWithTypes + ");";
+            insertSql = "INSERT INTO " + tableName + " (" + columnNames + ") VALUES (?, " + insertPlaceholders + ");";
         }
 
         public void initialise() {
-            try (var connection = dataSource.getConnection()) {
-                execute(connection, "CREATE TABLE IF NOT EXISTS recorder_meta (type_name text, schemaVersion integer);");
-                Integer storageSchemaVersion = doQuery(connection, "SELECT schemaVersion FROM recorder_meta WHERE type_name=?;",
-                                                       stmt -> stmt.setString(1, typeName),
-                                                       rs -> rs.next() ? rs.getInt(1) : null);
-                logger.info("[{}] Schema version in storage {}, actual {}", typeName, storageSchemaVersion, config.schemaVersion());
-                if (storageSchemaVersion == null) {
-                    logger.info("[{}] Registering type and creating table", typeName);
-                    for (String initStmt : config.initStatements()) {
-                        execute(connection, initStmt);
-                    }
-                    execute(connection, "CREATE TABLE recorder_data_" + typeName +
-                                        " (id serial, " + TIMESTAMP_COL_NAME + " timestamptz, " + columnsWithTypes + ");");
-                    doUpdate(connection, "INSERT INTO recorder_meta (type_name, schemaVersion) VALUES (?,?);", 1,
-                             input -> {
-                                 input.setString(1, typeName);
-                                 input.setInt(2, config.schemaVersion());
-                             });
-                } else if (storageSchemaVersion != config.schemaVersion()) {
-                    if (storageSchemaVersion == config.schemaVersion() - 1) {
-                        logger.info("Migrating schema from v{} to v{}", storageSchemaVersion, config.schemaVersion());
-                        for (String sql : config.migrator().getMigrationStatements(config.schemaVersion())) {
-                            execute(connection, TABLE_NAME_PATTERN.matcher(sql).replaceAll(tableName));
-                        }
-                        doUpdate(connection, "UPDATE recorder_meta SET schemaVersion=? WHERE type_name=?",
-                                 1,
-                                 input -> {
-                                     input.setInt(1, config.schemaVersion());
-                                     input.setString(2, typeName);
-                                 });
-                    } else {
-                        //noinspection ThrowCaughtLocally
-                        throw new UnsupportedOperationException("Dealing with complex schema version conflicts not supported: type " + typeName
-                                                                + ", storage version " + storageSchemaVersion +
-                                                                ", actual version " + config.schemaVersion());
-                    }
+            // Must only schedule a single task as the recorder can be used by users immediately after creation
+            var domainConfig = withTableNamePlaceholders(config.domainConfig());
+            // persistenceDomainService is configured to use the same executor as this component
+            persistenceDomainService.ensureDomainReady(domainConfig)
+                                    .thenRun(this::ensureRecorderTableExists)
+                                    .exceptionally(e -> {
+                                        logger.warn("Initialisation of record for type {} with config {} failed, recording will be disabled",
+                                                    typeName, config, e);
+                                        disabled = true;
+                                        return null;
+                                    });
+        }
+
+        private PersistenceDomainConfig withTableNamePlaceholders(PersistenceDomainConfig base) {
+            var initStatements = replaceTableNamePlaceholders(base.initStatements());
+            PersistenceDomainMigrator migrator = toVersion -> replaceTableNamePlaceholders(base.migrator().getMigrationStatements(toVersion));
+            return new PersistenceDomainConfig(base.domain(), base.schemaVersion(), initStatements, migrator);
+        }
+
+        private List<String> replaceTableNamePlaceholders(List<String> statements) {
+            return statements.stream()
+                             .map(sql -> TABLE_NAME_PATTERN.matcher(sql).replaceAll(tableName))
+                             .toList();
+        }
+
+        private void ensureRecorderTableExists() {
+            asUnchecked(() -> {
+                try (var connection = dataSource.getConnection()) {
+                    execute(connection, creatTableSql);
                 }
-            } catch (@SuppressWarnings("OverlyBroadCatchBlock") Exception e) {
-                logger.warn("Initialisation of record for type {} with config {} failed, recording will be disabled",
-                            typeName, config, e);
-                disabled = true;
-            }
+            });
         }
 
         @Override
@@ -194,9 +193,8 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                     return;
                 }
                 if (!Objects.equals(lastRecorded, recordable)) {
-                    String sql = "INSERT INTO " + tableName + " (" + columnNames + ") VALUES (?, " + insertPlaceholders + ");";
                     try (var connection = dataSource.getConnection()) {
-                        doUpdate(connection, sql, 1,
+                        doUpdate(connection, insertSql, 1,
                                  stmt -> {
                                      stmt.setTimestamp(1, Timestamp.from(timestamp), calendar);
                                      for (int i = 0; i < config.columns().size(); i++) {
@@ -206,7 +204,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                                  });
                         lastRecorded = recordable;
                     } catch (SQLException e) {
-                        logger.warn("Failed recording {}, sql was {}", recordable, sql, e);
+                        logger.warn("Failed recording {}, sql was {}", recordable, insertSql, e);
                     }
                 }
             });
@@ -249,7 +247,6 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                                 while (rs.next()) {
                                     rowHandler.accept(new Reader.QueryResultRow(calendar, connection, rs, () -> rs.getTimestamp(1, calendar).toInstant()));
                                 }
-                                return null;
                             });
                 } catch (SQLException e) {
                     logger.warn("Failed executing query, sql was {}", sql, e);

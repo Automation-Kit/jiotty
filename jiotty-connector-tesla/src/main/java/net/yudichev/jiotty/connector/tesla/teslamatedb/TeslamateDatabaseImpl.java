@@ -10,8 +10,8 @@ import net.yudichev.jiotty.common.geo.LatLonRectangle;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.persistence.psql.CloseableDataSource;
-import net.yudichev.jiotty.persistence.psql.PsqlDataSourceFactory;
+import net.yudichev.jiotty.persistence.db.CloseableDataSource;
+import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,13 +64,13 @@ final class TeslamateDatabaseImpl extends BaseLifecycleComponent implements Tesl
                                                         end_position.longitude between ? AND ?
                                                     ORDER BY start_date""";
 
-    private final PsqlDataSourceFactory dataSourceFactory;
+    private final DataSourceFactory dataSourceFactory;
     private final ExecutorFactory executorFactory;
     private final String vin;
     private SchedulingExecutor executor;
 
     @Inject
-    public TeslamateDatabaseImpl(@Dependency PsqlDataSourceFactory dataSourceFactory, ExecutorFactory executorFactory, @Vin String vin) {
+    public TeslamateDatabaseImpl(@Dependency DataSourceFactory dataSourceFactory, ExecutorFactory executorFactory, @Vin String vin) {
         this.dataSourceFactory = checkNotNull(dataSourceFactory);
         this.executorFactory = checkNotNull(executorFactory);
         this.vin = checkNotNull(vin);

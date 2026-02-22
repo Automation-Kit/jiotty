@@ -1,8 +1,11 @@
-package net.yudichev.jiotty.persistence.psql;
+package net.yudichev.jiotty.persistence.db.psql;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.inject.Inject;
+import net.yudichev.jiotty.persistence.db.CloseableDataSource;
+import net.yudichev.jiotty.persistence.db.DataSourceFactory;
+import net.yudichev.jiotty.persistence.db.JdbcConnectionConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,7 +14,7 @@ import java.sql.SQLException;
 
 import static java.util.concurrent.TimeUnit.MINUTES;
 
-final class PsqlDataSourceFactoryImpl implements PsqlDataSourceFactory {
+public final class PsqlDataSourceFactoryImpl implements DataSourceFactory {
     private static final Logger logger = LoggerFactory.getLogger(PsqlDataSourceFactoryImpl.class);
 
     private final HikariConfig poolConfig;

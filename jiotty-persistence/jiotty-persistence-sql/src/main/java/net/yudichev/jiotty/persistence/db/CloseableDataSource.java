@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.persistence.psql;
+package net.yudichev.jiotty.persistence.db;
 
 import net.yudichev.jiotty.common.lang.Closeable;
 
