@@ -1,0 +1,17 @@
+Configuration:
+  name: Automator
+  shutdownHook: disable
+  status: warn
+  appenders:
+    Console:
+      name: STDOUT
+      PatternLayout:
+        Pattern: "%d %p [%t] [due %X{task.due}] [cur %X{current.time}]%X{waveId} %c{1.1.1.*} %m%n"
+  Loggers:
+    Root:
+      level: '${sys:log4j.root.level:-INFO}'
+      AppenderRef:
+        - ref: STDOUT
+    logger:
+      - name: net.yudichev.jiotty.connector.sonyprojector
+        level: DEBUG

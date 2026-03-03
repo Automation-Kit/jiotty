@@ -9,6 +9,8 @@
 - Use `MoreThrowables.asUnchecked(...)`/`getAsUnchecked(...)` instead of try/catch that only wraps checked exceptions in `RuntimeException`.
 - Always statically import `TimeUnit` constants (for example, `SECONDS`) instead of `TimeUnit.SECONDS`.
 - In tests, reuse production constants by making them package-private instead of re-declaring them.
+- When creating a new `src/test/java` source root for unit tests, also create the corresponding `src/test/resources` and add `log4j2-test.yaml` by copying it
+  from a neighbouring module.
 - If a scenario suggests a possible bug but is not certain, ask for confirmation before encoding it in a test.
 - Build comprehensive coverage with edge cases and failure/timeout paths.
 - Run jacoco or similar tool to uncover branches that do not have coverage and add tests for such scenarios. If the scenario is not possible, then analyse why
@@ -41,8 +43,8 @@
 - Generally, do not create private constants that are only used once. This creates indirection that makes the code harder to read.
 - When the same logic repeats in a class, extract a helper method instead of duplicating the snippet.
 - Do not store values as fields if they are only used to build other fields in the constructor; keep them as constructor-local variables.
-- in all methods, private or public, use `jakarta.annotation.Nullable` on values that can be nullable by design, both return value types and method parameters.
-  For return types, add annotation on the type, not on the method, i.e. place it immediately before the return type.
+- For public APIs, use `Optional` instead of `@Nullable`. Use `@Nullable` only for internal/package-private APIs when null is a valid value. For return types,
+  add the annotation on the type, not on the method, i.e. place it immediately before the return type.
 - Non-nullable constructor arguments must always be validated via `checkNotNull` and, where applicable, other basic checks must be performed like checking for
   blank strings, negative integers etc. For records it must be done in the compact constructor.
 - When creating a `StringBuilder`, estimate the buffer size; only use the default constructor when an estimate is not practical.
@@ -69,3 +71,17 @@
 ## Misc
 
 - After code changes, run a build (at minimum `compile`) before responding unless explicitly told not to.
+
+## Additional rules
+
+- In new classes, use record-style getters (for example, `protocolValue()` rather than `getProtocolValue()`).
+- For strict protocol value lookups, use immutable maps and exact matching; avoid `equalsIgnoreCase`.
+- Use explicit imports for shared JDK helpers (for example, prefer `import java.util.Arrays` over `java.util.Arrays.stream(...)`).
+- Service implementations intended for non-Guice use (for example, `*Impl` classes) must be `public`.
+- For package-private internal APIs, mark intended internal-public methods as `public`.
+- Separate logger fields from other fields with an empty line.
+- Reuse expensive `MessageDigest` instances when safe (for example, via `ThreadLocal`).
+- Avoid `checkNotNull` for values guaranteed non-null by internal control flow.
+- Do not call `Instant.now()`/`LocalDateTime.now()` in production code; inject `CurrentDateTimeProvider` and use `currentInstant()`/`currentDateTime()` so
+  `ProgrammableClock` works in tests.
+- In module builders and other builders, do not modify builder fields inside `build()`; apply defaults in field initialisers so the builder remains reusable.

@@ -245,6 +245,7 @@
         <module>jiotty-connector-pushover</module>
         <module>jiotty-connector-rpi</module>
         <module>jiotty-connector-shelly</module>
+        <module>jiotty-connector-sonyprojector</module>
         <module>jiotty-connector-tesla</module>
         <module>jiotty-connector-tplinksmartplug</module>
         <module>jiotty-connector-world</module>

@@ -185,6 +185,11 @@
             </dependency>
             <dependency>
                 <groupId>${project.groupId}</groupId>
+                <artifactId>jiotty-connector-sonyprojector</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
                 <artifactId>jiotty-connector-slide</artifactId>
                 <version>${project.version}</version>
             </dependency>
