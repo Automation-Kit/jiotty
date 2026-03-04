@@ -56,7 +56,7 @@ public final class SonyProjectorClientModule extends BaseLifecycleComponentModul
     public static final class Builder implements TypedBuilder<ExposedKeyModule<SonyProjectorClient>> {
         private BindingSpec<String> hostSpec;
         private BindingSpec<Integer> portSpec = literally(53595);
-        private BindingSpec<Duration> timeoutSpec = literally(Duration.ofSeconds(4));
+        private BindingSpec<Duration> timeoutSpec = literally(Duration.ofMinutes(2));
         private BindingSpec<Optional<String>> passwordSpec = literally(Optional.empty());
 
         public Builder setHost(BindingSpec<String> hostSpec) {
