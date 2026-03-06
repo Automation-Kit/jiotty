@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.time;
 
 import com.google.common.collect.ImmutableList;
+import jakarta.inject.Inject;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -75,6 +76,7 @@ public final class DateTimeUtils {
         private final DateTimeFormatter fullDateAndTimeSecFormatter;
         private final DateTimeFormatter dayAndTimeMinsFormatter;
 
+        @Inject
         public Formatter(ZoneId zoneId) {
             fullDateAndTimeMinsFormatter = DateTimeFormatter.ofPattern("dd MMM yy HH:mm").withZone(zoneId);
             fullDateAndTimeSecFormatter = DateTimeFormatter.ofPattern("dd MMM yy HH:mm:ss").withZone(zoneId);

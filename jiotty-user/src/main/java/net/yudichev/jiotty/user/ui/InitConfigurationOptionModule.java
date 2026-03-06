@@ -2,6 +2,8 @@ package net.yudichev.jiotty.user.ui;
 
 import com.google.common.reflect.TypeParameter;
 import com.google.common.reflect.TypeToken;
+import com.google.inject.Key;
+import net.yudichev.jiotty.common.app.ApplicationLifecycleControl;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.TypeLiterals;
 import net.yudichev.jiotty.common.varstore.VarStore;
@@ -10,11 +12,16 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 public class InitConfigurationOptionModule<T> extends BaseLifecycleComponentModule {
     private final T value;
+    private final Key<ApplicationLifecycleControl> applicationLifecycleControlKey;
     private final OptionType optionType;
     private final OptionMeta<T> optionMeta;
     private final TypeToken<T> optionValueType;
 
-    public InitConfigurationOptionModule(VarStore varStore, OptionType optionType, OptionMeta<T> optionMeta) {
+    public InitConfigurationOptionModule(VarStore varStore,
+                                         Key<ApplicationLifecycleControl> applicationLifecycleControlKey,
+                                         OptionType optionType,
+                                         OptionMeta<T> optionMeta) {
+        this.applicationLifecycleControlKey = checkNotNull(applicationLifecycleControlKey);
         this.optionType = checkNotNull(optionType);
         this.optionMeta = checkNotNull(optionMeta);
         optionValueType = new TypeToken<>(getClass()) {};
@@ -27,6 +34,7 @@ public class InitConfigurationOptionModule<T> extends BaseLifecycleComponentModu
 
     @Override
     protected void configure() {
+        bind(ApplicationLifecycleControl.class).annotatedWith(InitConfigurationOptionManager.Dependency.class).to(applicationLifecycleControlKey);
         bind(OptionType.class).annotatedWith(InitConfigurationOptionManager.Dependency.class).toInstance(optionType);
         bind(TypeLiterals.asTypeLiteral(new TypeToken<OptionMeta<T>>() {}
                                                 .where(new TypeParameter<>() {}, optionValueType)))

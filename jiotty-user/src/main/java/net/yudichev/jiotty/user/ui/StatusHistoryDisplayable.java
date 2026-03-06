@@ -42,7 +42,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
              keyToKeyTitle,
              status -> status.lastChanged().atZone(ZoneId.systemDefault()).format(RFC_1123_DATE_TIME),
              (status, appender) -> appender.append(status.status()),
-             (s, httpServletResponse) -> {},
+             (_, _) -> {},
              TextFormat.PLAIN);
     }
 
@@ -66,7 +66,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
     @Override
     public Closeable subscribeForUpdates(Runnable updatesAvailable) {
         updatesAvailable.run();
-        return listeners.addListener(unused -> updatesAvailable.run());
+        return listeners.addListener(_ -> updatesAvailable.run());
     }
 
     public void addEvent(K key, T value, Instant lastChanged) {

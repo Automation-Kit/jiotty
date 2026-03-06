@@ -41,7 +41,7 @@ public final class InitConfigurationOptionManager<T> extends BaseLifecycleCompon
     @Inject
     public InitConfigurationOptionManager(UIServer uiServer,
                                           ExecutorFactory executorFactory,
-                                          ApplicationLifecycleControl applicationLifecycleControl,
+                                          @Dependency ApplicationLifecycleControl applicationLifecycleControl,
                                           @Dependency OptionType type,
                                           @Dependency OptionMeta<T> optionMeta) {
         this.uiServer = checkNotNull(uiServer);

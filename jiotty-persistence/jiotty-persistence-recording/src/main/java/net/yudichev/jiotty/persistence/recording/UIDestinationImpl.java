@@ -1,31 +1,18 @@
 package net.yudichev.jiotty.persistence.recording;
 
-import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.time.DateTimeUtils;
 import net.yudichev.jiotty.user.ui.StatusHistoryDisplayable;
-import net.yudichev.jiotty.user.ui.UIServer;
 
 import java.time.Instant;
-import java.time.ZoneId;
 import java.util.Objects;
 import java.util.function.Function;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
 final class UIDestinationImpl implements UIDestination {
-
-    private final UIServer uiServer;
-    private final DateTimeUtils.Formatter dateTimeFormatter;
-
-    @Inject
-    public UIDestinationImpl(UIServer uiServer, ZoneId zoneId) {
-        this.uiServer = checkNotNull(uiServer);
-        dateTimeFormatter = new DateTimeUtils.Formatter(zoneId);
-    }
 
     @Override
     public <R> Recorder<R> createRecorder(Config<R> destinationConfig) {
         var config = (UIConfig<R>) destinationConfig;
+        var dateTimeFormatter = new DateTimeUtils.Formatter(config.zoneId());
         var renderer = config.renderer().get();
         renderer.initialise(dateTimeFormatter);
         var displayable = new StatusHistoryDisplayable<String, R>(
@@ -36,7 +23,7 @@ final class UIDestinationImpl implements UIDestination {
                 (status, appender) -> renderer.render(status.status(), appender),
                 config.downloadHandler(),
                 config.textFormat());
-        uiServer.registerDisplayable(displayable);
+        config.uiServer().registerDisplayable(displayable);
         return new Recorder<>() {
             private R lastRecorded;
 

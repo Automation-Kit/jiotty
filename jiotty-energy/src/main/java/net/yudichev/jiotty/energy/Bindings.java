@@ -31,4 +31,10 @@ final class Bindings {
     @Retention(RUNTIME)
     @interface ExecutorProvider {
     }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Dependency {
+    }
 }

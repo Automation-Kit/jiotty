@@ -8,7 +8,9 @@ import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
 import jakarta.annotation.Nullable;
+import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import org.slf4j.Logger;
@@ -30,6 +32,7 @@ import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.LogRecord;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
@@ -64,6 +67,7 @@ public final class Application {
                 lal.log(null, FQCN, slf4jLevel, i18nMessage, null, record.getThrown());
             }
 
+            @SuppressWarnings("MethodOverridesInaccessibleMethodOfSuper") // copy-pasted code
             private static String getMessageI18N(LogRecord record) {
                 String message = record.getMessage();
 
@@ -75,7 +79,7 @@ public final class Application {
                 if (bundle != null) {
                     try {
                         message = bundle.getString(message);
-                    } catch (MissingResourceException e) {
+                    } catch (MissingResourceException _) {
                     }
                 }
                 Object[] params = record.getParameters();
@@ -103,13 +107,17 @@ public final class Application {
     private final AtomicBoolean startedAllComponentsSuccessfully = new AtomicBoolean();
     private final AtomicBoolean runCalled = new AtomicBoolean();
     private final AtomicReference<Injector> injectorRef = new AtomicReference<>();
+    private final @Nullable Injector parentInjector;
+    private final SpecifiedAnnotation specifiedAnnotation;
     private final Supplier<Module> moduleSupplier;
     private final ApplicationLifecycleControl applicationLifecycleControl;
 
     private CountDownLatch shutdownLatch;
     private Thread runThread;
 
-    private Application(Supplier<Module> moduleSupplier) {
+    private Application(@Nullable Injector parentInjector, SpecifiedAnnotation specifiedAnnotation, Supplier<Module> moduleSupplier) {
+        this.parentInjector = parentInjector;
+        this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
         this.moduleSupplier = moduleSupplier;
         applicationLifecycleControl = new ApplicationLifecycleControl() {
             @Override
@@ -145,7 +153,10 @@ public final class Application {
         startedAllComponentsSuccessfully.set(false);
         componentsAttemptedToStart.clear();
         logger.info("Creating injector");
-        Injector injector = Guice.createInjector(new ApplicationSupportModule(applicationLifecycleControl), moduleSupplier.get());
+        var applicationSupportModule = new ApplicationSupportModule(specifiedAnnotation, applicationLifecycleControl);
+        var mainModule = moduleSupplier.get();
+        Injector injector = parentInjector == null ? Guice.createInjector(applicationSupportModule, mainModule)
+                                                   : parentInjector.createChildInjector(applicationSupportModule, mainModule);
         injectorRef.set(injector);
         logger.info("Initialising components");
         try {
@@ -178,7 +189,8 @@ public final class Application {
         return injectorRef.get();
     }
 
-    /// Stop all components that have been started - must be called on same thread that called [#start()].
+    /// Stop all components that have been started - must be called on same thread that called [#start()]. Attempts to stop all components regardless of any
+    /// failures. Never throws exceptions.
     public void stop() {
         logger.info("Shutting down");
         stop(componentsAttemptedToStart);
@@ -261,11 +273,24 @@ public final class Application {
         });
     }
 
-    public static final class Builder implements TypedBuilder<Application> {
+    public static final class Builder implements TypedBuilder<Application>, HasWithAnnotation {
         private final ImmutableList.Builder<Supplier<Module>> moduleSupplierListBuilder = ImmutableList.builder();
+        private Injector parentInjector;
+        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
 
         public Builder addModule(Supplier<Module> moduleSupplier) {
             moduleSupplierListBuilder.add(moduleSupplier);
+            return this;
+        }
+
+        public Builder withParentInjector(Injector parentInjector) {
+            this.parentInjector = checkNotNull(parentInjector);
+            return this;
+        }
+
+        @Override
+        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
+            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
             return this;
         }
 
@@ -280,7 +305,7 @@ public final class Application {
                                    .forEach(this::install);
                 }
             };
-            return new Application(() -> module);
+            return new Application(parentInjector, specifiedAnnotation, () -> module);
         }
     }
 }

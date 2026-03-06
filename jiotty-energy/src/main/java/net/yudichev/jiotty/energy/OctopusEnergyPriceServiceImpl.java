@@ -31,6 +31,7 @@ import static java.lang.StrictMath.toIntExact;
 import static java.time.temporal.ChronoUnit.DAYS;
 import static java.time.temporal.ChronoUnit.MINUTES;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
+import static net.yudichev.jiotty.energy.Bindings.Dependency;
 import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 
 final class OctopusEnergyPriceServiceImpl extends BaseLifecycleComponent implements EnergyPriceService {
@@ -61,7 +62,7 @@ final class OctopusEnergyPriceServiceImpl extends BaseLifecycleComponent impleme
                                          CurrentDateTimeProvider timeProvider,
                                          OctopusEnergy octopusEnergy,
                                          JobScheduler jobScheduler,
-                                         ZoneId zoneId) {
+                                         @Dependency ZoneId zoneId) {
         this.executorProvider = checkNotNull(executorProvider);
         this.timeProvider = checkNotNull(timeProvider);
         this.octopusEnergy = checkNotNull(octopusEnergy);
@@ -111,7 +112,7 @@ final class OctopusEnergyPriceServiceImpl extends BaseLifecycleComponent impleme
         logger.info("Requesting prices from {} to {}", periodFrom, periodTo);
         octopusEnergy.getAgilePrices(periodFrom, periodTo)
                      .thenAcceptAsync(rates -> listeners.notify(handleOctopusPrices(rates, periodFrom)), executor)
-                     .whenCompleteAsync((unused, throwable) -> {
+                     .whenCompleteAsync((_, throwable) -> {
                          if (throwable != null) {
                              handleFailure(periodFrom, throwable);
                          }
