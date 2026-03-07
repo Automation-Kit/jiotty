@@ -61,6 +61,10 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
         executor.execute(this::createGraph);
     }
 
+    protected final SchedulingExecutor executor() {
+        return executor;
+    }
+
     protected void doStart0() {
     }
 

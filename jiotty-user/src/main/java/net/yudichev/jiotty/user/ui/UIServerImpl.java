@@ -202,6 +202,7 @@ final class UIServerImpl extends BaseLifecycleComponent implements UIServer {
     private void writeOptionsJson(HttpServletResponse resp) throws IOException {
         resp.setCharacterEncoding("utf-8");
         resp.setContentType("application/json");
+        // TODO:commerce also stream options/tabs updates because option list and tab composition may change dynamically at runtime.
         Map<String, List<Option<?>>> optionsByTabNameCopy = whenStartedAndNotLifecycling(() -> {
             var copy = new HashMap<>(optionsByTabName);
             copy.replaceAll((_, options) -> new ArrayList<>(options));
