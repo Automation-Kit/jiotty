@@ -11,3 +11,4 @@
 .idea/uiDesigner.xml
 **/dependency-reduced-pom.xml
 .DS_Store
+/.idea/runConfigurations/

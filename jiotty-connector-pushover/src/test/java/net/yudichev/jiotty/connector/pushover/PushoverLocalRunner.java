@@ -1,22 +1,37 @@
 package net.yudichev.jiotty.connector.pushover;
 
+import com.google.common.reflect.TypeToken;
 import jakarta.inject.Inject;
-import net.pushover.client.MessagePriority;
 import net.yudichev.jiotty.common.app.Application;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.keystore.KeyStoreAccessModule;
+
+import java.nio.file.Paths;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.keystore.KeyStoreEntryModule.keyStoreEntry;
 
+@SuppressWarnings("CallToSystemGetenv")
 final class PushoverLocalRunner {
-    private static String[] args;
+    private static String userToken;
 
+    @SuppressWarnings("UnusedAssignment")
     static void main(String[] args) {
-        PushoverLocalRunner.args = args;
+        int i = 0;
+        String keyStorePass = checkNotNull(System.getenv("AUTOMATOR_KEYSTORE_PASS"));
+        String pathToKeyStore = args[i++];
+        userToken = args[i++];
         Application.builder()
                    .addModule(ExecutorModule::new)
+                   .addModule(() -> KeyStoreAccessModule.builder()
+                                                        .setPathToKeystore(literally(pathToKeyStore).map(new TypeToken<>() {},
+                                                                                                         new TypeToken<>() {},
+                                                                                                         Paths::get))
+                                                        .setKeystorePass(literally(keyStorePass))
+                                                        .build())
                    .addModule(() -> new PushoverUserAlerterModule(keyStoreEntry("pushover-api-token")))
                    .addModule(() -> new BaseLifecycleComponentModule() {
                        @Override
@@ -39,7 +54,7 @@ final class PushoverLocalRunner {
 
         @Override
         protected void doStart() {
-            thread = new Thread(() -> userAlerter.sendAlert(() -> args[0], MessagePriority.EMERGENCY, "Ze Alert"));
+            thread = new Thread(() -> userAlerter.sendAlert(() -> userToken, MessagePriority.NORMAL, "Ze Alert"));
             thread.start();
         }
 

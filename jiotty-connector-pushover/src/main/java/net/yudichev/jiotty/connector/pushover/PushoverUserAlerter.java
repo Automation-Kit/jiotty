@@ -1,17 +1,13 @@
 package net.yudichev.jiotty.connector.pushover;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
-import net.pushover.client.MessagePriority;
-import net.pushover.client.PushoverException;
-import net.pushover.client.PushoverMessage;
-import net.pushover.client.PushoverRestClient;
-import net.pushover.client.Status;
-import net.yudichev.jiotty.common.async.ExecutorFactory;
-import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
+import net.yudichev.jiotty.common.lang.CompletableFutures;
+import okhttp3.FormBody;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,54 +21,51 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
+import static net.yudichev.jiotty.common.rest.RestClients.call;
+import static net.yudichev.jiotty.common.rest.RestClients.newClient;
+import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 final class PushoverUserAlerter extends BaseLifecycleComponent implements UserAlerter {
     private static final Logger logger = LoggerFactory.getLogger(PushoverUserAlerter.class);
-    private final ExecutorFactory executorFactory;
-    private final String apiToken;
 
-    private PushoverRestClient pushoverClient;
-    private CloseableHttpClient httpClient;
-    private SchedulingExecutor executor;
+    private final String apiToken;
+    private OkHttpClient httpClient;
 
     @Inject
-    public PushoverUserAlerter(ExecutorFactory executorFactory, @ApiToken String apiToken) {
-        this.executorFactory = checkNotNull(executorFactory);
+    public PushoverUserAlerter(@ApiToken String apiToken) {
         this.apiToken = checkNotNull(apiToken);
     }
 
     @Override
     public void sendAlert(User user, MessagePriority priority, String text) {
-        whenStartedAndNotLifecycling(() -> executor.execute(() -> {
-            try {
-                logger.debug("Sending '{}' with priority {} to {}", text, priority, user);
-                PushoverMessage.Builder builder = PushoverMessage.builderWithApiToken(apiToken)
-                                                                 .setUserId(user.token())
-                                                                 .setSound("updown")
-                                                                 .setPriority(priority);
-                if (priority == MessagePriority.EMERGENCY) {
-                    builder.setRetry(30)
-                           .setExpire((int) MINUTES.toSeconds(5));
-                }
-                Status status = pushoverClient.pushMessage(builder.setMessage(text).build());
-                logger.info("Alert '{}' sent to {}, result: {}", text, user, status);
-            } catch (PushoverException e) {
-                logger.error("Failed sending alert to {}", user, e);
+        whenStartedAndNotLifecycling(() -> {
+            var bodyBuilder = new FormBody.Builder()
+                    .add("token", apiToken)
+                    .add("user", user.token())
+                    .add("message", text)
+                    .add("sound", "updown")
+                    .add("priority", String.valueOf(priority.priority()));
+            if (priority == MessagePriority.EMERGENCY) {
+                bodyBuilder.add("retry", "30")
+                           .add("expire", String.valueOf(MINUTES.toSeconds(5)));
             }
-        }));
+            Request request = new Request.Builder()
+                    .url("https://api.pushover.net/1/messages.json")
+                    .post(bodyBuilder.build())
+                    .build();
+            call(httpClient.newCall(request), JsonNode.class)
+                    .whenComplete(CompletableFutures.logErrorOnFailure(logger, "Failed sending alert"));
+        });
     }
 
     @Override
     protected void doStart() {
-        executor = executorFactory.createSingleThreadedSchedulingExecutor("PushoverUserAlerter");
-        httpClient = HttpClients.createDefault();
-        pushoverClient = new PushoverRestClient();
-        pushoverClient.setHttpClient(httpClient);
+        httpClient = newClient();
     }
 
     @Override
     protected void doStop() {
-        closeSafelyIfNotNull(logger, httpClient, executor);
+        closeSafelyIfNotNull(logger, () -> shutdown(httpClient));
     }
 
     @BindingAnnotation

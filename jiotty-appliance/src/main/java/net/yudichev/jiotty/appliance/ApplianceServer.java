@@ -25,26 +25,13 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 final class ApplianceServer extends BaseLifecycleComponent {
     private static final Logger logger = LoggerFactory.getLogger(ApplianceServer.class);
 
-    private final RestServer restServer;
-    private final String applianceId;
     private final Appliance appliance;
 
     @Inject
     ApplianceServer(@Dependency RestServer restServer,
                     @ApplianceId String applianceId,
                     @Dependency Appliance appliance) {
-        this.restServer = checkNotNull(restServer);
-        this.applianceId = checkNotNull(applianceId);
         this.appliance = checkNotNull(appliance);
-    }
-
-    @Override
-    public String name() {
-        return String.format("Server for %s @ %s", appliance.name(), System.identityHashCode(this));
-    }
-
-    @Override
-    public void doStart() {
         appliance.getAllSupportedCommandMetadata().forEach(commandMeta -> {
             String url = "/appliance/" + applianceId + "/" + commandMeta.commandName().toLowerCase();
             logger.info("Registering {}", url);
@@ -64,13 +51,19 @@ final class ApplianceServer extends BaseLifecycleComponent {
         });
     }
 
+    @Override
+    public String name() {
+        return String.format("Server for %s @ %s", appliance.name(), System.identityHashCode(this));
+    }
+
     private static Command<?> createCommand(CommandMeta<?> commandMeta, HttpServletRequest request) {
-        var paramValues = Maps.<String, CommandParamType, Object>transformEntries(
+        var paramValues = Maps.transformEntries(
                 commandMeta.parameterTypes(),
                 (name, paramType) -> {
                     try {
                         var param = request.getParameter(name);
                         checkArgument(param != null, "Missing required parameter '%s'", name);
+                        assert paramType != null : "ImmutableMap cannot contain nulls";
                         return paramType.decode(param);
                     } catch (RuntimeException e) {
                         throw new RuntimeException("Failed decoding parameter " + name, e);
