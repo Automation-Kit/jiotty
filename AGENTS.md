@@ -153,7 +153,7 @@
 
 ## Misc
 
-- After code changes, run a build (at minimum `compile`) before responding unless explicitly told not to.
+- After code changes, run a build (at minimum `test`) before responding unless explicitly told not to.
 
 ## Additional rules
 
