@@ -63,8 +63,10 @@
 - Do not keep a helper method static if it only exists to take one of the owning object's effectively final fields as a parameter; make it an instance method
   and use the field directly instead.
 - Use British English for identifiers and comments.
-- Only use `var` to declare local variables when the type of the variable is immediately clear from the expression to the right of the `=`.
-- When the right-hand side is `new Type(...)`, use `var`.
+- Only use `var` to declare local variables when the concrete type is spelled out explicitly on the right-hand side, such as `new Type(...)` or a cast
+  `(Type) expr`. Do not use `var` for method calls — including factory methods, builders, and transforming calls like `map(...)` — even when the return
+  type might seem obvious from context.
+- When the right-hand side is `new Type(...)`, always use `var`.
 - The right margin for code is 160 characters.
 - Method or record parameters are chopped vertically if they don't fit on one line, both when declaring and when invoking a method. There is typically no line
   break before the first parameter, unless adding it makes the whole thing fit on one line.
@@ -120,6 +122,11 @@
 - Before responding, run `git status --short` and stage any new files you created (excluding non-shareable or temporary files).
 - After any shell command that creates, copies, moves, or extracts files, run `git status --short` immediately and remove unintended untracked paths before
   continuing.
+
+## Agent instructions maintenance
+
+- When asked to add or update a rule in agent instructions, apply the change to the `AGENTS.md` of all known Java repositories (`jiotty`, `car-engine`,
+  `car-server`, `automator`) unless the rule is clearly specific to the repository being worked in.
 
 ## Workspace context maintenance
 
@@ -190,3 +197,5 @@
 - Do not add `@FunctionalInterface` annotations; they add no value here.
 - Never use the `synchronized` modifier on methods. Use `synchronized` blocks instead, locking on the natural private field when one exists or on a dedicated
   `private final Object lock` when the protected state spans multiple fields.
+- In `BindingSpec.map(...)` calls, always use diamond operators `<>` on all `TypeToken` constructor arguments; rely on type inference from context and never
+  spell out the type parameters explicitly.
