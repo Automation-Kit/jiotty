@@ -12,6 +12,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 public final class InMemoryVarStore implements VarStore {
@@ -33,5 +35,12 @@ public final class InMemoryVarStore implements VarStore {
         JavaType javaType = mapper.constructType(type.getType());
         return Optional.ofNullable(serialisedValuesByKey.get(key))
                        .map(encodedValue -> getAsUnchecked(() -> mapper.readerFor(javaType).readValue(encodedValue)));
+    }
+
+    @Override
+    public VarStore forUser(String userId) {
+        checkNotNull(userId, "userId");
+        checkArgument(!userId.isBlank(), "userId must not be blank");
+        return new UserScopedVarStore(this, userId + '.');
     }
 }

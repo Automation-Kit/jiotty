@@ -1,5 +1,7 @@
 package net.yudichev.jiotty.persistence.domain;
 
+import com.google.common.collect.ImmutableList;
+
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -18,7 +20,7 @@ public record PersistenceDomainConfig(PersistenceDomain domain,
     public PersistenceDomainConfig {
         checkNotNull(domain, "domain");
         checkArgument(schemaVersion > 0, "schemaVersion must be > 0, was %s", schemaVersion);
-        initStatements = List.copyOf(checkNotNull(initStatements, "initStatements"));
+        initStatements = ImmutableList.copyOf(checkNotNull(initStatements, "initStatements"));
         checkNotNull(migrator, "migrator");
     }
 }

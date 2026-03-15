@@ -9,13 +9,13 @@ import java.nio.file.Path;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 public final class VarStoreModule extends BaseLifecycleComponentModule implements ExposedKeyModule<VarStore> {
-    private final VarStoreImpl varStore;
+    private final FileVarStore varStore;
 
-    private VarStoreModule(Path path) {
-        varStore = new VarStoreImpl(path);
+    private VarStoreModule(Path path, boolean singleUser) {
+        varStore = singleUser ? new SingleUserFileVarStore(path) : new MultiUserFileVarStore(path);
     }
 
-    public VarStoreImpl varStore() {
+    public VarStore varStore() {
         return varStore;
     }
 
@@ -32,6 +32,7 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
     public static final class Builder implements TypedBuilder<VarStoreModule> {
 
         private Path path;
+        private boolean singleUser;
 
         private Builder() {
         }
@@ -41,9 +42,14 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
             return this;
         }
 
+        public Builder withSingleUser() {
+            singleUser = true;
+            return this;
+        }
+
         @Override
         public VarStoreModule build() {
-            return new VarStoreModule(path);
+            return new VarStoreModule(path, singleUser);
         }
     }
 }

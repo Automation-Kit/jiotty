@@ -1,15 +1,8 @@
 package net.yudichev.jiotty.user.persistence;
 
-import jakarta.annotation.Nullable;
-
-import java.time.Instant;
-import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 
 /// Persistence gateway for user profiles and identities.
 ///
@@ -26,6 +19,11 @@ public interface UserPersistence {
     /// @return the existing or newly created user profile
     CompletableFuture<UserProfile> getOrCreateByIdentity(UserIdentity identity, UserProfileInput profile);
 
+    /// Returns the active user profile by identity.
+    ///
+    /// @return empty if the identity is not linked or linked to a deleted user
+    CompletableFuture<Optional<UserProfile>> getByIdentity(UserIdentity identity);
+
     /// Returns the active user profile by id.
     ///
     /// @param userId internal user id
@@ -37,18 +35,19 @@ public interface UserPersistence {
 
     /// Updates the active user's profile fields in one transaction.
     ///
-    /// @param userId internal user id
-    /// @param update new profile values (email may be null to clear it)
+    /// @param userId  internal user id
+    /// @param profile new profile values
     /// @return the updated user profile
-    CompletableFuture<UserProfile> updateProfile(String userId, UserProfileUpdate update);
+    CompletableFuture<UserProfile> updateProfile(String userId, UserProfileInput profile);
 
-    /// Links a provider identity to an existing user.
+    /// Replaces the user's complete active identity set with `identities`.
     ///
-    /// If the identity is already linked to another user, the operation fails.
+    /// Existing identities for providers not present in `identities` are soft-deleted. Existing identities for matching providers are revived or updated to the
+    /// supplied provider user id. If any supplied identity is already linked to another user, the operation fails.
     ///
-    /// @param userId   internal user id
-    /// @param identity provider identity to link
-    CompletableFuture<Void> linkIdentity(String userId, UserIdentity identity);
+    /// @param userId     internal user id
+    /// @param identities complete desired active identity set for the user
+    CompletableFuture<Void> updateAllIdentities(String userId, List<UserIdentity> identities);
 
     /// Lists active identities for a user.
     ///
@@ -60,96 +59,4 @@ public interface UserPersistence {
     ///
     /// @param userId internal user id
     CompletableFuture<Void> softDelete(String userId);
-
-    /// Provider identity used to authenticate a user.
-    ///
-    /// @param provider       provider identifier (for example `firebase`, `google.com`, `apple.com`)
-    /// @param providerUserId provider-specific unique user id
-    record UserIdentity(String provider, String providerUserId) {
-        public UserIdentity {
-            checkNotNull(provider, "provider");
-            checkNotNull(providerUserId, "providerUserId");
-            checkArgument(!provider.isBlank(), "provider must not be blank");
-            checkArgument(!providerUserId.isBlank(), "providerUserId must not be blank");
-        }
-    }
-
-    /// User profile as stored by the persistence layer.
-    ///
-    /// @param id          internal user id
-    /// @param email       optional email (for example, when the identity provider does not expose it)
-    /// @param displayName user-visible name
-    /// @param timezone    user's preferred time zone
-    /// @param createdAt   creation time in storage
-    /// @param updatedAt   last update time in storage
-    record UserProfile(String id,
-                       @Nullable String email,
-                       String displayName,
-                       ZoneId timezone,
-                       Instant createdAt,
-                       Instant updatedAt) {
-        public UserProfile {
-            checkNotNull(id, "id");
-            checkArgument(!id.isBlank(), "id must not be blank");
-            if (email != null) {
-                checkArgument(!email.isBlank(), "email must not be blank");
-            }
-            checkNotNull(displayName, "displayName");
-            checkArgument(!displayName.isBlank(), "displayName must not be blank");
-            checkNotNull(timezone, "timezone");
-            checkNotNull(createdAt, "createdAt");
-            checkNotNull(updatedAt, "updatedAt");
-        }
-    }
-
-    /// Initial profile details for a newly created user.
-    ///
-    /// @param email       optional email (may be null when not available)
-    /// @param displayName user-visible name
-    /// @param timezone    user's preferred time zone
-    record UserProfileInput(@Nullable String email,
-                            String displayName,
-                            ZoneId timezone) {
-        public UserProfileInput {
-            if (email != null) {
-                checkArgument(!email.isBlank(), "email must not be blank");
-            }
-            checkNotNull(displayName, "displayName");
-            checkArgument(!displayName.isBlank(), "displayName must not be blank");
-            checkNotNull(timezone, "timezone");
-        }
-    }
-
-    /// Updated profile values for an existing user.
-    ///
-    /// @param email       optional email (null clears the stored value)
-    /// @param displayName user-visible name
-    /// @param timezone    user's preferred time zone
-    record UserProfileUpdate(@Nullable String email,
-                             String displayName,
-                             ZoneId timezone) {
-        public UserProfileUpdate {
-            if (email != null) {
-                checkArgument(!email.isBlank(), "email must not be blank");
-            }
-            checkNotNull(displayName, "displayName");
-            checkArgument(!displayName.isBlank(), "displayName must not be blank");
-            checkNotNull(timezone, "timezone");
-        }
-    }
-
-    /// Linked identity with timestamps.
-    ///
-    /// @param identity  provider identity
-    /// @param createdAt creation time in storage
-    /// @param updatedAt last update time in storage
-    record UserIdentityRecord(UserIdentity identity,
-                              Instant createdAt,
-                              Instant updatedAt) {
-        public UserIdentityRecord {
-            checkNotNull(identity, "identity");
-            checkNotNull(createdAt, "createdAt");
-            checkNotNull(updatedAt, "updatedAt");
-        }
-    }
 }

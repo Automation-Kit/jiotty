@@ -38,11 +38,11 @@ public final class UserPersistenceModule extends BaseLifecycleComponentModule im
                                   BindingSpec<String> domainNameSpec,
                                   BindingSpec<List<String>> initStatementsSpec,
                                   BindingSpec<PersistenceDomainMigrator> migratorSpec) {
-        this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
-        this.schemaVersionSpec = checkNotNull(schemaVersionSpec);
-        this.domainNameSpec = checkNotNull(domainNameSpec);
-        this.initStatementsSpec = checkNotNull(initStatementsSpec);
-        this.migratorSpec = checkNotNull(migratorSpec);
+        this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
+        this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
+        this.domainNameSpec = checkNotNull(domainNameSpec, "domainNameSpec");
+        this.initStatementsSpec = checkNotNull(initStatementsSpec, "initStatementsSpec");
+        this.migratorSpec = checkNotNull(migratorSpec, "migratorSpec");
     }
 
     public static Builder builder() {
@@ -121,27 +121,27 @@ public final class UserPersistenceModule extends BaseLifecycleComponentModule im
         private BindingSpec<PersistenceDomainMigrator> migratorSpec = literally(PersistenceDomainMigrator.FAIL_ON_MIGRATION);
 
         public Builder setDataSourceFactory(BindingSpec<DataSourceFactory> dataSourceFactorySpec) {
-            this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
+            this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
             return this;
         }
 
         public Builder setSchemaVersion(BindingSpec<Integer> schemaVersionSpec) {
-            this.schemaVersionSpec = checkNotNull(schemaVersionSpec);
+            this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
             return this;
         }
 
         public Builder withDomainName(BindingSpec<String> domainNameSpec) {
-            this.domainNameSpec = checkNotNull(domainNameSpec);
+            this.domainNameSpec = checkNotNull(domainNameSpec, "domainNameSpec");
             return this;
         }
 
         public Builder withInitStatements(BindingSpec<List<String>> initStatementsSpec) {
-            this.initStatementsSpec = checkNotNull(initStatementsSpec);
+            this.initStatementsSpec = checkNotNull(initStatementsSpec, "initStatementsSpec");
             return this;
         }
 
         public Builder withMigrator(BindingSpec<PersistenceDomainMigrator> migratorSpec) {
-            this.migratorSpec = checkNotNull(migratorSpec);
+            this.migratorSpec = checkNotNull(migratorSpec, "migratorSpec");
             return this;
         }
 

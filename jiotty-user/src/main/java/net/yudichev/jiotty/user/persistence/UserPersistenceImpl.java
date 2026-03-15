@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.persistence;
 
+import com.google.common.collect.ImmutableList;
 import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
@@ -7,6 +8,7 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.misc.UniqueId;
+import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
@@ -24,6 +26,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -41,7 +44,7 @@ import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.Migrato
 import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.SchemaVersion;
 
 @SuppressWarnings("JDBCPrepareStatementWithNonConstantString")
-final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPersistence {
+public final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPersistence {
     private static final Logger logger = LoggerFactory.getLogger(UserPersistenceImpl.class);
     private static final String UNIQUE_VIOLATION_SQL_STATE = "23505";
 
@@ -50,7 +53,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
             CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%user (
                 id text PRIMARY KEY,
                 email text UNIQUE,
-                display_name text NOT NULL,
+                display_name text,
                 timezone text NOT NULL,
                 created_at timestamptz NOT NULL,
                 updated_at timestamptz NOT NULL,
@@ -73,6 +76,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     private final DataSourceFactory dataSourceFactory;
     private final Provider<SchedulingExecutor> executorProvider;
     private final PersistenceDomainService persistenceDomainService;
+    private final CurrentDateTimeProvider timeProvider;
     private final PersistenceDomainConfig domainConfig;
     private final String selectUserByIdentitySql;
     private final String selectUserByIdSql;
@@ -80,8 +84,10 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     private final String userExistsSql;
     private final String selectIdentityByUserAndProviderSql;
     private final String selectIdentityByProviderUserIdSql;
+    private final String selectActiveIdentityProvidersByUserSql;
     private final String insertUserSql;
     private final String insertIdentitySql;
+    private final String updateIdentitySql;
     private final String updateIdentityDeletedAtSql;
     private final String listIdentitiesSql;
     private final String softDeleteUserSql;
@@ -92,16 +98,18 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     private CloseableDataSource dataSource;
 
     @Inject
-    UserPersistenceImpl(@Dependency DataSourceFactory dataSourceFactory,
-                        @Executor Provider<SchedulingExecutor> executorProvider,
-                        PersistenceDomainService persistenceDomainService,
-                        @SchemaVersion int schemaVersion,
-                        @DomainName String domainName,
-                        @InitStatements List<String> initStatements,
-                        @Migrator PersistenceDomainMigrator migrator) {
-        this.dataSourceFactory = checkNotNull(dataSourceFactory);
-        this.executorProvider = checkNotNull(executorProvider);
-        this.persistenceDomainService = checkNotNull(persistenceDomainService);
+    public UserPersistenceImpl(@Dependency DataSourceFactory dataSourceFactory,
+                               @Executor Provider<SchedulingExecutor> executorProvider,
+                               PersistenceDomainService persistenceDomainService,
+                               CurrentDateTimeProvider timeProvider,
+                               @SchemaVersion int schemaVersion,
+                               @DomainName String domainName,
+                               @InitStatements List<String> initStatements,
+                               @Migrator PersistenceDomainMigrator migrator) {
+        this.dataSourceFactory = checkNotNull(dataSourceFactory, "dataSourceFactory");
+        this.executorProvider = checkNotNull(executorProvider, "executorProvider");
+        this.persistenceDomainService = checkNotNull(persistenceDomainService, "persistenceDomainService");
+        this.timeProvider = checkNotNull(timeProvider, "timeProvider");
         checkArgument(schemaVersion > 0, "schemaVersion must be > 0, was %s", schemaVersion);
         var domain = new PersistenceDomain(checkNotNull(domainName, "domainName"));
         String userTable = domain.prefix() + "user";
@@ -122,9 +130,13 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                 "SELECT provider_user_id, deleted_at FROM " + identityTable + " WHERE user_id=? AND provider=?";
         selectIdentityByProviderUserIdSql =
                 "SELECT user_id FROM " + identityTable + " WHERE provider=? AND provider_user_id=?";
+        selectActiveIdentityProvidersByUserSql =
+                "SELECT provider FROM " + identityTable + " WHERE user_id=? AND deleted_at IS NULL";
         insertUserSql = "INSERT INTO " + userTable + " (id, email, display_name, timezone, created_at, updated_at) VALUES (?,?,?,?,?,?)";
         insertIdentitySql =
                 "INSERT INTO " + identityTable + " (user_id, provider, provider_user_id, created_at, updated_at) VALUES (?,?,?,?,?)";
+        updateIdentitySql =
+                "UPDATE " + identityTable + " SET provider_user_id=?, deleted_at=?, updated_at=? WHERE user_id=? AND provider=?";
         updateIdentityDeletedAtSql =
                 "UPDATE " + identityTable + " SET deleted_at=?, updated_at=? WHERE user_id=? AND provider=?";
         listIdentitiesSql =
@@ -157,9 +169,15 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     @Override
+    public CompletableFuture<Optional<UserProfile>> getByIdentity(UserIdentity identity) {
+        checkNotNull(identity, "identity");
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> Optional.ofNullable(doGetByIdentity(identity))));
+    }
+
+    @Override
     public CompletableFuture<Optional<UserProfile>> getById(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doGetById(userId)));
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> Optional.ofNullable(doGetById(userId))));
     }
 
     @Override
@@ -168,18 +186,19 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     @Override
-    public CompletableFuture<UserProfile> updateProfile(String userId, UserProfileUpdate update) {
+    public CompletableFuture<UserProfile> updateProfile(String userId, UserProfileInput profile) {
         validateUserId(userId);
-        checkNotNull(update, "update");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doUpdateProfile(userId, update)));
+        checkNotNull(profile, "profile");
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doUpdateProfile(userId, profile)));
     }
 
     @Override
-    public CompletableFuture<Void> linkIdentity(String userId, UserIdentity identity) {
+    public CompletableFuture<Void> updateAllIdentities(String userId, List<UserIdentity> identities) {
         validateUserId(userId);
-        checkNotNull(identity, "identity");
+        var identitiesCopy = ImmutableList.copyOf(checkNotNull(identities, "identities"));
+        validateDistinctIdentityProviders(identitiesCopy);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
-            doLinkIdentity(userId, identity);
+            doUpdateAllIdentities(userId, identitiesCopy);
             return null;
         }));
     }
@@ -204,12 +223,12 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
-                    Optional<UserProfile> existing = selectUserByIdentity(connection, identity);
-                    if (existing.isPresent()) {
+                    UserProfile existing = selectUserByIdentity(connection, identity);
+                    if (existing != null) {
                         connection.commit();
-                        return existing.get();
+                        return existing;
                     }
-                    Instant now = Instant.now();
+                    Instant now = timeProvider.currentInstant();
                     String userId = UniqueId.generate('u');
                     insertUser(connection, userId, profile, now);
                     insertIdentity(connection, userId, identity, now);
@@ -228,12 +247,12 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
             throw new RuntimeException("Failed creating user for identity " + identity, e);
         }
 
-        Optional<UserProfile> existing = doGetByIdentity(identity);
-        checkState(existing.isPresent(), "Unable to create user for identity %s due to a uniqueness conflict", identity);
-        return existing.get();
+        UserProfile existing = doGetByIdentity(identity);
+        checkState(existing != null, "Unable to create user for identity %s due to a uniqueness conflict", identity);
+        return existing;
     }
 
-    private Optional<UserProfile> doGetByIdentity(UserIdentity identity) {
+    private @Nullable UserProfile doGetByIdentity(UserIdentity identity) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 return selectUserByIdentity(connection, identity);
@@ -243,7 +262,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private Optional<UserProfile> doGetById(String userId) {
+    private @Nullable UserProfile doGetById(String userId) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 return selectUserById(connection, userId);
@@ -270,23 +289,23 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private UserProfile doUpdateProfile(String userId, UserProfileUpdate update) {
+    private UserProfile doUpdateProfile(String userId, UserProfileInput profile) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
-                    Instant now = Instant.now();
+                    Instant now = timeProvider.currentInstant();
                     doUpdate(connection, updateUserSql, stmt -> {
-                        stmt.setString(1, update.email());
-                        stmt.setString(2, update.displayName());
-                        stmt.setString(3, update.timezone().getId());
+                        stmt.setString(1, profile.email().orElse(null));
+                        stmt.setString(2, profile.displayName().orElse(null));
+                        stmt.setString(3, profile.timezone().getId());
                         stmt.setTimestamp(4, Timestamp.from(now));
                         stmt.setString(5, userId);
                     });
-                    Optional<UserProfile> updated = selectUserById(connection, userId);
-                    checkState(updated.isPresent(), "User %s not found after update", userId);
+                    UserProfile updated = selectUserById(connection, userId);
+                    checkState(updated != null, "User %s not found after update", userId);
                     connection.commit();
-                    return updated.get();
+                    return updated;
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     throw new RuntimeException("Failed to update user " + userId, e);
@@ -299,36 +318,40 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private void doLinkIdentity(String userId, UserIdentity identity) {
+    private void doUpdateAllIdentities(String userId, List<UserIdentity> identities) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
                     checkState(userExists(connection, userId), "User %s not found or deleted", userId);
-                    Instant now = Instant.now();
-                    Optional<IdentityLinkRecord> identityByProvider = selectIdentityByUserAndProvider(connection, userId, identity.provider());
-                    if (identityByProvider.isPresent()) {
-                        IdentityLinkRecord record = identityByProvider.get();
-                        checkState(record.providerUserId().equals(identity.providerUserId()),
-                                   "Provider %s is already linked with a different user id", identity.provider());
-                        if (!record.active()) {
-                            updateIdentityDeletedAt(connection, userId, identity.provider(), null, now);
+                    Instant now = timeProvider.currentInstant();
+                    var identitiesByProvider = new LinkedHashMap<String, UserIdentity>(identities.size());
+                    identities.forEach(identity -> identitiesByProvider.put(identity.provider(), identity));
+                    for (UserIdentity identity : identitiesByProvider.values()) {
+                        String existingUserId = selectIdentityByProviderUserId(connection, identity);
+                        checkState(existingUserId == null || existingUserId.equals(userId), "%s already linked to another user", identity);
+                        IdentityLinkRecord identityByProvider = selectIdentityByUserAndProvider(connection, userId, identity.provider());
+                        if (identityByProvider == null) {
+                            insertIdentity(connection, userId, identity, now);
+                        } else if (!identityByProvider.providerUserId().equals(identity.providerUserId()) || !identityByProvider.active()) {
+                            updateIdentity(connection, userId, identity, now);
                         }
-                    } else {
-                        Optional<String> existing = selectIdentityByProviderUserId(connection, identity);
-                        checkState(existing.isEmpty(), "Identity %s already linked to another user", identity);
-                        insertIdentity(connection, userId, identity, now);
+                    }
+                    for (String existingProvider : selectActiveIdentityProvidersByUser(connection, userId)) {
+                        if (!identitiesByProvider.containsKey(existingProvider)) {
+                            updateIdentityDeletedAt(connection, userId, existingProvider, now, now);
+                        }
                     }
                     connection.commit();
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
-                    throw new RuntimeException("Failed to link identity " + identity + " to user " + userId, e);
+                    throw new RuntimeException("Failed to update identities of user " + userId, e);
                 } finally {
                     resetAutoCommit(connection);
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to link identity " + identity + " to user " + userId, e);
+            throw new RuntimeException("Failed to update identities of user " + userId, e);
         }
     }
 
@@ -355,7 +378,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
-                    Instant now = Instant.now();
+                    Instant now = timeProvider.currentInstant();
                     int rows = doUpdate(connection,
                                         softDeleteUserSql,
                                         -1,
@@ -386,21 +409,21 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private Optional<UserProfile> selectUserByIdentity(Connection connection, UserIdentity identity) throws SQLException {
+    private @Nullable UserProfile selectUserByIdentity(Connection connection, UserIdentity identity) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(selectUserByIdentitySql)) {
             stmt.setString(1, identity.provider());
             stmt.setString(2, identity.providerUserId());
             try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? Optional.of(mapUserProfile(rs)) : Optional.empty();
+                return rs.next() ? mapUserProfile(rs) : null;
             }
         }
     }
 
-    private Optional<UserProfile> selectUserById(Connection connection, String userId) throws SQLException {
+    private @Nullable UserProfile selectUserById(Connection connection, String userId) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(selectUserByIdSql)) {
             stmt.setString(1, userId);
             try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? Optional.of(mapUserProfile(rs)) : Optional.empty();
+                return rs.next() ? mapUserProfile(rs) : null;
             }
         }
     }
@@ -414,7 +437,7 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         }
     }
 
-    private Optional<IdentityLinkRecord> selectIdentityByUserAndProvider(Connection connection,
+    private @Nullable IdentityLinkRecord selectIdentityByUserAndProvider(Connection connection,
                                                                          String userId,
                                                                          String provider) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(selectIdentityByUserAndProviderSql)) {
@@ -422,23 +445,48 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
             stmt.setString(2, provider);
             try (ResultSet rs = stmt.executeQuery()) {
                 if (!rs.next()) {
-                    return Optional.empty();
+                    return null;
                 }
                 String providerUserId = rs.getString(1);
                 Timestamp deletedAt = rs.getTimestamp(2);
-                return Optional.of(new IdentityLinkRecord(provider, providerUserId, deletedAt == null));
+                return new IdentityLinkRecord(providerUserId, deletedAt == null);
             }
         }
     }
 
-    private Optional<String> selectIdentityByProviderUserId(Connection connection, UserIdentity identity) throws SQLException {
+    private @Nullable String selectIdentityByProviderUserId(Connection connection, UserIdentity identity) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(selectIdentityByProviderUserIdSql)) {
             stmt.setString(1, identity.provider());
             stmt.setString(2, identity.providerUserId());
             try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
+                return rs.next() ? rs.getString(1) : null;
             }
         }
+    }
+
+    private List<String> selectActiveIdentityProvidersByUser(Connection connection, String userId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(selectActiveIdentityProvidersByUserSql)) {
+            stmt.setString(1, userId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                var result = new ArrayList<String>(4);
+                while (rs.next()) {
+                    result.add(rs.getString(1));
+                }
+                return result;
+            }
+        }
+    }
+
+    private void updateIdentity(Connection connection, String userId, UserIdentity identity, Instant updatedAt) throws SQLException {
+        doUpdate(connection,
+                 updateIdentitySql,
+                 stmt -> {
+                     stmt.setString(1, identity.providerUserId());
+                     stmt.setTimestamp(2, null);
+                     stmt.setTimestamp(3, Timestamp.from(updatedAt));
+                     stmt.setString(4, userId);
+                     stmt.setString(5, identity.provider());
+                 });
     }
 
     private void updateIdentityDeletedAt(Connection connection,
@@ -462,8 +510,8 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
                  insertUserSql,
                  stmt -> {
                      stmt.setString(1, userId);
-                     stmt.setString(2, profile.email());
-                     stmt.setString(3, profile.displayName());
+                     stmt.setString(2, profile.email().orElse(null));
+                     stmt.setString(3, profile.displayName().orElse(null));
                      stmt.setString(4, profile.timezone().getId());
                      stmt.setTimestamp(5, Timestamp.from(now));
                      stmt.setTimestamp(6, Timestamp.from(now));
@@ -483,14 +531,14 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     private static UserProfile mapUserProfile(ResultSet rs) throws SQLException {
-        String id = checkNotNull(rs.getString("id"), "id");
+        String id = rs.getString("id");
         String email = rs.getString("email");
-        String displayName = checkNotNull(rs.getString("display_name"), "display_name");
-        String timezoneId = checkNotNull(rs.getString("timezone"), "timezone");
+        String displayName = rs.getString("display_name");
+        String timezoneId = rs.getString("timezone");
         ZoneId timezone = ZoneId.of(timezoneId);
         Instant createdAt = rs.getTimestamp("created_at").toInstant();
         Instant updatedAt = rs.getTimestamp("updated_at").toInstant();
-        return new UserProfile(id, email, displayName, timezone, createdAt, updatedAt);
+        return new UserProfile(id, Optional.ofNullable(email), Optional.ofNullable(displayName), timezone, createdAt, updatedAt);
     }
 
     private static UserIdentityRecord mapIdentityRecord(ResultSet rs) throws SQLException {
@@ -502,19 +550,30 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
     }
 
     private static List<String> mergeInitStatements(List<String> baseStatements, List<String> extraStatements) {
-        checkNotNull(baseStatements, "baseStatements");
-        checkNotNull(extraStatements, "extraStatements");
         if (extraStatements.isEmpty()) {
             return baseStatements;
         }
         var merged = new ArrayList<String>(baseStatements.size() + extraStatements.size());
         merged.addAll(baseStatements);
         merged.addAll(extraStatements);
-        return List.copyOf(merged);
+        return ImmutableList.copyOf(merged);
     }
 
     private static boolean isUniqueViolation(SQLException exception) {
         return UNIQUE_VIOLATION_SQL_STATE.equals(exception.getSQLState());
+    }
+
+    private static void validateDistinctIdentityProviders(List<UserIdentity> identities) {
+        var identitiesByProvider = new LinkedHashMap<String, UserIdentity>(identities.size());
+        for (UserIdentity identity : identities) {
+            checkNotNull(identity, "identity");
+            UserIdentity previousIdentity = identitiesByProvider.putIfAbsent(identity.provider(), identity);
+            checkArgument(previousIdentity == null,
+                          "Duplicate identity provider %s in %s and %s",
+                          identity.provider(),
+                          previousIdentity,
+                          identity);
+        }
     }
 
     private static void validateUserId(String userId) {
@@ -561,14 +620,6 @@ final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPe
         void accept(T target) throws SQLException;
     }
 
-    private record IdentityLinkRecord(String provider, String providerUserId, boolean active) {
-        private IdentityLinkRecord {
-            checkNotNull(provider, "provider");
-            checkNotNull(providerUserId, "providerUserId");
-            // TODO: provider blank cannot be produced via public API; add coverage if DB corruption handling is required.
-            checkArgument(!provider.isBlank(), "provider must not be blank");
-            // TODO: providerUserId blank is only reachable with DB corruption; keep coverage if corruption handling becomes a requirement.
-            checkArgument(!providerUserId.isBlank(), "providerUserId must not be blank");
-        }
+    private record IdentityLinkRecord(String providerUserId, boolean active) {
     }
 }

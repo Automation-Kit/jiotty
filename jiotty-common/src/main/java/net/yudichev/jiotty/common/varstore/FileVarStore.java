@@ -27,23 +27,23 @@ import static java.nio.file.Files.readAllBytes;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static net.yudichev.jiotty.common.lang.Locks.inLock;
 
-public final class VarStoreImpl implements VarStore {
-    private static final Logger logger = LoggerFactory.getLogger(VarStoreImpl.class);
-
+abstract class FileVarStore implements VarStore {
     private static final ObjectMapper mapper = new ObjectMapper()
             .registerModule(new Jdk8Module())
             .registerModule(new JavaTimeModule())
             .registerModule(new GuavaModule())
             .enable(SerializationFeature.INDENT_OUTPUT);
 
-    private final Path storeFile;
-    private final Lock lock = new ReentrantLock();
-    private final Path storeFileTmp;
+    protected final Logger logger = LoggerFactory.getLogger(getClass());
 
-    public VarStoreImpl(Path storeFile) {
-        this.storeFile = checkNotNull(storeFile);
+    private final Path storeFile;
+    private final Path storeFileTmp;
+    private final Lock lock = new ReentrantLock();
+
+    FileVarStore(Path storeFile) {
+        this.storeFile = checkNotNull(storeFile, "storeFile");
+        logger.info("Using store file {}", this.storeFile.toAbsolutePath());
         storeFileTmp = this.storeFile.resolveSibling("data.tmp");
-        logger.info("Using store file {}", storeFile.toAbsolutePath());
     }
 
     @Override

@@ -59,7 +59,7 @@ class ObservableValueTest {
             verify(consumer2).accept(val);
 
             if (value instanceof SimpleObservableValue) {
-                // subsribe when notifications are suppressed
+                // subscribe when notifications are suppressed
                 value.setNotificationsSuppressed(true);
                 value.accept(++val);
                 sub1 = value.subscribe(consumer1);

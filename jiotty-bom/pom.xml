@@ -7,7 +7,7 @@
     <parent>
         <groupId>net.yudichev.jiotty</groupId>
         <artifactId>jiotty</artifactId>
-        <version>3.3.0-SNAPSHOT</version>
+        <version>3.4.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>jiotty-bom</artifactId>
@@ -17,6 +17,7 @@
         <org.slf4j.version>1.7.36</org.slf4j.version> <!-- 2.0 is not compatible with log4j binding; TODO: remove slf4j layer completely -->
         <com.google.maps.version>1.65.0</com.google.maps.version>
         <com.google.http-client.version>2.0.2</com.google.http-client.version>
+        <com.google.firebase.version>9.8.0</com.google.firebase.version>
     </properties>
     <packaging>pom</packaging>
 
@@ -43,6 +44,18 @@
                 <groupId>${project.groupId}</groupId>
                 <artifactId>jiotty-connector-aws</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>jiotty-connector-firebase</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>jiotty-connector-firebase</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>${project.groupId}</groupId>
@@ -220,6 +233,13 @@
             </dependency>
             <dependency>
                 <groupId>${project.groupId}</groupId>
+                <artifactId>jiotty-user</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
                 <artifactId>jiotty-world</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -255,6 +275,11 @@
                 <version>7.0.0</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.google.firebase</groupId>
+                <artifactId>firebase-admin</artifactId>
+                <version>${com.google.firebase.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.google.maps</groupId>

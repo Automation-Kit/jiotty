@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.recording;
 
+import com.google.common.collect.ImmutableList;
 import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.ThrowingFunction;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
@@ -78,7 +79,7 @@ public interface PostgresqlDestination extends Destination {
             checkNotNull(typeId, "typeId");
             checkArgument(!typeId.isBlank(), "typeId must not be blank");
             checkNotNull(domainConfig, "domainConfig");
-            columns = List.copyOf(checkNotNull(columns, "columns"));
+            columns = ImmutableList.copyOf(checkNotNull(columns, "columns"));
         }
 
         public PsqlConfig(Class<R> recordType,

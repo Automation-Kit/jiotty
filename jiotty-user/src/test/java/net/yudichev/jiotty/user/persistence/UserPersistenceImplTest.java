@@ -4,6 +4,7 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.time.TimeProvider;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
@@ -17,17 +18,15 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Timestamp;
-import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Optional.of;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,10 +36,9 @@ class UserPersistenceImplTest {
     private static final String EXTRA_INIT_STATEMENT = "CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%extra (id integer);";
     private static final String DROP_IDENTITY_TABLE_SQL = "DROP TABLE %DOMAIN_PREFIX%identity";
     private static final String DROP_USER_TABLE_SQL = "DROP TABLE %DOMAIN_PREFIX%user CASCADE";
-    private static final String MARK_IDENTITY_DELETED_SQL =
-            "UPDATE %DOMAIN_PREFIX%identity SET deleted_at=?, updated_at=? WHERE user_id=? AND provider=?";
-    private static final String UPDATE_IDENTITY_PROVIDER_USER_ID_SQL =
-            "UPDATE %DOMAIN_PREFIX%identity SET provider_user_id=?, updated_at=? WHERE user_id=? AND provider=?";
+    private static final ZoneId UTC = ZoneId.of("UTC");
+    private static final ZoneId EUROPE_LONDON = ZoneId.of("Europe/London");
+
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
     private DataSource dataSource;
@@ -64,18 +62,7 @@ class UserPersistenceImplTest {
 
     @AfterEach
     void tearDown() {
-        Closeable.closeIfNotNull(
-                () -> {
-                    if (userPersistence != null) {
-                        userPersistence.stop();
-                    }
-                },
-                () -> {
-                    if (domainService != null) {
-                        domainService.stop();
-                    }
-                },
-                executor);
+        Closeable.closeIfNotNull(userPersistence == null ? null : userPersistence::stop, domainService == null ? null : domainService::stop, executor);
     }
 
     @Test
@@ -83,6 +70,7 @@ class UserPersistenceImplTest {
         assertThatThrownBy(() -> new UserPersistenceImpl(dataSourceFactory,
                                                          executorProvider,
                                                          domainService,
+                                                         new TimeProvider(),
                                                          0,
                                                          domain.name(),
                                                          List.of(),
@@ -93,14 +81,14 @@ class UserPersistenceImplTest {
     @Test
     void createsUpdatesAndListsIdentities() throws Exception {
         startUserPersistence(dataSourceFactory, List.of(EXTRA_INIT_STATEMENT));
-        var identity = new UserPersistence.UserIdentity("firebase", "uid-1");
-        var profileInput = new UserPersistence.UserProfileInput("user@example.com", "Alex", ZoneId.of("UTC"));
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
         var created = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
 
         assertThat(created.id()).startsWith("u");
-        assertThat(created.email()).isEqualTo("user@example.com");
-        assertThat(created.displayName()).isEqualTo("Alex");
-        assertThat(created.timezone()).isEqualTo(ZoneId.of("UTC"));
+        assertThat(created.email()).contains("user@example.com");
+        assertThat(created.displayName()).contains("Alex");
+        assertThat(created.timezone()).isEqualTo(UTC);
 
         var fetched = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
         assertThat(fetched.id()).isEqualTo(created.id());
@@ -109,31 +97,33 @@ class UserPersistenceImplTest {
         assertThat(identities).hasSize(1);
         assertThat(identities.getFirst().identity()).isEqualTo(identity);
 
-        var googleIdentity = new UserPersistence.UserIdentity("google.com", "google-uid");
-        userPersistence.linkIdentity(created.id(), googleIdentity).get(5, SECONDS);
-        userPersistence.linkIdentity(created.id(), googleIdentity).get(5, SECONDS);
+        var googleIdentity = new UserIdentity("google.com", "google-uid");
+        userPersistence.updateAllIdentities(created.id(), List.of(identity, googleIdentity)).get(5, SECONDS);
+        userPersistence.updateAllIdentities(created.id(), List.of(identity, googleIdentity)).get(5, SECONDS);
 
-        markIdentityDeleted(dataSource, domain, created.id(), googleIdentity.provider(), Instant.now());
+        userPersistence.updateAllIdentities(created.id(), List.of(identity)).get(5, SECONDS);
         var deletedIdentities = userPersistence.listIdentities(created.id()).get(5, SECONDS);
         assertThat(deletedIdentities).hasSize(1);
+        assertThat(userPersistence.getByIdentity(googleIdentity).get(5, SECONDS)).isEmpty();
 
-        userPersistence.linkIdentity(created.id(), googleIdentity).get(5, SECONDS);
+        userPersistence.updateAllIdentities(created.id(), List.of(identity, googleIdentity)).get(5, SECONDS);
         var linked = userPersistence.listIdentities(created.id()).get(5, SECONDS);
         assertThat(linked).hasSize(2);
+        assertThat(userPersistence.getByIdentity(googleIdentity).get(5, SECONDS)).contains(created);
 
-        var duplicateIdentity = new UserPersistence.UserIdentity("apple.com", "apple-uid");
-        var duplicateProfile = new UserPersistence.UserProfileInput("user@example.com", "Duplicate", ZoneId.of("UTC"));
+        var duplicateIdentity = new UserIdentity("apple.com", "apple-uid");
+        var duplicateProfile = createProfileInput("user@example.com", "Duplicate", UTC);
         assertThatThrownBy(() -> userPersistence.getOrCreateByIdentity(duplicateIdentity, duplicateProfile).get(5, SECONDS))
                 .hasRootCauseInstanceOf(IllegalStateException.class);
 
-        var update = new UserPersistence.UserProfileUpdate("new@example.com", "Alexey", ZoneId.of("Europe/London"));
+        var update = createProfileInput("new@example.com", "Alexey", EUROPE_LONDON);
         var updated = userPersistence.updateProfile(created.id(), update).get(5, SECONDS);
-        assertThat(updated.email()).isEqualTo("new@example.com");
-        assertThat(updated.displayName()).isEqualTo("Alexey");
-        assertThat(updated.timezone()).isEqualTo(ZoneId.of("Europe/London"));
+        assertThat(updated.email()).contains("new@example.com");
+        assertThat(updated.displayName()).contains("Alexey");
+        assertThat(updated.timezone()).isEqualTo(EUROPE_LONDON);
 
         userPersistence.softDelete(created.id()).get(5, SECONDS);
-        Optional<UserPersistence.UserProfile> deleted = userPersistence.getById(created.id()).get(5, SECONDS);
+        Optional<UserProfile> deleted = userPersistence.getById(created.id()).get(5, SECONDS);
         assertThat(deleted).isEmpty();
 
         assertThatThrownBy(() -> userPersistence.updateProfile(created.id(), update).get(5, SECONDS))
@@ -147,8 +137,8 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of());
         dropUserTable(dataSource, domain);
 
-        var identity = new UserPersistence.UserIdentity("firebase", "uid-1");
-        var profileInput = new UserPersistence.UserProfileInput("user@example.com", "Alex", ZoneId.of("UTC"));
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
         assertThatThrownBy(() -> userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS))
                 .hasCauseInstanceOf(RuntimeException.class)
                 .hasRootCauseInstanceOf(SQLException.class);
@@ -161,37 +151,44 @@ class UserPersistenceImplTest {
         startUserPersistence(failingFactory, List.of());
         toggleableDataSource.setFailConnections(true);
 
-        var identity = new UserPersistence.UserIdentity("firebase", "uid-1");
-        var profileInput = new UserPersistence.UserProfileInput("user@example.com", "Alex", ZoneId.of("UTC"));
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
         assertThatThrownBy(() -> userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS))
                 .hasCauseInstanceOf(RuntimeException.class)
                 .hasRootCauseInstanceOf(SQLException.class);
     }
 
     @Test
-    void failsOnCorruptIdentityProviderUserId() throws Exception {
+    void updatesProviderUserIdForExistingProvider() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
-        var identity = new UserPersistence.UserIdentity("firebase", "uid-1");
-        var profileInput = new UserPersistence.UserProfileInput("user@example.com", "Alex", ZoneId.of("UTC"));
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
         var created = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
+        var oldGoogleIdentity = new UserIdentity("google.com", "google-uid-1");
+        var newGoogleIdentity = new UserIdentity("google.com", "google-uid-2");
 
-        setIdentityProviderUserId(dataSource, domain, created.id(), identity.provider(), "");
+        userPersistence.updateAllIdentities(created.id(), List.of(identity, oldGoogleIdentity)).get(5, SECONDS);
+        userPersistence.updateAllIdentities(created.id(), List.of(identity, newGoogleIdentity)).get(5, SECONDS);
 
-        assertThatThrownBy(() -> userPersistence.linkIdentity(created.id(), identity).get(5, SECONDS))
-                .hasRootCauseInstanceOf(IllegalArgumentException.class);
+        var identities = userPersistence.listIdentities(created.id()).get(5, SECONDS);
+        assertThat(identities).hasSize(2);
+        assertThat(identities).extracting(UserIdentityRecord::identity).contains(identity, newGoogleIdentity);
+        assertThat(identities).extracting(UserIdentityRecord::identity).doesNotContain(oldGoogleIdentity);
+        assertThat(userPersistence.getByIdentity(oldGoogleIdentity).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.getByIdentity(newGoogleIdentity).get(5, SECONDS)).contains(created);
     }
 
     @Test
-    void failsOnLinkIdentityWhenIdentityTableMissing() throws Exception {
+    void failsOnUpdateAllIdentitiesWhenIdentityTableMissing() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
-        var identity = new UserPersistence.UserIdentity("firebase", "uid-1");
-        var profileInput = new UserPersistence.UserProfileInput("user@example.com", "Alex", ZoneId.of("UTC"));
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
         var created = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
 
         dropIdentityTable(dataSource, domain);
 
-        var otherIdentity = new UserPersistence.UserIdentity("google.com", "uid-2");
-        assertThatThrownBy(() -> userPersistence.linkIdentity(created.id(), otherIdentity).get(5, SECONDS))
+        var otherIdentity = new UserIdentity("google.com", "uid-2");
+        assertThatThrownBy(() -> userPersistence.updateAllIdentities(created.id(), List.of(identity, otherIdentity)).get(5, SECONDS))
                 .hasCauseInstanceOf(RuntimeException.class)
                 .hasRootCauseInstanceOf(SQLException.class);
     }
@@ -199,17 +196,17 @@ class UserPersistenceImplTest {
     @Test
     void listsAllProfilesExcludingDeleted() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
-        var identity1 = new UserPersistence.UserIdentity("firebase", "uid-1");
-        var profile1 = new UserPersistence.UserProfileInput("user1@example.com", "User One", ZoneId.of("UTC"));
+        var identity1 = new UserIdentity("firebase", "uid-1");
+        var profile1 = createProfileInput("user1@example.com", "User One", UTC);
         var user1 = userPersistence.getOrCreateByIdentity(identity1, profile1).get(5, SECONDS);
 
-        var identity2 = new UserPersistence.UserIdentity("google.com", "uid-2");
-        var profile2 = new UserPersistence.UserProfileInput("user2@example.com", "User Two", ZoneId.of("UTC"));
+        var identity2 = new UserIdentity("google.com", "uid-2");
+        var profile2 = createProfileInput("user2@example.com", "User Two", UTC);
         var user2 = userPersistence.getOrCreateByIdentity(identity2, profile2).get(5, SECONDS);
 
         var profiles = userPersistence.listAllProfiles().get(5, SECONDS);
         assertThat(profiles).hasSize(2);
-        assertThat(profiles).extracting(UserPersistence.UserProfile::id).contains(user1.id(), user2.id());
+        assertThat(profiles).extracting(UserProfile::id).contains(user1.id(), user2.id());
 
         userPersistence.softDelete(user1.id()).get(5, SECONDS);
         var remaining = userPersistence.listAllProfiles().get(5, SECONDS);
@@ -218,17 +215,31 @@ class UserPersistenceImplTest {
     }
 
     @Test
-    void rejectsLinkingIdentityToAnotherUser() throws Exception {
+    void getsByIdentityExcludingDeletedUsers() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
-        var identity = new UserPersistence.UserIdentity("firebase", "uid-1");
-        var profileInput = new UserPersistence.UserProfileInput("user@example.com", "Alex", ZoneId.of("UTC"));
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
+        var created = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
+
+        assertThat(userPersistence.getByIdentity(identity).get(5, SECONDS)).contains(created);
+
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+
+        assertThat(userPersistence.getByIdentity(identity).get(5, SECONDS)).isEmpty();
+    }
+
+    @Test
+    void rejectsUpdatingIdentityToAnotherUser() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
         userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
 
-        var otherIdentity = new UserPersistence.UserIdentity("google.com", "uid-2");
-        var otherProfile = new UserPersistence.UserProfileInput("other@example.com", "Morgan", ZoneId.of("UTC"));
+        var otherIdentity = new UserIdentity("google.com", "uid-2");
+        var otherProfile = createProfileInput("other@example.com", "Morgan", UTC);
         var user2 = userPersistence.getOrCreateByIdentity(otherIdentity, otherProfile).get(5, SECONDS);
 
-        assertThatThrownBy(() -> userPersistence.linkIdentity(user2.id(), identity).get(5, SECONDS))
+        assertThatThrownBy(() -> userPersistence.updateAllIdentities(user2.id(), List.of(otherIdentity, identity)).get(5, SECONDS))
                 .hasRootCauseInstanceOf(IllegalStateException.class);
     }
 
@@ -236,6 +247,7 @@ class UserPersistenceImplTest {
         userPersistence = new UserPersistenceImpl(factory,
                                                   executorProvider,
                                                   domainService,
+                                                  new TimeProvider(),
                                                   1,
                                                   domain.name(),
                                                   initStatements,
@@ -243,36 +255,8 @@ class UserPersistenceImplTest {
         userPersistence.start();
     }
 
-    private static void markIdentityDeleted(DataSource dataSource,
-                                            PersistenceDomain domain,
-                                            String userId,
-                                            String provider,
-                                            Instant timestamp) throws SQLException {
-        var sql = expandSql(MARK_IDENTITY_DELETED_SQL, domain);
-        try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setTimestamp(1, Timestamp.from(timestamp));
-            statement.setTimestamp(2, Timestamp.from(timestamp));
-            statement.setString(3, userId);
-            statement.setString(4, provider);
-            statement.executeUpdate();
-        }
-    }
-
-    private static void setIdentityProviderUserId(DataSource dataSource,
-                                                  PersistenceDomain domain,
-                                                  String userId,
-                                                  String provider,
-                                                  String providerUserId) throws SQLException {
-        var sql = expandSql(UPDATE_IDENTITY_PROVIDER_USER_ID_SQL, domain);
-        try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, providerUserId);
-            statement.setTimestamp(2, Timestamp.from(Instant.now()));
-            statement.setString(3, userId);
-            statement.setString(4, provider);
-            statement.executeUpdate();
-        }
+    private static UserProfileInput createProfileInput(String email, String displayName, ZoneId timezone) {
+        return new UserProfileInput(of(email), of(displayName), timezone);
     }
 
     private static void dropIdentityTable(DataSource dataSource, PersistenceDomain domain) throws SQLException {

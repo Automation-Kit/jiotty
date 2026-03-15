@@ -20,7 +20,7 @@ public interface Displayable {
         return false;
     }
 
-    /// @return `true` if needs to be displayed as a tab in the UI
+    /// @return `true` if this displayable needs to be displayed as a tab in the UI
     default boolean visible() {
         return false;
     }
