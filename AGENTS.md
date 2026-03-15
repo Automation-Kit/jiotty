@@ -50,6 +50,8 @@
   declared after the `set` setters.
 - For Guice module builders, all builder parameters must be `BindingSpec`s rather than plain values, including primitives and `String`s; call sites should use
   `literally(...)` when they want to pass a fixed value.
+- All Guice module parameters must be supplied through a nested `Builder` class, not through public constructors or factory methods on the module itself. A
+  no-arg public constructor is allowed only when the module has no parameters at all.
 - Only add documentation comments when they convey non-obvious information (contracts, invariants, side effects, performance). Do not add documentation that
   restates the signature; omit it even for public API.
 - Services that compute something, use I/O or otherwise perform long-running tasks must use the async interface by returning a `CompletableFuture`.

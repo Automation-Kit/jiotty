@@ -6,4 +6,6 @@ public interface RestServer {
     void post(String url, Handler handler);
 
     void get(String path, Handler handler);
+
+    int port();
 }

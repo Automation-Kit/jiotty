@@ -13,16 +13,16 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import org.eclipse.jetty.ee10.servlet.DefaultServlet;
+import org.eclipse.jetty.ee10.servlet.FilterHolder;
+import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee10.servlet.ServletHolder;
+import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.handler.DefaultHandler;
-import org.eclipse.jetty.server.handler.HandlerList;
-import org.eclipse.jetty.servlet.DefaultServlet;
-import org.eclipse.jetty.servlet.FilterHolder;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,7 +66,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent {
         var servletContextHandler = new ServletContextHandler();
         servletContextHandler.setContextPath(AuthenticatedHttpServerModule.PATH_ROOT);
         String styleCssPath = requireNonNull(getClass().getResource("/uiserver/wwwroot/style.css")).toString();
-        servletContextHandler.setResourceBase(styleCssPath.substring(0, styleCssPath.lastIndexOf('/')));
+        servletContextHandler.setBaseResourceAsString(styleCssPath.substring(0, styleCssPath.lastIndexOf('/')));
 
         var requestContextFilter = new FilterHolder(new RequestContextFilter());
         requestContextFilter.setAsyncSupported(true);
@@ -80,7 +80,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent {
         resourceServletHolder.setInitParameter("dirAllowed", "false");
         servletContextHandler.addServlet(resourceServletHolder, "/");
 
-        server.setHandler(new HandlerList(servletContextHandler, new DefaultHandler()));
+        server.setHandler(new Handler.Sequence(servletContextHandler, new DefaultHandler()));
     }
 
     @Override

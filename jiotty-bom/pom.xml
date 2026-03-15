@@ -342,6 +342,7 @@
             <dependency>
                 <groupId>io.javalin</groupId>
                 <artifactId>javalin</artifactId>
+                <!-- also need to upgrade the version of jetty-bom to the one that is compatible with javalin -->
                 <version>7.1.0</version>
             </dependency>
             <dependency>
@@ -376,6 +377,11 @@
                 <version>5.0.2</version>
             </dependency>
             <dependency>
+                <groupId>org.eclipse.jetty.ee10</groupId>
+                <artifactId>jetty-ee10-servlet</artifactId>
+                <version>12.1.6</version>
+            </dependency>
+            <dependency>
                 <groupId>org.immutables</groupId>
                 <artifactId>value</artifactId>
                 <version>${org.immutables.version}</version>
@@ -407,7 +413,7 @@
                 <groupId>org.eclipse.jetty</groupId>
                 <artifactId>jetty-bom</artifactId>
                 <!-- WARNING: do not upgrade to a new major ver without ensuring javalin supports it -->
-                <version>11.0.26</version>
+                <version>12.1.6</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
