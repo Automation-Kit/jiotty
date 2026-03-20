@@ -14,7 +14,7 @@ public final class RoutesServiceModule extends BaseLifecycleComponentModule impl
     private final BindingSpec<String> apiKeySpec;
     private final Key<RoutesService> exposedKey;
 
-    public RoutesServiceModule(SpecifiedAnnotation specifiedAnnotation, BindingSpec<String> apiKeySpec) {
+    private RoutesServiceModule(SpecifiedAnnotation specifiedAnnotation, BindingSpec<String> apiKeySpec) {
         this.apiKeySpec = checkNotNull(apiKeySpec);
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }

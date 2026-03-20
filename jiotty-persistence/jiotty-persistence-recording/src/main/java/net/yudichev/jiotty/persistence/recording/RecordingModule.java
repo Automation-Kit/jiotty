@@ -1,12 +1,15 @@
 package net.yudichev.jiotty.persistence.recording;
 
 import com.google.inject.BindingAnnotation;
+import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import com.google.inject.assistedinject.FactoryModuleBuilder;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.HasWithAnnotation;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainModule;
@@ -28,11 +31,21 @@ public final class RecordingModule extends BaseLifecycleComponentModule implemen
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
     private final BindingSpec<Optional<String>> userIdSpec;
     private final boolean readOnly;
+    private final Key<RecordingService> exposedKey;
 
-    private RecordingModule(BindingSpec<DataSourceFactory> dataSourceFactorySpec, BindingSpec<Optional<String>> userIdSpec, boolean readOnly) {
+    private RecordingModule(BindingSpec<DataSourceFactory> dataSourceFactorySpec,
+                            BindingSpec<Optional<String>> userIdSpec,
+                            SpecifiedAnnotation specifiedAnnotation,
+                            boolean readOnly) {
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
         this.userIdSpec = checkNotNull(userIdSpec);
         this.readOnly = readOnly;
+        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+    }
+
+    @Override
+    public Key<RecordingService> getExposedKey() {
+        return exposedKey;
     }
 
     public static Builder builder() {
@@ -65,10 +78,11 @@ public final class RecordingModule extends BaseLifecycleComponentModule implemen
         expose(getExposedKey());
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<RecordingService>> {
+    public static final class Builder implements TypedBuilder<ExposedKeyModule<RecordingService>>, HasWithAnnotation {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec = boundTo(DataSourceFactory.class);
         private BindingSpec<Optional<String>> userIdSpec = literally(Optional.empty());
         private boolean readOnly;
+        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
 
         public Builder withDataSourceFactory(BindingSpec<DataSourceFactory> dataSourceFactorySpec) {
             this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
@@ -86,8 +100,14 @@ public final class RecordingModule extends BaseLifecycleComponentModule implemen
         }
 
         @Override
+        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
+            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
+            return this;
+        }
+
+        @Override
         public ExposedKeyModule<RecordingService> build() {
-            return new RecordingModule(dataSourceFactorySpec, userIdSpec, readOnly);
+            return new RecordingModule(dataSourceFactorySpec, userIdSpec, specifiedAnnotation, readOnly);
         }
     }
 
@@ -95,13 +115,11 @@ public final class RecordingModule extends BaseLifecycleComponentModule implemen
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface PsqlExecutor {
-
     }
 
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface Dependency {
-
     }
 }
