@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.recording;
 
+import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -25,6 +26,7 @@ import java.time.ZoneOffset;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.TimeZone;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
@@ -43,16 +45,18 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     private final Calendar calendar;
     private final DataSourceFactory dataSourceFactory;
     private final PersistenceDomainService persistenceDomainService;
-
+    private final @Nullable String userId;
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
 
     @Inject
     public PostgresqlDestinationImpl(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,
                                      @Dependency DataSourceFactory dataSourceFactory,
+                                     @Dependency Optional<String> userId,
                                      PersistenceDomainService persistenceDomainService) {
         this.executorProvider = checkNotNull(executorProvider);
         this.dataSourceFactory = checkNotNull(dataSourceFactory);
+        this.userId = userId.orElse(null);
         this.persistenceDomainService = checkNotNull(persistenceDomainService);
         calendar = Calendar.getInstance();
         calendar.setTimeZone(TimeZone.getTimeZone(ZoneOffset.UTC));
@@ -89,6 +93,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     @SuppressWarnings("LoggingSimilarMessage")
     private static class SqlBase<R> {
         protected static final String TIMESTAMP_COL_NAME = "timestamp";
+        protected static final String USER_ID_COL_NAME = "user_id";
         protected final PsqlConfig<R> config;
         protected final String typeName;
         protected final String tableName;
@@ -133,15 +138,15 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
 
         public RecorderImpl(PsqlConfig<R> config) {
             super(config);
-            String columnNames = TIMESTAMP_COL_NAME + ", " + this.config.columns().stream().map(Column::name).collect(joining(", "));
+            String columnNames = USER_ID_COL_NAME + ", " + TIMESTAMP_COL_NAME + ", " + this.config.columns().stream().map(Column::name).collect(joining(", "));
             String insertPlaceholders = this.config.columns().stream().map(Column::valuePlaceholder).collect(joining(", "));
             String columnsWithTypes = this.config.columns()
                                                  .stream()
                                                  .map(column -> column.name() + ' ' + column.sqlType() + (column.nullable() ? "" : " NOT NULL"))
                                                  .collect(joining(", "));
             creatTableSql = "CREATE TABLE IF NOT EXISTS " + tableName +
-                            " (id serial, " + TIMESTAMP_COL_NAME + " timestamptz, " + columnsWithTypes + ");";
-            insertSql = "INSERT INTO " + tableName + " (" + columnNames + ") VALUES (?, " + insertPlaceholders + ");";
+                            " (id serial, " + USER_ID_COL_NAME + " text, " + TIMESTAMP_COL_NAME + " timestamptz, " + columnsWithTypes + ");";
+            insertSql = "INSERT INTO " + tableName + " (" + columnNames + ") VALUES (?, ?, " + insertPlaceholders + ");";
         }
 
         public void initialise() {
@@ -196,10 +201,12 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                     try (var connection = dataSource.getConnection()) {
                         doUpdate(connection, insertSql, 1,
                                  stmt -> {
-                                     stmt.setTimestamp(1, Timestamp.from(timestamp), calendar);
+                                     int colIdx = 1;
+                                     stmt.setString(colIdx++, userId);
+                                     stmt.setTimestamp(colIdx++, Timestamp.from(timestamp), calendar);
                                      for (int i = 0; i < config.columns().size(); i++) {
                                          Column<R, ?> col = config.columns().get(i);
-                                         col.stmtColValueSetter().set(new InsertStmtColValueSetter.Input<>(recordable, calendar, connection, stmt, i + 2));
+                                         col.stmtColValueSetter().set(new InsertStmtColValueSetter.Input<>(recordable, calendar, connection, stmt, colIdx++));
                                      }
                                  });
                         lastRecorded = recordable;
@@ -227,6 +234,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
 
     private class ReaderImpl<R> extends SqlBase<R> implements Reader {
         protected static final Pattern TIMESTAMP_PATTERN = Pattern.compile("%TIMESTAMP%");
+        protected static final Pattern USER_ID_CONDITION_PATTERN = Pattern.compile("%USER_CONDITION%");
 
         public ReaderImpl(PsqlConfig<R> config) {
             super(config);
@@ -239,6 +247,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
             return executor.submit(() -> {
                 var sql = RecorderImpl.TABLE_NAME_PATTERN.matcher(queryTemplate).replaceAll(tableName);
                 sql = TIMESTAMP_PATTERN.matcher(sql).replaceAll(TIMESTAMP_COL_NAME);
+                sql = USER_ID_CONDITION_PATTERN.matcher(sql).replaceAll(USER_ID_COL_NAME + (userId == null ? " IS NULL" : "='" + userId + '\''));
                 try (var connection = dataSource.getConnection()) {
                     doQuery(connection,
                             sql,

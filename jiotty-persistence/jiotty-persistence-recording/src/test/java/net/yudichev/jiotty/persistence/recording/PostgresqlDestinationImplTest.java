@@ -5,6 +5,7 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
+import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
 import net.yudichev.jiotty.persistence.recording.PostgresqlDestination.Column;
@@ -13,6 +14,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -22,6 +25,8 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -30,7 +35,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PostgresqlDestinationImplTest {
     private static final String CREATE_AUX_TABLE_SQL = "CREATE TABLE IF NOT EXISTS %TABLE_NAME%_init (id integer);";
     private static final String ADD_AUX_NOTE_COLUMN_SQL = "ALTER TABLE %TABLE_NAME%_init ADD COLUMN note text;";
-    private static final String QUERY_TEMPLATE = "SELECT %TIMESTAMP%, label, amount FROM %TABLE_NAME% ORDER BY %TIMESTAMP%";
+    private static final String QUERY_TEMPLATE =
+            "SELECT %TIMESTAMP%, label, amount FROM %TABLE_NAME% WHERE %USER_CONDITION% ORDER BY %TIMESTAMP%";
     private static final String SELECT_TABLE_EXISTS_SQL =
             "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name=?";
     private static final String SELECT_COLUMN_EXISTS_SQL =
@@ -44,20 +50,18 @@ class PostgresqlDestinationImplTest {
     private SingleThreadedSchedulingExecutor recordingExecutor;
     private PersistenceDomainServiceImpl domainService;
     private PostgresqlDestinationImpl destination;
+    private DataSourceFactory dataSourceFactory;
 
     @BeforeEach
     void setUp() {
         dataSource = postgres.dataSource();
-        var dataSourceFactory = postgres.dataSourceFactory();
+        dataSourceFactory = postgres.dataSourceFactory();
         domainExecutor = new SingleThreadedSchedulingExecutor("domain-test");
         recordingExecutor = new SingleThreadedSchedulingExecutor("recording-test");
         Provider<SchedulingExecutor> domainExecutorProvider = () -> domainExecutor;
         domainService = new PersistenceDomainServiceImpl(dataSourceFactory, domainExecutorProvider);
         domainService.start();
-        Provider<SchedulingExecutor> recordingExecutorProvider = () -> recordingExecutor;
-        destination = new PostgresqlDestinationImpl(recordingExecutorProvider, dataSourceFactory, domainService);
-        destination.initialise();
-        flushExecutor(recordingExecutor);
+        initDestination(Optional.of("userId"));
     }
 
     @AfterEach
@@ -77,8 +81,14 @@ class PostgresqlDestinationImplTest {
                 domainExecutor);
     }
 
-    @Test
-    void recordsAndReadsRows() throws Exception {
+    static Stream<Optional<String>> recordsAndReadsRows() {
+        return Stream.of(Optional.empty(), Optional.of("userId"));
+    }
+
+    @ParameterizedTest
+    @MethodSource
+    void recordsAndReadsRows(Optional<String> userId) throws Exception {
+        initDestination(userId);
         var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
                                                             "sample",
                                                             1,
@@ -122,6 +132,7 @@ class PostgresqlDestinationImplTest {
 
     @Test
     void appliesMigrationStatements() throws Exception {
+        initDestination(Optional.of("userId"));
         var configV1 = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
                                                               "sample",
                                                               1,
@@ -148,6 +159,13 @@ class PostgresqlDestinationImplTest {
         flushExecutor(recordingExecutor);
 
         assertThat(columnExists(dataSource, SAMPLE_AUX_TABLE_NAME, "note")).isTrue();
+    }
+
+    private void initDestination(Optional<String> userId) {
+        Provider<SchedulingExecutor> recordingExecutorProvider = () -> recordingExecutor;
+        destination = new PostgresqlDestinationImpl(recordingExecutorProvider, dataSourceFactory, userId, domainService);
+        destination.initialise();
+        flushExecutor(recordingExecutor);
     }
 
     private static boolean tableExists(DataSource dataSource, String tableName) throws SQLException {

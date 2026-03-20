@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.Optional;
 
 import static net.yudichev.jiotty.persistence.recording.RecordingModule.Dependency;
 import static net.yudichev.jiotty.persistence.recording.RecordingModule.PsqlExecutor;
@@ -19,8 +20,9 @@ final class ReadOnlyPostgresqlDestination extends PostgresqlDestinationImpl {
     @Inject
     public ReadOnlyPostgresqlDestination(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,
                                          @Dependency DataSourceFactory dataSourceFactory,
+                                         @Dependency Optional<String> userId,
                                          PersistenceDomainService persistenceDomainService) {
-        super(executorProvider, dataSourceFactory, persistenceDomainService);
+        super(executorProvider, dataSourceFactory, userId, persistenceDomainService);
     }
 
     @Override

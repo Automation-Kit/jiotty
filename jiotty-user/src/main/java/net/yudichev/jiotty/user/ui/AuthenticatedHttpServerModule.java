@@ -2,11 +2,12 @@ package net.yudichev.jiotty.user.ui;
 
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
+import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentModule {
+public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<UIHttpServer> {
     public static final String PATH_ROOT = "/ui";
     public static final String SUB_PATH_OPTIONS = "/options";
 
@@ -30,14 +31,15 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
                                .installedBy(this::installLifecycleComponentModule);
         listenPortSpec.bind(int.class).annotatedWith(UIHttpServerImpl.ListenPort.class).installedBy(this::installLifecycleComponentModule);
         bind(UIRequestAuthoriser.class).annotatedWith(UIHttpServerImpl.Dependency.class).to(AuthenticatedUIRequestAuthoriser.class);
-        registerLifecycleComponent(UIHttpServerImpl.class);
+        bind(getExposedKey()).to(registerLifecycleComponent(UIHttpServerImpl.class));
+        expose(getExposedKey());
     }
 
     public static final class Builder implements TypedBuilder<AuthenticatedHttpServerModule> {
         private BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec;
-        private BindingSpec<Integer> listenPortSpec;
+        private BindingSpec<Integer> listenPortSpec = BindingSpec.literally(0);
 
-        public Builder setListenPort(BindingSpec<Integer> listenPortSpec) {
+        public Builder withListenPort(BindingSpec<Integer> listenPortSpec) {
             this.listenPortSpec = checkNotNull(listenPortSpec, "listenPortSpec");
             return this;
         }

@@ -6,7 +6,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 
 import java.io.IOException;
 
-interface UIServerRuntime {
+public interface UIServerRuntime {
     void handleOptionsPost(HttpServletRequest request, HttpServletResponse response);
 
     void writeOptionsJson(HttpServletResponse response) throws IOException;

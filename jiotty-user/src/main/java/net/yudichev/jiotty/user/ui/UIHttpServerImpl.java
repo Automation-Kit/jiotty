@@ -43,23 +43,24 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.Objects.requireNonNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
-final class UIHttpServerImpl extends BaseLifecycleComponent {
+final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
     private static final Logger logger = LoggerFactory.getLogger(UIHttpServerImpl.class);
     private static final String REQUEST_CONTEXT = UIHttpServerImpl.class.getName() + ".requestContext";
 
     private final UIRequestAuthoriser requestAuthoriser;
     private final Server server;
+    private final ServerConnector connector;
 
     @Inject
     UIHttpServerImpl(@Dependency UIRequestAuthoriser requestAuthoriser,
                      @ListenPort int listenPort) {
         this.requestAuthoriser = checkNotNull(requestAuthoriser, "requestAuthoriser");
-        checkArgument(listenPort > 0 && listenPort <= 65_535, "listenPort: %s", listenPort);
+        checkArgument(listenPort >= 0 && listenPort <= 65_535, "listenPort: %s", listenPort);
         server = new Server();
         HttpConfiguration httpConfig = new HttpConfiguration();
         httpConfig.setFormEncodedMethods("POST");
 
-        var connector = new ServerConnector(server, new HttpConnectionFactory(httpConfig));
+        connector = new ServerConnector(server, new HttpConnectionFactory(httpConfig));
         connector.setPort(listenPort);
         server.addConnector(connector);
 
@@ -81,6 +82,11 @@ final class UIHttpServerImpl extends BaseLifecycleComponent {
         servletContextHandler.addServlet(resourceServletHolder, "/");
 
         server.setHandler(new Handler.Sequence(servletContextHandler, new DefaultHandler()));
+    }
+
+    @Override
+    public int listenPort() {
+        return whenStartedAndNotLifecycling(connector::getLocalPort);
     }
 
     @Override

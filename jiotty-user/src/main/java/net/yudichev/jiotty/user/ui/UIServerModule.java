@@ -1,13 +1,16 @@
 package net.yudichev.jiotty.user.ui;
 
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 
-public final class UIServerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<UIServer> {
+/// Exposes [UIServer] for the app to register UI components and [UIServerRuntime] for the HTTP server to handle requests and streams against those components.
+public final class UIServerModule extends BaseLifecycleComponentModule {
     @Override
     protected void configure() {
         bind(OptionPersistence.class).to(OptionPersistenceImpl.class);
-        bind(getExposedKey()).to(registerLifecycleComponent(UIServerImpl.class));
-        expose(getExposedKey());
+        registerLifecycleComponent(UIServerImpl.class);
+        bind(UIServer.class).to(UIServerImpl.class);
+        expose(UIServer.class);
+        bind(UIServerRuntime.class).to(UIServerImpl.class);
+        expose(UIServerRuntime.class);
     }
 }

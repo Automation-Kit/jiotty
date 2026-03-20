@@ -92,11 +92,15 @@ public abstract class BaseServerNode extends BaseNode implements ServerNode {
             trigger.getAsBoolean();
         } else {
             runner.executor().execute(() -> {
-                boolean wasNotAlreadyTriggered = trigger.getAsBoolean();
-                if (wasNotAlreadyTriggered) {
-                    runner.scheduleNewWave(name + ": " + triggeredBy);
+                if (runner.graph().isClosedPlain()) {
+                    logger.debug("{}: Not triggering, graph closed, tiggeredBy was: {}", name, triggeredBy);
                 } else {
-                    logger.debug("{}: not triggering as node is already pending trigger, tiggeredBy was: {}", name, triggeredBy);
+                    boolean wasNotAlreadyTriggered = trigger.getAsBoolean();
+                    if (wasNotAlreadyTriggered) {
+                        runner.scheduleNewWave(name + ": " + triggeredBy);
+                    } else {
+                        logger.debug("{}: not triggering as node is already pending trigger, tiggeredBy was: {}", name, triggeredBy);
+                    }
                 }
             });
         }

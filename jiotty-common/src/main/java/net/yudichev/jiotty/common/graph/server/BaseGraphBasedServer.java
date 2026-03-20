@@ -58,7 +58,13 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     protected final void doStart() {
         executor = executorProvider.get();
         doStart0();
-        executor.execute(this::createGraph);
+        executor.execute(() -> {
+            try {
+                createGraph();
+            } catch (RuntimeException e) {
+                panic(e);
+            }
+        });
     }
 
     protected final SchedulingExecutor executor() {
@@ -104,7 +110,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
                     logger.debug("Not scheduling new wave triggered by '{}' because already in wave", triggeredBy);
                     return;
                 }
-                if (isClosed()) {
+                if (isClosedPlain()) {
                     logger.debug("Not scheduling anything as closed");
                     return;
                 }

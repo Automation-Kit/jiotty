@@ -50,6 +50,8 @@
   declared after the `set` setters.
 - For Guice module builders, all builder parameters must be `BindingSpec`s rather than plain values, including primitives and `String`s; call sites should use
   `literally(...)` when they want to pass a fixed value.
+- `BindingSpec` field names, constructor parameters, and builder method parameters must end with `Spec` (for example, `energyPriceServiceSpec`, not
+  `energyPriceService`).
 - All Guice module parameters must be supplied through a nested `Builder` class, not through public constructors or factory methods on the module itself. A
   no-arg public constructor is allowed only when the module has no parameters at all.
 - Only add documentation comments when they convey non-obvious information (contracts, invariants, side effects, performance). Do not add documentation that
@@ -65,14 +67,16 @@
 - Do not keep a helper method static if it only exists to take one of the owning object's effectively final fields as a parameter; make it an instance method
   and use the field directly instead.
 - Use British English for identifiers and comments.
-- Only use `var` to declare local variables when the concrete type is spelled out explicitly on the right-hand side, such as `new Type(...)` or a cast
-  `(Type) expr`. Do not use `var` for method calls — including factory methods, builders, and transforming calls like `map(...)` — even when the return
-  type might seem obvious from context.
+- Only use `var` to declare local variables when the concrete type is spelled out explicitly on the right-hand side, such as `new Type(...)`, a cast
+  `(Type) expr`, or a generic method whose type argument names the concrete type (for example, `mock(Foo.class)`). Do not use `var` for method calls whose
+  return type is only inferrable from context — including factory methods, builders, and transforming calls like `map(...)`.
 - When the right-hand side is `new Type(...)`, always use `var`.
 - The right margin for code is 160 characters.
 - Method or record parameters are chopped vertically if they don't fit on one line, both when declaring and when invoking a method. There is typically no line
   break before the first parameter, unless adding it makes the whole thing fit on one line.
 - Always statically import static methods in `net.yudichev.jiotty.common.inject.BindingSpec`.
+- Never use fully qualified class names in code; always add an import statement. Only use fully qualified names when two imported classes have the same simple
+  name.
 - Generally, do not create private constants that are only used once. This creates indirection that makes the code harder to read.
 - When the same logic repeats in a class, extract a helper method instead of duplicating the snippet.
 - Do not duplicate small helper classes across implementations or tests; extract a shared helper instead.
@@ -156,6 +160,9 @@
 ## Misc
 
 - After code changes, run a build (at minimum `verify`) before responding unless explicitly told not to.
+- "Extract" means move, not copy. When asked to extract code (classes, methods, etc.) from one location to another, remove it from the original location and
+  make
+  the original use the extracted version. Never leave duplicated code behind.
 
 ## Additional rules
 
@@ -190,6 +197,9 @@
 - Do not call `Instant.now()`/`LocalDateTime.now()` in production code; inject `CurrentDateTimeProvider` and use `currentInstant()`/`currentDateTime()` so
   `ProgrammableClock` works in tests.
 - In module builders and other builders, do not modify builder fields inside `build()`; apply defaults in field initialisers so the builder remains reusable.
+- Builder `build()` methods must not duplicate `checkNotNull` validation that the target constructor already performs. Pass fields directly to the constructor
+  and
+  let the constructor validate.
 - For Guice `@BindingAnnotation`s, if the bound type is a widespread general type such as a primitive or `String`, name the annotation after the
   field/parameter (for example `@ListenPort`); use `@Dependency` for specific domain/service types.
 - Prefer `Duration.isPositive()` over ad hoc `isNegative()` / `isZero()` combinations when checking whether a duration is still positive.
