@@ -1,6 +1,8 @@
 package net.yudichev.jiotty.connector.webclient;
 
 import com.google.common.collect.ImmutableList;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.htmlunit.ElementNotFoundException;
 import org.htmlunit.IncorrectnessListener;
 import org.htmlunit.ScriptException;
@@ -8,8 +10,6 @@ import org.htmlunit.WebClient;
 import org.htmlunit.html.HtmlPage;
 import org.htmlunit.html.parser.HTMLParserListener;
 import org.htmlunit.javascript.JavaScriptErrorListener;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -20,7 +20,7 @@ import java.util.function.Supplier;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 public final class Web {
-    private static final Logger logger = LoggerFactory.getLogger(Web.class);
+    private static final Logger logger = LogManager.getLogger(Web.class);
 
     private Web() {
     }
@@ -103,10 +103,7 @@ public final class Web {
         }
     }
 
-    private static final class Problem {
-        private final String pattern;
-        private final Object[] arguments;
-
+    private record Problem(String pattern, Object... arguments) {
         private Problem(String pattern, Object... arguments) {
             this.pattern = checkNotNull(pattern);
             this.arguments = checkNotNull(arguments);

@@ -19,8 +19,8 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -52,7 +52,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 public final class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet {
     static final String AUDIENCE = "https://fleet-api.prd.eu.vn.cloud.tesla.com";
-    private static final Logger logger = LoggerFactory.getLogger(TeslaFleetImpl.class);
+    private static final Logger logger = LogManager.getLogger(TeslaFleetImpl.class);
     private static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
     private static final TypeToken<ResponseWrapper<List<TeslaVehicleData>>> LIST_VEHICLES_RESPONSE_TYPE = new TypeToken<>() {};
     private static final TypeToken<ResponseWrapper<CommandResponse>> CMD_RESPONSE_TYPE = new TypeToken<>() {};

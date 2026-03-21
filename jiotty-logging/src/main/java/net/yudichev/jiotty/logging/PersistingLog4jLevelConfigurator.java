@@ -9,11 +9,11 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.PackagePrivateImmutablesStyle;
 import net.yudichev.jiotty.common.varstore.VarStore;
 import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.core.config.Configurator;
 import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -28,7 +28,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 
 public final class PersistingLog4jLevelConfigurator extends BaseLifecycleComponent implements LoggingLevelConfigurator {
-    private static final Logger log = LoggerFactory.getLogger(PersistingLog4jLevelConfigurator.class);
+    private static final Logger log = LogManager.getLogger(PersistingLog4jLevelConfigurator.class);
 
     private final VarStore varStore;
     private final String storeKey;

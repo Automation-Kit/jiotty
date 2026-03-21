@@ -7,8 +7,8 @@ import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -25,7 +25,7 @@ import static java.util.concurrent.CompletableFuture.supplyAsync;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 final class GoogleDriveClientImpl extends BaseLifecycleComponent implements GoogleDriveClient {
-    private static final Logger logger = LoggerFactory.getLogger(GoogleDriveClientImpl.class);
+    private static final Logger logger = LogManager.getLogger(GoogleDriveClientImpl.class);
 
     private static final String ROOT_ID = "root";
     private static final String APP_DATA_ID = "appDataFolder";

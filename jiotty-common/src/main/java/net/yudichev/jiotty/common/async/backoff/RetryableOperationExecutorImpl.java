@@ -6,9 +6,9 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.lang.PackagePrivateImmutablesStyle;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.immutables.value.Value;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -24,7 +24,7 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 final class RetryableOperationExecutorImpl implements RetryableOperationExecutor {
-    private static final Logger logger = LoggerFactory.getLogger(RetryableOperationExecutorImpl.class);
+    private static final Logger logger = LogManager.getLogger(RetryableOperationExecutorImpl.class);
     private final Provider<BackingOffExceptionHandler> exceptionHandlerProvider;
 
     @Inject

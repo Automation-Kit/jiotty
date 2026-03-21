@@ -7,8 +7,8 @@ import net.yudichev.jiotty.appliance.Appliance;
 import net.yudichev.jiotty.appliance.Command;
 import net.yudichev.jiotty.appliance.CommandMeta;
 import net.yudichev.jiotty.appliance.PowerCommand;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -25,7 +25,7 @@ import static net.yudichev.jiotty.connector.slide.Bindings.SlideId;
 import static net.yudichev.jiotty.connector.slide.SetCurtainPositionCommand.allSetCurtainPositionCommandMetas;
 
 final class SlideAsAppliance implements Appliance {
-    private static final Logger logger = LoggerFactory.getLogger(SlideAsAppliance.class);
+    private static final Logger logger = LogManager.getLogger(SlideAsAppliance.class);
 
     private static final ImmutableSet<CommandMeta<?>> SUPPORTED_COMMANDS = ImmutableSet.<CommandMeta<?>>builder()
                                                                                        .addAll(PowerCommand.allPowerCommandMetas())

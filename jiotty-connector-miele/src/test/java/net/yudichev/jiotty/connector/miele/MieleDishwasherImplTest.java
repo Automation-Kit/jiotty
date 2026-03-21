@@ -9,11 +9,11 @@ import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.security.OAuth2TokenManager;
 import net.yudichev.jiotty.common.time.TimeProvider;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.SocketTimeoutException;
@@ -37,7 +37,7 @@ import static org.assertj.core.api.InstanceOfAssertFactories.list;
 /// Originally from <a href="https://chatgpt.com/c/6754cbf0-1374-800b-9e27-9ff9d91b33f0">here</a>
 @WireMockTest
 class MieleDishwasherImplTest {
-    private static final Logger logger = LoggerFactory.getLogger(MieleDishwasherImplTest.class);
+    private static final Logger logger = LogManager.getLogger(MieleDishwasherImplTest.class);
 
     private static final String DEVICE_ID = "test-device-id";
     private static final String ACCESS_TOKEN = "mock-access-token";

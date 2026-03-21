@@ -12,8 +12,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.connector.aws.PrivateKeyReader;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -43,7 +43,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.idempotent;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 final class AwsIotMqttConnectionImpl extends BaseLifecycleComponent implements AwsIotMqttConnection {
-    private static final Logger logger = LoggerFactory.getLogger(AwsIotMqttConnectionImpl.class);
+    private static final Logger logger = LogManager.getLogger(AwsIotMqttConnectionImpl.class);
 
     private final Duration timeout;
     private final AWSIotMqttClient client;

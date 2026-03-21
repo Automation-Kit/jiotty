@@ -2,8 +2,8 @@ package net.yudichev.jiotty.common.async;
 
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.Either;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -16,7 +16,7 @@ import static net.yudichev.jiotty.common.lang.CompletableFutures.thenComplete;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 
 public class AsyncOperationRetryImpl implements AsyncOperationRetry {
-    private static final Logger logger = LoggerFactory.getLogger(AsyncOperationRetryImpl.class);
+    private static final Logger logger = LogManager.getLogger(AsyncOperationRetryImpl.class);
     private final AsyncOperationFailureHandler backOffHandler;
 
     @Inject

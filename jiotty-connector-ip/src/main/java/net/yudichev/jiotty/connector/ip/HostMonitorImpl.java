@@ -12,8 +12,8 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ConcurrentDeduplicatingConsumer;
 import net.yudichev.jiotty.common.lang.StabilisingConsumer;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -50,7 +50,7 @@ import static net.yudichev.jiotty.connector.ip.HostMonitorImpl.OsPingProcessExec
 import static net.yudichev.jiotty.connector.ip.HostMonitorImpl.OsPingProcessExecutor.OS.MACOS;
 
 final class HostMonitorImpl extends BaseLifecycleComponent implements HostMonitor {
-    private static final Logger logger = LoggerFactory.getLogger(HostMonitorImpl.class);
+    private static final Logger logger = LogManager.getLogger(HostMonitorImpl.class);
 
     private final ExecutorFactory executorFactory;
     private final CurrentDateTimeProvider currentDateTimeProvider;

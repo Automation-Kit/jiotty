@@ -14,7 +14,6 @@
     <properties>
         <version.org.apache.logging.log4j>2.25.3</version.org.apache.logging.log4j>
         <org.immutables.version>2.11.6</org.immutables.version>
-        <org.slf4j.version>1.7.36</org.slf4j.version> <!-- 2.0 is not compatible with log4j binding; TODO: remove slf4j layer completely -->
         <com.google.maps.version>1.65.0</com.google.maps.version>
         <com.google.http-client.version>2.0.2</com.google.http-client.version>
         <com.google.firebase.version>9.8.0</com.google.firebase.version>
@@ -327,14 +326,23 @@
 
             <dependency>
                 <groupId>org.apache.logging.log4j</groupId>
-                <artifactId>log4j-slf4j-impl</artifactId>
+                <artifactId>log4j-slf4j2-impl</artifactId>
                 <version>${version.org.apache.logging.log4j}</version>
                 <scope>runtime</scope>
             </dependency>
             <dependency>
+                <!--
+                  Manage SLF4J to 2.x for third-party transitive deps (otherwise transitive slf4j 1.x start spitting warnings),
+                  must match log4j-slf4j2-impl expectations
+                -->
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
-                <version>${org.slf4j.version}</version>
+                <version>2.0.17</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-jul</artifactId>
+                <version>${version.org.apache.logging.log4j}</version>
             </dependency>
             <dependency>
                 <groupId>org.mnode.ical4j</groupId>

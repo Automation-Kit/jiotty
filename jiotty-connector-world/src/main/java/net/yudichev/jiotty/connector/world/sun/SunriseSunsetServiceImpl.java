@@ -9,8 +9,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.CompositeRunnable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.time.LocalTime;
@@ -26,7 +26,7 @@ import static net.yudichev.jiotty.common.lang.Locks.inLock;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 final class SunriseSunsetServiceImpl extends BaseLifecycleComponent implements SunriseSunsetService {
-    private static final Logger logger = LoggerFactory.getLogger(SunriseSunsetServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(SunriseSunsetServiceImpl.class);
 
     private final ExecutorFactory executorFactory;
     private final SunriseSunsetTimes sunriseSunsetTimes;

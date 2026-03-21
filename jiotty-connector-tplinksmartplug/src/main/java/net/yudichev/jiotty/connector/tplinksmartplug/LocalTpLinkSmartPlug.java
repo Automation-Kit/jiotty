@@ -11,8 +11,8 @@ import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -36,7 +36,7 @@ import static net.yudichev.jiotty.connector.tplinksmartplug.Bindings.Name;
 
 /// Based on <a href="https://github.com/ggeorgovassilis/linuxscripts/blob/master/tp-link-hs100-smartplug/hs100.sh">this script</a>.
 final class LocalTpLinkSmartPlug extends BaseLifecycleComponent implements Appliance {
-    private static final Logger logger = LoggerFactory.getLogger(LocalTpLinkSmartPlug.class);
+    private static final Logger logger = LogManager.getLogger(LocalTpLinkSmartPlug.class);
     private static final Map<Command<?>, byte[]> COMMAND_TO_BINARY_PACKET = ImmutableMap.of(
             // encoded {"system":{"set_relay_state":{"state":1}}}
             ON, Base64.getDecoder().decode("AAAAKtDygfiL/5r31e+UtsWg1Iv5nPCR6LfEsNGlwOLYo4HyhueT9tTu36Lfog=="),

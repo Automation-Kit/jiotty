@@ -17,8 +17,8 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -45,7 +45,7 @@ import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.huma
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 public final class UIServerImpl extends BaseLifecycleComponent implements UIServer, UIServerRuntime {
-    private static final Logger logger = LoggerFactory.getLogger(UIServerImpl.class);
+    private static final Logger logger = LogManager.getLogger(UIServerImpl.class);
     private static final Pattern TAB_NAME_TO_ID_CONVERSION_PATTERN = Pattern.compile("[^A-Za-z0-9_-]");
     private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory()).registerModule(new JavaTimeModule());
 

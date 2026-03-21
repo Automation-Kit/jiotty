@@ -16,8 +16,8 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.connector.google.gmail.Bindings.GmailService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
@@ -38,7 +38,7 @@ import static net.yudichev.jiotty.common.lang.Runnables.guarded;
 import static net.yudichev.jiotty.common.lang.throttling.ThresholdExceptionLoggingRunnable.withExceptionLoggedAfterThreshold;
 
 final class GmailClientImpl extends BaseLifecycleComponent implements GmailClient {
-    private static final Logger logger = LoggerFactory.getLogger(GmailClientImpl.class);
+    private static final Logger logger = LogManager.getLogger(GmailClientImpl.class);
     private static final Duration MESSAGE_POLL_PERIOD = Duration.ofMinutes(5);
     private static final int MAX_ALLOWED_ERRORS_WHEN_POLLING = 3;
 

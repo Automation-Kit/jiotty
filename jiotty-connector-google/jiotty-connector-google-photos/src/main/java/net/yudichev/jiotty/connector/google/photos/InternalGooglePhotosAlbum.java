@@ -5,8 +5,8 @@ import com.google.photos.library.v1.PhotosLibraryClient;
 import com.google.photos.library.v1.proto.SearchMediaItemsRequest;
 import com.google.photos.types.proto.Album;
 import com.google.photos.types.proto.MediaItem;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -18,7 +18,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.concurrent.CompletableFuture.supplyAsync;
 
 final class InternalGooglePhotosAlbum implements GooglePhotosAlbum {
-    private static final Logger logger = LoggerFactory.getLogger(InternalGooglePhotosAlbum.class);
+    private static final Logger logger = LogManager.getLogger(InternalGooglePhotosAlbum.class);
     private final PhotosLibraryClient client;
     private final Album album;
 
@@ -79,20 +79,20 @@ final class InternalGooglePhotosAlbum implements GooglePhotosAlbum {
     @Override
     public CompletableFuture<List<GoogleMediaItem>> getMediaItems(IntConsumer loadedItemCountProgressCallback, Executor executor) {
         return supplyAsync(() -> {
-                    logger.debug("Get all media items in album {}", this);
-                    PagedRequest<MediaItem> request = new PagedRequest<>(logger, loadedItemCountProgressCallback, pageToken -> {
-                        SearchMediaItemsRequest.Builder requestBuilder = SearchMediaItemsRequest.newBuilder()
-                                .setAlbumId(getId())
-                                .setPageSize(100);
-                        pageToken.ifPresent(requestBuilder::setPageToken);
-                        return client.searchMediaItems(requestBuilder.build());
-                    });
-                    List<GoogleMediaItem> result = request.getAll().map(InternalGoogleMediaItem::new)
-                            .collect(toImmutableList());
-                    logger.debug("Got {} media item(s)", result.size());
-                    return result;
-                },
-                executor);
+                               logger.debug("Get all media items in album {}", this);
+                               PagedRequest<MediaItem> request = new PagedRequest<>(logger, loadedItemCountProgressCallback, pageToken -> {
+                                   SearchMediaItemsRequest.Builder requestBuilder = SearchMediaItemsRequest.newBuilder()
+                                                                                                           .setAlbumId(getId())
+                                                                                                           .setPageSize(100);
+                                   pageToken.ifPresent(requestBuilder::setPageToken);
+                                   return client.searchMediaItems(requestBuilder.build());
+                               });
+                               List<GoogleMediaItem> result = request.getAll().map(InternalGoogleMediaItem::new)
+                                                                     .collect(toImmutableList());
+                               logger.debug("Got {} media item(s)", result.size());
+                               return result;
+                           },
+                           executor);
     }
 
     @Override
@@ -115,7 +115,7 @@ final class InternalGooglePhotosAlbum implements GooglePhotosAlbum {
     @Override
     public String toString() {
         return MoreObjects.toStringHelper(this)
-                .add("album", album)
-                .toString();
+                          .add("album", album)
+                          .toString();
     }
 }

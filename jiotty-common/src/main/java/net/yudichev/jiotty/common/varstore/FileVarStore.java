@@ -9,8 +9,8 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -34,7 +34,7 @@ abstract class FileVarStore implements VarStore {
             .registerModule(new GuavaModule())
             .enable(SerializationFeature.INDENT_OUTPUT);
 
-    protected final Logger logger = LoggerFactory.getLogger(getClass());
+    protected final Logger logger = LogManager.getLogger(getClass());
 
     private final Path storeFile;
     private final Path storeFileTmp;

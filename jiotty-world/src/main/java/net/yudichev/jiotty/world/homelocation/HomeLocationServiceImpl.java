@@ -11,8 +11,8 @@ import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.user.ui.OptionMeta;
 import net.yudichev.jiotty.user.ui.TextOption;
 import net.yudichev.jiotty.user.ui.UIServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.Objects;
@@ -24,7 +24,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 
 final class HomeLocationServiceImpl extends BaseLifecycleComponent implements HomeLocationService {
-    private static final Logger logger = LoggerFactory.getLogger(HomeLocationServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(HomeLocationServiceImpl.class);
 
     private final UIServer uiServer;
     private final ExecutorFactory executorFactory;

@@ -6,8 +6,8 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -28,7 +28,7 @@ import static net.yudichev.jiotty.common.lang.CompletableFutures.completedFuture
 import static net.yudichev.jiotty.connector.slide.Bindings.ServiceExecutor;
 
 final class VerifyingSlideService implements SlideService {
-    private static final Logger logger = LoggerFactory.getLogger(VerifyingSlideService.class);
+    private static final Logger logger = LogManager.getLogger(VerifyingSlideService.class);
     private static final Duration POSITION_POLL_PERIOD = Duration.ofSeconds(1);
     private static final Duration POSITION_VERIFY_TIMEOUT = Duration.ofSeconds(30);
 
@@ -66,7 +66,7 @@ final class VerifyingSlideService implements SlideService {
         if (wasStillMoving) {
             logger.debug("Slide {}: was moving, force new position {}", slideId, position);
             return delegate.setSlidePosition(slideId, position, executor)
-                           .thenCompose(unused -> targetPosition.await());
+                           .thenCompose(_ -> targetPosition.await());
         } else {
             return delegate.getSlideInfo(slideId)
                            .thenCompose(slideInfo -> {
@@ -76,7 +76,7 @@ final class VerifyingSlideService implements SlideService {
                                             slideId, currentPosition, position, positionTolerance, withinTolerance);
                                return withinTolerance ? completedFuture() : delegate.setSlidePosition(slideId, position, executor);
                            })
-                           .thenCompose(unused -> targetPosition.await());
+                           .thenCompose(_ -> targetPosition.await());
         }
     }
 
@@ -129,7 +129,7 @@ final class VerifyingSlideService implements SlideService {
                             } else if (currentDateTimeProvider.currentInstant().isAfter(deadline)) {
                                 result.completeExceptionally(new RuntimeException(
                                         "Timed out verifying position of slide " + slideInfo + " after " + POSITION_VERIFY_TIMEOUT + "+, target position " +
-                                                targetPosition + ", current position " + currentPosition));
+                                        targetPosition + ", current position " + currentPosition));
                             } else {
                                 await();
                             }

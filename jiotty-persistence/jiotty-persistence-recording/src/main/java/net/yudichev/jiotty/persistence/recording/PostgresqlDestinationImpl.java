@@ -13,8 +13,8 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainService;
 import net.yudichev.jiotty.persistence.recording.RecordingModule.PsqlExecutor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -39,7 +39,7 @@ import static net.yudichev.jiotty.persistence.recording.RecordingModule.Dependen
 
 @SuppressWarnings({"JDBCPrepareStatementWithNonConstantString", "JDBCExecuteWithNonConstantString"})
 class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements PostgresqlDestination {
-    private static final Logger logger = LoggerFactory.getLogger(PostgresqlDestinationImpl.class);
+    private static final Logger logger = LogManager.getLogger(PostgresqlDestinationImpl.class);
 
     private final Provider<SchedulingExecutor> executorProvider;
     private final Calendar calendar;

@@ -4,8 +4,8 @@ import com.google.api.services.smartdevicemanagement.v1.SmartDeviceManagement;
 import com.google.api.services.smartdevicemanagement.v1.model.GoogleHomeEnterpriseSdmV1Device;
 import com.google.api.services.smartdevicemanagement.v1.model.GoogleHomeEnterpriseSdmV1ExecuteDeviceCommandRequest;
 import com.google.common.collect.ImmutableMap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.util.Map;
@@ -18,7 +18,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 final class InternalGoogleNestThermostat implements GoogleNestThermostat {
-    private static final Logger logger = LoggerFactory.getLogger(InternalGoogleNestThermostat.class);
+    private static final Logger logger = LogManager.getLogger(InternalGoogleNestThermostat.class);
 
     private final SmartDeviceManagement smartDeviceManagement;
     private final Executor executor;
@@ -39,30 +39,34 @@ final class InternalGoogleNestThermostat implements GoogleNestThermostat {
     @Override
     public CompletableFuture<Void> setMode(Mode mode, boolean verify) {
         return getCurrentMode().thenAccept(currentMode ->
-                asUnchecked(() -> {
-                    if (mode == currentMode) {
-                        logger.debug("already in {}, will do nothing", mode);
-                        return;
-                    }
-                    if (mode == Mode.ECO) {
-                        setEcoMode("MANUAL_ECO");
-                    } else {
-                        if (currentMode == Mode.ECO) {
-                            // must first switch off ECO, otherwise thermostat remains on ECO and the main trait is ignored
-                            setEcoMode("OFF");
-                        }
-                        GoogleHomeEnterpriseSdmV1ExecuteDeviceCommandRequest request = new GoogleHomeEnterpriseSdmV1ExecuteDeviceCommandRequest();
-                        request.setCommand("sdm.devices.commands.ThermostatMode.SetMode");
-                        request.setParams(ImmutableMap.of("mode", mode.name()));
-                        executeRequest(request);
+                                                   asUnchecked(() -> {
+                                                       if (mode == currentMode) {
+                                                           logger.debug("already in {}, will do nothing", mode);
+                                                           return;
+                                                       }
+                                                       if (mode == Mode.ECO) {
+                                                           setEcoMode("MANUAL_ECO");
+                                                       } else {
+                                                           if (currentMode == Mode.ECO) {
+                                                               // must first switch off ECO, otherwise thermostat remains on ECO and the main trait is ignored
+                                                               setEcoMode("OFF");
+                                                           }
+                                                           GoogleHomeEnterpriseSdmV1ExecuteDeviceCommandRequest request =
+                                                                   new GoogleHomeEnterpriseSdmV1ExecuteDeviceCommandRequest();
+                                                           request.setCommand("sdm.devices.commands.ThermostatMode.SetMode");
+                                                           request.setParams(ImmutableMap.of("mode", mode.name()));
+                                                           executeRequest(request);
 
-                        // verify
-                        if (verify) {
-                            Mode actualMode = doGetCurrentMode();
-                            checkState(actualMode == mode, "Mode verification failed, requested %s, but it's still %s", mode, actualMode);
-                        }
-                    }
-                }));
+                                                           // verify
+                                                           if (verify) {
+                                                               Mode actualMode = doGetCurrentMode();
+                                                               checkState(actualMode == mode,
+                                                                          "Mode verification failed, requested %s, but it's still %s",
+                                                                          mode,
+                                                                          actualMode);
+                                                           }
+                                                       }
+                                                   }));
     }
 
     private Mode doGetCurrentMode() throws IOException {

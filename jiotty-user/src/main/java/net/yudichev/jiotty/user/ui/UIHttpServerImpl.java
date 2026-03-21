@@ -13,6 +13,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.eclipse.jetty.ee10.servlet.DefaultServlet;
 import org.eclipse.jetty.ee10.servlet.FilterHolder;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
@@ -23,8 +25,6 @@ import org.eclipse.jetty.server.HttpConnectionFactory;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.handler.DefaultHandler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
-    private static final Logger logger = LoggerFactory.getLogger(UIHttpServerImpl.class);
+    private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
     private static final String REQUEST_CONTEXT = UIHttpServerImpl.class.getName() + ".requestContext";
 
     private final UIRequestAuthoriser requestAuthoriser;

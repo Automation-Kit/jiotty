@@ -19,8 +19,8 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.connector.google.common.GoogleAuthorization;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -43,7 +43,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static net.yudichev.jiotty.connector.google.common.impl.Bindings.Authorization;
 
 final class GooglePhotosClientImpl extends BaseLifecycleComponent implements GooglePhotosClient {
-    private static final Logger logger = LoggerFactory.getLogger(GooglePhotosClientImpl.class);
+    private static final Logger logger = LogManager.getLogger(GooglePhotosClientImpl.class);
     private final Provider<GoogleAuthorization> googleAuthorizationProvider;
     private PhotosLibraryClient client;
     private Closeable closeable;
@@ -104,9 +104,10 @@ final class GooglePhotosClientImpl extends BaseLifecycleComponent implements Goo
                 return newMediaItemResultsList.stream()
                                               .map(newMediaItemResult -> {
                                                   Status status = newMediaItemResult.getStatus();
-                                                  MediaItemOrError mediaItemOrError = status.getCode() == Code.OK_VALUE ?
-                                                          MediaItemOrError.item(new InternalGoogleMediaItem(newMediaItemResult.getMediaItem())) :
-                                                          MediaItemOrError.error(status);
+                                                  MediaItemOrError mediaItemOrError
+                                                          = status.getCode() == Code.OK_VALUE
+                                                            ? MediaItemOrError.item(new InternalGoogleMediaItem(newMediaItemResult.getMediaItem()))
+                                                            : MediaItemOrError.error(status);
                                                   logger.debug("Finished uploading token {}, result {}",
                                                                newMediaItemResult.getUploadToken(),
                                                                newMediaItemResult);
@@ -170,7 +171,6 @@ final class GooglePhotosClientImpl extends BaseLifecycleComponent implements Goo
 
     @Override
     protected void doStart() {
-        //noinspection resource it's closed
         client = getAsUnchecked(() -> PhotosLibraryClient.initialize(PhotosLibrarySettings.newBuilder()
                                                                                           .setCredentialsProvider(FixedCredentialsProvider.create(
                                                                                                   googleAuthorizationProvider.get().getCredentials()))

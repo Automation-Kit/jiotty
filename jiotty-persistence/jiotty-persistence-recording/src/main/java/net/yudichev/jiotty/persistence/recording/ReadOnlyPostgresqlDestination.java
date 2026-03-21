@@ -5,8 +5,8 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -15,7 +15,7 @@ import static net.yudichev.jiotty.persistence.recording.RecordingModule.Dependen
 import static net.yudichev.jiotty.persistence.recording.RecordingModule.PsqlExecutor;
 
 final class ReadOnlyPostgresqlDestination extends PostgresqlDestinationImpl {
-    private static final Logger logger = LoggerFactory.getLogger(ReadOnlyPostgresqlDestination.class);
+    private static final Logger logger = LogManager.getLogger(ReadOnlyPostgresqlDestination.class);
 
     @Inject
     public ReadOnlyPostgresqlDestination(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,

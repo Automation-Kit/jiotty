@@ -3,8 +3,8 @@ package net.yudichev.jiotty.persistence.recording;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.EnumMap;
 import java.util.Map;
@@ -12,7 +12,7 @@ import java.util.Map;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 final class RecordingServiceImpl extends BaseLifecycleComponent implements RecordingService {
-    private static final Logger logger = LoggerFactory.getLogger(RecordingServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(RecordingServiceImpl.class);
 
     private final Map<DestinationType, Destination> destinationsByType = new EnumMap<>(DestinationType.class);
     private final DestinationFactory destinationFactory;

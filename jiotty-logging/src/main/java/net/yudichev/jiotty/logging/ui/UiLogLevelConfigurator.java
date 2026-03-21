@@ -8,8 +8,8 @@ import net.yudichev.jiotty.logging.LoggingLevelConfigurator;
 import net.yudichev.jiotty.user.ui.OptionMeta;
 import net.yudichev.jiotty.user.ui.TextAreaOption;
 import net.yudichev.jiotty.user.ui.UIServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -21,7 +21,7 @@ import static java.util.stream.Collectors.joining;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 
 public final class UiLogLevelConfigurator extends BaseLifecycleComponent {
-    private static final Logger logger = LoggerFactory.getLogger(UiLogLevelConfigurator.class);
+    private static final Logger logger = LogManager.getLogger(UiLogLevelConfigurator.class);
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     private final UIServer uiServer;

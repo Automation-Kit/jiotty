@@ -9,8 +9,8 @@ import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -33,7 +33,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 /// <a href="https://octopus.energy/blog/agile-smart-home-diy/">Guide 1</a>,
 /// <a href="https://www.guylipman.com/octopus/api_guide.html">Guide 2</a>
 public final class OctopusEnergyImpl extends BaseLifecycleComponent implements OctopusEnergy {
-    private static final Logger logger = LoggerFactory.getLogger(OctopusEnergyImpl.class);
+    private static final Logger logger = LogManager.getLogger(OctopusEnergyImpl.class);
 
     private static final String BASE_URL = "https://api.octopus.energy/v1";
 

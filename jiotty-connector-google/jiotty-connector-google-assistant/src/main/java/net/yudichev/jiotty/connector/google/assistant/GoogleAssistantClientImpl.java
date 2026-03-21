@@ -17,8 +17,8 @@ import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.connector.google.common.GoogleAuthorization;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.annotation.Retention;
@@ -36,7 +36,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static net.yudichev.jiotty.connector.google.common.impl.Bindings.Authorization;
 
 final class GoogleAssistantClientImpl extends BaseLifecycleComponent implements GoogleAssistantClient {
-    private static final Logger logger = LoggerFactory.getLogger(GoogleAssistantClientImpl.class);
+    private static final Logger logger = LogManager.getLogger(GoogleAssistantClientImpl.class);
 
     private static final String HOSTNAME = "embeddedassistant.googleapis.com";
     private final AudioOutConfig audioOutConfig;

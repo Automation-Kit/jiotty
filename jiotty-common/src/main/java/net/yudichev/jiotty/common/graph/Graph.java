@@ -4,9 +4,9 @@ import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -25,7 +25,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
 public class Graph extends BaseIdempotentCloseable {
-    private static final Logger logger = LoggerFactory.getLogger(Graph.class);
+    private static final Logger logger = LogManager.getLogger(Graph.class);
 
     private final TreeSet<NodeState> nodesPendingTrigger = new TreeSet<>(Comparator.comparing(NodeState::rank).thenComparing(NodeState::id));
     private final List<NodeState> nodesTriggeredInWave = new ArrayList<>();
@@ -140,12 +140,12 @@ public class Graph extends BaseIdempotentCloseable {
     }
 
     private boolean setWaveIdInMdc() {
-        MDC.put("waveId", '[' + Integer.toString(waveId) + ']');
+        ThreadContext.put("waveId", '[' + Integer.toString(waveId) + ']');
         return true;
     }
 
     private static boolean clearWaveIdInMdc() {
-        MDC.remove("waveId");
+        ThreadContext.remove("waveId");
         return true;
     }
 

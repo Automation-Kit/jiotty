@@ -9,8 +9,8 @@ import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -20,7 +20,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.connector.google.maps.Bindings.ApiKey;
 
 public final class GeocodingServiceImpl extends BaseLifecycleComponent implements GeocodingService {
-    private static final Logger logger = LoggerFactory.getLogger(GeocodingServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(GeocodingServiceImpl.class);
 
     private final String apiKey;
     private final AtomicInteger reqIdGen = new AtomicInteger();

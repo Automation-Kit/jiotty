@@ -12,8 +12,8 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -43,7 +43,7 @@ import static net.yudichev.jiotty.connector.shelly.ShellyPlugImpl.SampleAggregat
 
 /// <a href="https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/Switch">Guide</a>
 class ShellyPlugImpl extends BaseLifecycleComponent implements ShellyPlug {
-    private static final Logger logger = LoggerFactory.getLogger(ShellyPlugImpl.class);
+    private static final Logger logger = LogManager.getLogger(ShellyPlugImpl.class);
 
     private final String host;
     private final ExecutorFactory executorFactory;

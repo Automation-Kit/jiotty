@@ -6,8 +6,8 @@ import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.connector.mqtt.Mqtt;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -23,7 +23,7 @@ import static net.yudichev.jiotty.connector.tesla.fleet.TeslaTelemetry.BrokerCon
 
 /// Feeds data from the MQTT dispatcher of the [Tesla Fleet Telemetry Server](https://github.com/teslamotors/fleet-telemetry)
 public final class MqttTeslaTelemetry implements TeslaTelemetry {
-    private static final Logger logger = LoggerFactory.getLogger(MqttTeslaTelemetry.class);
+    private static final Logger logger = LogManager.getLogger(MqttTeslaTelemetry.class);
 
     private final Mqtt mqtt;
     private final String vin;

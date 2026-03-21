@@ -5,8 +5,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.rest.RestClients;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -18,7 +18,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 public final class AgilePredictPriceServiceImpl extends BaseLifecycleComponent implements AgilePredictPriceService {
-    private static final Logger logger = LoggerFactory.getLogger(AgilePredictPriceServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(AgilePredictPriceServiceImpl.class);
     private final AtomicInteger requestIdGenerator = new AtomicInteger();
     private OkHttpClient client;
 

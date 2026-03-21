@@ -9,8 +9,8 @@ import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -35,7 +35,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static okhttp3.HttpUrl.parse;
 
 final class WeatherServiceImpl extends BaseLifecycleComponent implements WeatherService {
-    private static final Logger logger = LoggerFactory.getLogger(WeatherServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(WeatherServiceImpl.class);
 
     private static final String API_BASE = "https://api.weatherapi.com/v1";
 

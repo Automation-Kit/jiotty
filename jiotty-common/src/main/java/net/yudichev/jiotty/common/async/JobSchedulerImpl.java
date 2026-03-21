@@ -6,8 +6,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Runnables;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -24,7 +24,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeIfNotNull;
 
 public final class JobSchedulerImpl extends BaseLifecycleComponent implements JobScheduler {
-    private static final Logger logger = LoggerFactory.getLogger(JobSchedulerImpl.class);
+    private static final Logger logger = LogManager.getLogger(JobSchedulerImpl.class);
 
     private final ExecutorFactory executorFactory;
     private final CurrentDateTimeProvider currentDateTimeProvider;

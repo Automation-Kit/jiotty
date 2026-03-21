@@ -2,7 +2,7 @@ package net.yudichev.jiotty.connector.google.photos;
 
 import com.google.api.gax.paging.Page;
 import com.google.api.gax.paging.PagedListResponse;
-import org.slf4j.Logger;
+import org.apache.logging.log4j.Logger;
 
 import java.util.Optional;
 import java.util.function.Function;

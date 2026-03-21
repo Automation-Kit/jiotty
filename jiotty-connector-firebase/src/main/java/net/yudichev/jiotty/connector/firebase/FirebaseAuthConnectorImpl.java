@@ -17,8 +17,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.user.persistence.UserIdentity;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -42,7 +42,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent implements FirebaseAuthConnector {
-    private static final Logger logger = LoggerFactory.getLogger(FirebaseAuthConnectorImpl.class);
+    private static final Logger logger = LogManager.getLogger(FirebaseAuthConnectorImpl.class);
     /// Firebase Auth provider ID used for email/password sign-in.
     ///
     /// The Admin SDK does not expose a constant for this value.

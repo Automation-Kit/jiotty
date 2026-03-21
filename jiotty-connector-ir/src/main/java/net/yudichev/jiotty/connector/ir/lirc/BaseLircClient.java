@@ -24,8 +24,8 @@ import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.PackagePrivateImmutablesStyle;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -52,7 +52,7 @@ abstract class BaseLircClient extends BaseLifecycleComponent implements LircClie
     public static final Charset CHARSET = StandardCharsets.US_ASCII;
     private static final Pattern COMMAND_LIST_CLEANUP_PATTERN = Pattern.compile("\\S*\\s+");
 
-    protected final Logger logger = LoggerFactory.getLogger(getClass());
+    protected final Logger logger = LogManager.getLogger(getClass());
     private final ExecutorFactory executorFactory;
     private final RetryableOperationExecutor heartbeatRetryableOperationExecutor;
     private final RetryableOperationExecutor commandRetryableOperationExecutor;
@@ -186,7 +186,7 @@ abstract class BaseLircClient extends BaseLifecycleComponent implements LircClie
 
     protected abstract String connectionName();
 
-    @SuppressWarnings({"OverlyComplexMethod", "OverlyLongMethod", "NestedSwitchStatement"}) // reads OK
+    @SuppressWarnings({"OverlyLongMethod", "NestedSwitchStatement"}) // reads OK
     private CompletableFuture<List<String>> sendCommand(String command) {
         checkStarted();
         return commandRetryableOperationExecutor.withBackOffAndRetry("lirc: " + command, () -> supplyAsync(() -> {

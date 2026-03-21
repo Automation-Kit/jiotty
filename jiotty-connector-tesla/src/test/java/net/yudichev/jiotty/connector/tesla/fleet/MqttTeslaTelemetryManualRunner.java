@@ -11,8 +11,8 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.net.SslCustomisationModule;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.connector.mqtt.MqttModule;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -25,7 +25,7 @@ import static net.yudichev.jiotty.common.net.SslCustomisation.TrustStore;
 
 final class MqttTeslaTelemetryManualRunner {
 
-    private static final Logger log = LoggerFactory.getLogger(MqttTeslaTelemetryManualRunner.class);
+    private static final Logger log = LogManager.getLogger(MqttTeslaTelemetryManualRunner.class);
     private static String vin;
 
     static void main(String[] args) {

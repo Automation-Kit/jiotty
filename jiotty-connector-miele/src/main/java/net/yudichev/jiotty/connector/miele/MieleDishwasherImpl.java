@@ -25,8 +25,8 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -63,7 +63,7 @@ import static net.yudichev.jiotty.connector.miele.MieleStreamDisconnected.STREAM
 
 /// <a href="https://www.miele.com/developer/">Guide</a>
 final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleDishwasher {
-    private static final Logger logger = LoggerFactory.getLogger(MieleDishwasherImpl.class);
+    private static final Logger logger = LogManager.getLogger(MieleDishwasherImpl.class);
 
     private final String baseUrl;
     private final String deviceId;

@@ -4,7 +4,7 @@ import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import org.slf4j.MDC;
+import org.apache.logging.log4j.ThreadContext;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -164,7 +164,7 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
                       "time cannot go backward from %s to %s", this.currentTime, currentTime);
         this.currentTime = checkNotNull(currentTime);
         if (globalMdc) {
-            MDC.put("current.time", currentTime.toString());
+            ThreadContext.put("current.time", currentTime.toString());
         }
     }
 
@@ -189,10 +189,10 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
             }
             String oldCurrentTimeAttr = null;
             if (mdc) {
-                oldCurrentTimeAttr = MDC.get("current.time");
-                MDC.put("thread", executor.getThreadNameBase());
-                MDC.put("task.due", due.toString());
-                MDC.put("current.time", currentInstant().toString());
+                oldCurrentTimeAttr = ThreadContext.get("current.time");
+                ThreadContext.put("thread", executor.getThreadNameBase());
+                ThreadContext.put("task.due", due.toString());
+                ThreadContext.put("current.time", currentInstant().toString());
             }
             currentTaskTime = due;
             try {
@@ -201,12 +201,12 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
                 currentTaskTime = null;
                 if (mdc) {
                     if (oldCurrentTimeAttr == null) {
-                        MDC.remove("current.time");
+                        ThreadContext.remove("current.time");
                     } else {
-                        MDC.put("current.time", oldCurrentTimeAttr);
+                        ThreadContext.put("current.time", oldCurrentTimeAttr);
                     }
-                    MDC.remove("task.due");
-                    MDC.remove("thread");
+                    ThreadContext.remove("task.due");
+                    ThreadContext.remove("thread");
                 }
             }
         }

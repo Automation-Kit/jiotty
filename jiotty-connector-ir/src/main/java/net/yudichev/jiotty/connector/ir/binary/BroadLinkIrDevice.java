@@ -7,8 +7,8 @@ import com.github.mob41.blapi.pkt.cmd.rm2.SendDataCmdPayload;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -22,7 +22,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 final class BroadLinkIrDevice extends BaseLifecycleComponent implements IrDevice {
-    private static final Logger logger = LoggerFactory.getLogger(BroadLinkIrDevice.class);
+    private static final Logger logger = LogManager.getLogger(BroadLinkIrDevice.class);
     private static final int INIT_ATTEMPTS = 3;
     private final String host;
     private final String macAddress;

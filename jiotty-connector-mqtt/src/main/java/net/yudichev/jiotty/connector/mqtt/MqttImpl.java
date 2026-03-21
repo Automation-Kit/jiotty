@@ -17,6 +17,8 @@ import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.lang.backoff.NanoClock;
 import net.yudichev.jiotty.common.lang.backoff.SynchronizedBackOff;
 import net.yudichev.jiotty.common.lang.throttling.ThresholdThrottlingConsumerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.eclipse.paho.client.mqttv3.IMqttActionListener;
 import org.eclipse.paho.client.mqttv3.IMqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
@@ -26,8 +28,6 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.MqttTopic;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -60,7 +60,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.Runnables.guarded;
 
 class MqttImpl extends BaseLifecycleComponent implements Mqtt {
-    private static final Logger logger = LoggerFactory.getLogger(MqttImpl.class);
+    private static final Logger logger = LogManager.getLogger(MqttImpl.class);
     private final ThresholdThrottlingConsumerFactory<Throwable> throttledLoggerFactory;
     private final MqttConnectOptions mqttConnectOptions;
     private final Map<String, MqttMessage> lastReceivedMessageByTopic = new HashMap<>();

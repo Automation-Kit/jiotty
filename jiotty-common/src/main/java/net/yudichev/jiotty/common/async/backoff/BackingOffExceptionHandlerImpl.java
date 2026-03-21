@@ -4,8 +4,8 @@ import com.google.common.base.MoreObjects;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -21,7 +21,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 final class BackingOffExceptionHandlerImpl implements BackingOffExceptionHandler {
-    private static final Logger logger = LoggerFactory.getLogger(BackingOffExceptionHandlerImpl.class);
+    private static final Logger logger = LogManager.getLogger(BackingOffExceptionHandlerImpl.class);
     private final BackOff backOff;
     private final Predicate<? super Throwable> retryableExceptionPredicate;
 
@@ -43,7 +43,7 @@ final class BackingOffExceptionHandlerImpl implements BackingOffExceptionHandler
                                                 //noinspection StringConcatenationMissingWhitespace
                                                 throw new IllegalStateException(
                                                         "Operation " + operationName + " is being retried for too long (" + backOff.getMaxElapsedTimeMillis()
-                                                                + "ms) - giving up, last error included", throwable);
+                                                        + "ms) - giving up, last error included", throwable);
                                             }
                                             logger.debug("Retryable exception performing operation '{}', backing off by waiting for {}ms",
                                                          operationName, backOffMs, throwable);

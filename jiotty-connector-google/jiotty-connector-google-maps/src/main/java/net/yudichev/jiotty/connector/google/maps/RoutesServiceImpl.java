@@ -24,8 +24,8 @@ import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Either;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -41,7 +41,7 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static net.yudichev.jiotty.connector.google.maps.Bindings.ApiKey;
 
 public final class RoutesServiceImpl extends BaseLifecycleComponent implements RoutesService {
-    private static final Logger logger = LoggerFactory.getLogger(RoutesServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(RoutesServiceImpl.class);
     private static final Duration CALL_DEADLINE = Duration.ofSeconds(10);
     private final AtomicInteger requestIdGen = new AtomicInteger();
     private final String apiKey;

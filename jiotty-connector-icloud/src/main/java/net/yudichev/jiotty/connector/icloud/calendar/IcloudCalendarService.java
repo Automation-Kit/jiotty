@@ -26,8 +26,8 @@ import org.apache.jackrabbit.webdav.property.DavProperty;
 import org.apache.jackrabbit.webdav.property.DavPropertyName;
 import org.apache.jackrabbit.webdav.property.DavPropertyNameSet;
 import org.apache.jackrabbit.webdav.property.DavPropertySet;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.w3c.dom.Node;
 
 import java.io.IOException;
@@ -47,7 +47,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 
 final class IcloudCalendarService extends BaseLifecycleComponent implements CalendarService {
-    private static final Logger logger = LoggerFactory.getLogger(IcloudCalendarService.class);
+    private static final Logger logger = LogManager.getLogger(IcloudCalendarService.class);
 
     private static final String ICLOUD_BASE = "https://caldav.icloud.com";
     private static final String URI_WELL_KNONWN_CALDAV = ICLOUD_BASE + "/.well-known/caldav";
@@ -130,8 +130,8 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
 
     private static boolean isCalendar(DavProperty<?> resourceTypeProp) {
         return resourceTypeProp != null
-                && resourceTypeProp.getValue() instanceof Collection<?> collection
-                && collection.stream().anyMatch(node -> "calendar".equals(((Node) node).getNodeName()));
+               && resourceTypeProp.getValue() instanceof Collection<?> collection
+               && collection.stream().anyMatch(node -> "calendar".equals(((Node) node).getNodeName()));
     }
 
     private static String getCalendarSetHomeUrl(CalDAV4JMethodFactory methodFactory, HttpClient httpClient) throws IOException, DavException {

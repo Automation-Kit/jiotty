@@ -12,8 +12,8 @@ import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
 import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -35,7 +35,7 @@ import static net.yudichev.jiotty.energy.Bindings.Dependency;
 import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 
 final class OctopusEnergyPriceServiceImpl extends BaseLifecycleComponent implements EnergyPriceService {
-    private static final Logger logger = LoggerFactory.getLogger(OctopusEnergyPriceServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(OctopusEnergyPriceServiceImpl.class);
 
     private static final long PRICE_PERIOD_LENGTH_MIN = 30;
     private static final int PRICE_PERIOD_LENGTH_SEC = toIntExact(TimeUnit.MINUTES.toSeconds(PRICE_PERIOD_LENGTH_MIN));

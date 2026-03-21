@@ -5,13 +5,13 @@ import net.yudichev.jiotty.common.app.Application;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
 final class LocalGeocodingServiceRunner {
-    private static final Logger logger = LoggerFactory.getLogger(LocalGeocodingServiceRunner.class);
+    private static final Logger logger = LogManager.getLogger(LocalGeocodingServiceRunner.class);
 
     static void main(String[] args) {
         Application.builder()

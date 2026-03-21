@@ -7,8 +7,8 @@ import io.javalin.http.HandlerType;
 import io.javalin.router.Endpoint;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -23,7 +23,7 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 final class JavalinRestServer extends BaseLifecycleComponent implements RestServer {
-    private static final Logger logger = LoggerFactory.getLogger(JavalinRestServer.class);
+    private static final Logger logger = LogManager.getLogger(JavalinRestServer.class);
 
     private final int listenPort;
     private final List<Endpoint> pendingRoutes = new ArrayList<>();

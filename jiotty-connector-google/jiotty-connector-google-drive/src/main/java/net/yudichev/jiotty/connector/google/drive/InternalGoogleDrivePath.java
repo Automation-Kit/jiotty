@@ -5,8 +5,8 @@ import com.google.api.services.drive.Drive;
 import com.google.api.services.drive.model.File;
 import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableList;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.Optional;
@@ -20,7 +20,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 final class InternalGoogleDrivePath implements GoogleDrivePath {
     private static final String MIME_TYPE_FOLDER = "application/vnd.google-apps.folder";
 
-    private static final Logger logger = LoggerFactory.getLogger(InternalGoogleDrivePath.class);
+    private static final Logger logger = LogManager.getLogger(InternalGoogleDrivePath.class);
 
     private final String id;
     private final List<String> path;
@@ -38,21 +38,21 @@ final class InternalGoogleDrivePath implements GoogleDrivePath {
     public CompletableFuture<GoogleDrivePath> createSubFolder(String childFolderName) {
         logger.debug("createSubFolder {}, {}", this, childFolderName);
         return CompletableFuture.<GoogleDrivePath>supplyAsync(
-                () -> getAsUnchecked(() ->
-                        new InternalGoogleDrivePath(drive, drive.files().create(new File()
-                                .setName(childFolderName)
-                                .setParents(ImmutableList.of(id))
-                                .setMimeType(MIME_TYPE_FOLDER))
-                                .setFields("id")
-                                .execute()
-                                .getId(),
-                                ImmutableList.<String>builder()
-                                        .addAll(path)
-                                        .add(childFolderName)
-                                        .build(), executor)),
-                executor)
-                .whenComplete((newSubFolder, throwable) ->
-                        logger.debug("createSubFolder done: {}", newSubFolder, throwable));
+                                        () -> getAsUnchecked(() ->
+                                                                     new InternalGoogleDrivePath(drive, drive.files().create(new File()
+                                                                                                                                     .setName(childFolderName)
+                                                                                                                                     .setParents(ImmutableList.of(id))
+                                                                                                                                     .setMimeType(MIME_TYPE_FOLDER))
+                                                                                                             .setFields("id")
+                                                                                                             .execute()
+                                                                                                             .getId(),
+                                                                                                 ImmutableList.<String>builder()
+                                                                                                              .addAll(path)
+                                                                                                              .add(childFolderName)
+                                                                                                              .build(), executor)),
+                                        executor)
+                                .whenComplete((newSubFolder, throwable) ->
+                                                      logger.debug("createSubFolder done: {}", newSubFolder, throwable));
     }
 
     @Override
@@ -60,21 +60,21 @@ final class InternalGoogleDrivePath implements GoogleDrivePath {
         return supplyAsync(
                 () -> getAsUnchecked(() -> {
                     var id = drive.files().create(
-                            new File()
-                                    .setName(filename)
-                                    .setParents(ImmutableList.of(this.id)),
-                            new ByteArrayContent(mimeType, fileData))
-                            .setFields("id")
-                            .execute()
-                            .getId();
+                                          new File()
+                                                  .setName(filename)
+                                                  .setParents(ImmutableList.of(this.id)),
+                                          new ByteArrayContent(mimeType, fileData))
+                                  .setFields("id")
+                                  .execute()
+                                  .getId();
                     logger.debug("Created {}/{}, id {}", path, filename, id);
                     return new InternalGoogleDrivePath(
                             drive,
                             id,
                             ImmutableList.<String>builder()
-                                    .addAll(path)
-                                    .add(filename)
-                                    .build(), executor);
+                                         .addAll(path)
+                                         .add(filename)
+                                         .build(), executor);
                 }),
                 executor);
     }
@@ -96,12 +96,12 @@ final class InternalGoogleDrivePath implements GoogleDrivePath {
                     for (String pathElement : path) {
                         logger.debug("looking for folder {} with parentId {}", pathElement, parentId);
                         List<File> matchingFiles = drive.files().list()
-                                .setQ(String.format("'%s' in parents and trashed=false and name = '%s' and mimeType = '%s'",
-                                        parentId,
-                                        pathElement,
-                                        MIME_TYPE_FOLDER))
-                                .execute()
-                                .getFiles();
+                                                        .setQ(String.format("'%s' in parents and trashed=false and name = '%s' and mimeType = '%s'",
+                                                                            parentId,
+                                                                            pathElement,
+                                                                            MIME_TYPE_FOLDER))
+                                                        .execute()
+                                                        .getFiles();
                         if (matchingFiles.isEmpty()) {
                             logger.debug("findFolderByPath: could not find folder {} with parentId {}, returning empty", pathElement, parentId);
                             return Optional.empty();
@@ -110,9 +110,9 @@ final class InternalGoogleDrivePath implements GoogleDrivePath {
                         logger.debug("Found folder {} folder Id {}", pathElement, parentId);
                     }
                     return Optional.of(new InternalGoogleDrivePath(drive, parentId, ImmutableList.<String>builder()
-                            .addAll(this.path)
-                            .addAll(path)
-                            .build(), executor));
+                                                                                                 .addAll(this.path)
+                                                                                                 .addAll(path)
+                                                                                                 .build(), executor));
                 }),
                 executor);
     }
@@ -120,8 +120,8 @@ final class InternalGoogleDrivePath implements GoogleDrivePath {
     @Override
     public String toString() {
         return MoreObjects.toStringHelper(this)
-                .add("id", id)
-                .add("path", path)
-                .toString();
+                          .add("id", id)
+                          .add("path", path)
+                          .toString();
     }
 }

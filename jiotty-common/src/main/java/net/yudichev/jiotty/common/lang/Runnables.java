@@ -1,6 +1,6 @@
 package net.yudichev.jiotty.common.lang;
 
-import org.slf4j.Logger;
+import org.apache.logging.log4j.Logger;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 

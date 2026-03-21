@@ -12,8 +12,8 @@ import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -32,7 +32,7 @@ import static net.yudichev.jiotty.connector.slide.Bindings.DeviceCode;
 import static net.yudichev.jiotty.connector.slide.Bindings.DeviceHost;
 
 final class LocalSlideService extends BaseLifecycleComponent implements SlideService {
-    private static final Logger logger = LoggerFactory.getLogger(LocalSlideService.class);
+    private static final Logger logger = LogManager.getLogger(LocalSlideService.class);
 
     private final String getInfoUrl;
     private final String setPostUrl;

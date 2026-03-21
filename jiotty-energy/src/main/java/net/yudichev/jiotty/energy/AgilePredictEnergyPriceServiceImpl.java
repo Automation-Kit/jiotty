@@ -10,8 +10,8 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPrice;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPriceService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -29,7 +29,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 
 final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent implements EnergyPriceService {
-    private static final Logger logger = LoggerFactory.getLogger(AgilePredictEnergyPriceServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(AgilePredictEnergyPriceServiceImpl.class);
 
     private static final long PRICE_PERIOD_LENGTH_MIN = 30;
     private static final int PRICE_PERIOD_LENGTH_SEC = toIntExact(TimeUnit.MINUTES.toSeconds(PRICE_PERIOD_LENGTH_MIN));

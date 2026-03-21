@@ -16,8 +16,8 @@ import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -51,7 +51,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OAuth2TokenManager {
-    private static final Logger logger = LoggerFactory.getLogger(OAuth2TokenManagerImpl.class);
+    private static final Logger logger = LogManager.getLogger(OAuth2TokenManagerImpl.class);
 
     private final ExecutorFactory executorFactory;
     private final VarStore varStore;

@@ -8,8 +8,8 @@ import net.yudichev.jiotty.common.lang.CompletableFutures;
 import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -26,7 +26,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 final class PushoverUserAlerter extends BaseLifecycleComponent implements UserAlerter {
-    private static final Logger logger = LoggerFactory.getLogger(PushoverUserAlerter.class);
+    private static final Logger logger = LogManager.getLogger(PushoverUserAlerter.class);
 
     private final String apiToken;
     private OkHttpClient httpClient;

@@ -4,8 +4,8 @@ import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -18,7 +18,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static okhttp3.HttpUrl.parse;
 
 final class SunriseSunsetTimesImpl extends BaseLifecycleComponent implements SunriseSunsetTimes {
-    private static final Logger logger = LoggerFactory.getLogger(SunriseSunsetTimesImpl.class);
+    private static final Logger logger = LogManager.getLogger(SunriseSunsetTimesImpl.class);
 
     private static final String API_URL = "https://api.sunrise-sunset.org/json";
 

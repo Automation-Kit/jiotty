@@ -16,8 +16,8 @@ import net.fortuna.ical4j.model.component.VEvent;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
 import org.apache.http.impl.client.CloseableHttpClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.w3c.dom.Document;
 
 import javax.xml.transform.OutputKeys;
@@ -35,7 +35,7 @@ import java.util.concurrent.CompletableFuture;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 final class IcloudCalendar implements Calendar {
-    private static final Logger logger = LoggerFactory.getLogger(IcloudCalendar.class);
+    private static final Logger logger = LogManager.getLogger(IcloudCalendar.class);
 
     private final String id;
     private final String name;

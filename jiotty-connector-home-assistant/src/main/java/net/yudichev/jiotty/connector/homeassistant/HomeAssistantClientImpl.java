@@ -13,8 +13,8 @@ import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -37,7 +37,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 
 public final class HomeAssistantClientImpl extends BaseLifecycleComponent implements HomeAssistantClient {
-    private static final Logger logger = LoggerFactory.getLogger(HomeAssistantClientImpl.class);
+    private static final Logger logger = LogManager.getLogger(HomeAssistantClientImpl.class);
 
     private final String baseUrl;
     private final String accessToken;
@@ -128,7 +128,7 @@ public final class HomeAssistantClientImpl extends BaseLifecycleComponent implem
 
     private <T> CompletableFuture<T> callAndLogResponse(Request request, long requestId, TypeToken<T> responseType) {
         return whenStartedAndNotLifecycling(
-                () -> RestClients.<T>call(client.newCall(request), responseType)
+                () -> RestClients.call(client.newCall(request), responseType)
                                  .whenComplete((o, throwable) -> logger.debug("[{}] Response {}", requestId, o, throwable)));
     }
 
@@ -262,8 +262,8 @@ public final class HomeAssistantClientImpl extends BaseLifecycleComponent implem
         @Override
         public CompletableFuture<List<HALogbookEntry>> get(String entityId, Optional<Instant> from, Optional<Instant> to) {
             return invokeGet("logbook" + from.map(t -> "/" + t).orElse("")
-                                     + "?entity=" + URLEncoder.encode(entityId, UTF_8)
-                                     + to.map(t -> "&end_time=" + t).orElse(""),
+                             + "?entity=" + URLEncoder.encode(entityId, UTF_8)
+                             + to.map(t -> "&end_time=" + t).orElse(""),
                              new TypeToken<>() {});
         }
     }
@@ -274,18 +274,18 @@ public final class HomeAssistantClientImpl extends BaseLifecycleComponent implem
         public CompletableFuture<Map<String, List<HAHistoryEntry>>> get(List<String> entityIds, Optional<Instant> from, Optional<Instant> to) {
             checkArgument(!entityIds.isEmpty(), "entityIds mus not be empty");
             return invokeGet("history/period" + from.map(t -> "/" + t).orElse("")
-                                     + "?filter_entity_id=" + URLEncoder.encode(String.join(",", entityIds), UTF_8)
-                                     + "&minimal_response&no_attributes"
-                                     + to.map(t -> "&end_time=" + t).orElse(""),
+                             + "?filter_entity_id=" + URLEncoder.encode(String.join(",", entityIds), UTF_8)
+                             + "&minimal_response&no_attributes"
+                             + to.map(t -> "&end_time=" + t).orElse(""),
                              new TypeToken<List<List<HAHistoryEntry>>>() {})
                     .thenApply(lists -> {
                         var resultBuilder = ImmutableMap.<String, List<HAHistoryEntry>>builderWithExpectedSize(lists.size());
                         for (List<HAHistoryEntry> entityList : lists) {
                             String entityId = entityList.isEmpty()
-                                    ? null
-                                    : entityList.getFirst()
-                                                .entityId()
-                                                .orElseThrow(() -> new RuntimeException("Unexpectedly missing entityId on the first history element"));
+                                              ? null
+                                              : entityList.getFirst()
+                                                          .entityId()
+                                                          .orElseThrow(() -> new RuntimeException("Unexpectedly missing entityId on the first history element"));
                             if (entityId != null) {
                                 resultBuilder.put(entityId, entityList);
                             }

@@ -20,8 +20,8 @@ import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -56,7 +56,7 @@ import static net.yudichev.jiotty.connector.tplinksmartplug.Bindings.Dependency;
 import static net.yudichev.jiotty.connector.tplinksmartplug.Bindings.Name;
 
 final class CloudTpLinkSmartPlug extends BaseLifecycleComponent implements Appliance {
-    private static final Logger logger = LoggerFactory.getLogger(CloudTpLinkSmartPlug.class);
+    private static final Logger logger = LogManager.getLogger(CloudTpLinkSmartPlug.class);
     private static final Duration TOKEN_REFRESH_PERIOD = ofDays(14);
     private static final Map<Command<?>, Integer> COMMAND_TO_STATE = ImmutableMap.of(
             ON, 1,

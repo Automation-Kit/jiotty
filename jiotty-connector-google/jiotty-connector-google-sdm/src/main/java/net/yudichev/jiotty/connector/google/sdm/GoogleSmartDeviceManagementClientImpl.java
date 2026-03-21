@@ -4,8 +4,8 @@ import com.google.api.services.smartdevicemanagement.v1.SmartDeviceManagement;
 import com.google.api.services.smartdevicemanagement.v1.model.GoogleHomeEnterpriseSdmV1ListDevicesResponse;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -22,7 +22,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 final class GoogleSmartDeviceManagementClientImpl implements GoogleSmartDeviceManagementClient {
-    private static final Logger logger = LoggerFactory.getLogger(GoogleSmartDeviceManagementClientImpl.class);
+    private static final Logger logger = LogManager.getLogger(GoogleSmartDeviceManagementClientImpl.class);
 
     private final SmartDeviceManagement smartDeviceManagement;
     private final String projectId;

@@ -6,8 +6,8 @@ import net.yudichev.jiotty.common.app.Application;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -53,7 +53,7 @@ final class ManualKeyStoreAccessRunner {
 
     @SuppressWarnings("CallToSystemExit")
     private static class Runner extends BaseLifecycleComponent {
-        private static final Logger logger = LoggerFactory.getLogger(Runner.class);
+        private static final Logger logger = LogManager.getLogger(Runner.class);
 
         @Inject
         public Runner(KeyStoreAccess keyStoreAccess, @Alias String injectedValue) {

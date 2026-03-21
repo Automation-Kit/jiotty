@@ -4,8 +4,8 @@ import com.google.common.base.Verify;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.util.AbstractList;
@@ -18,7 +18,7 @@ import static net.yudichev.jiotty.energy.Bindings.AgilePredict;
 import static net.yudichev.jiotty.energy.Bindings.Octopus;
 
 final class RealAndPredictedPriceService implements EnergyPriceService {
-    private static final Logger logger = LoggerFactory.getLogger(RealAndPredictedPriceService.class);
+    private static final Logger logger = LogManager.getLogger(RealAndPredictedPriceService.class);
 
     private final EnergyPriceService realPricesService;
     private final EnergyPriceService predictedPricesService;

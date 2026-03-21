@@ -9,8 +9,8 @@ import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -28,7 +28,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 final class NestThermostatImpl extends BaseLifecycleComponent implements NestThermostat {
-    private static final Logger logger = LoggerFactory.getLogger(NestThermostatImpl.class);
+    private static final Logger logger = LogManager.getLogger(NestThermostatImpl.class);
 
     private final String hvacModeUrl;
     private final String authorization;

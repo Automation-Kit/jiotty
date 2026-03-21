@@ -9,8 +9,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.connector.google.common.GoogleApiAuthSettings;
 import net.yudichev.jiotty.connector.google.common.GoogleAuthorizationModule;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -21,7 +21,7 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 final class GoogleAssistantLocalRunner {
-    private static final Logger logger = LoggerFactory.getLogger(GoogleAssistantLocalRunner.class);
+    private static final Logger logger = LogManager.getLogger(GoogleAssistantLocalRunner.class);
 
     static void main(String[] args) {
         Application.builder()

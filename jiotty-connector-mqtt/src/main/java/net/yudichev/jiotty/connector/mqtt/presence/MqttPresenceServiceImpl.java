@@ -8,8 +8,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.connector.mqtt.Mqtt;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -24,7 +24,7 @@ import static net.yudichev.jiotty.connector.mqtt.presence.MqttPresenceServiceMod
 import static net.yudichev.jiotty.connector.mqtt.presence.MqttPresenceServiceModule.Topic;
 
 final class MqttPresenceServiceImpl extends BaseLifecycleComponent implements MqttPresenceService {
-    private static final Logger logger = LoggerFactory.getLogger(MqttPresenceServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(MqttPresenceServiceImpl.class);
     private static final Duration PRESENCE_DETECTION_TIMEOUT = Duration.ofMinutes(3);
 
     private final Mqtt mqtt;

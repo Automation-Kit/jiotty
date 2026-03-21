@@ -8,8 +8,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -25,7 +25,7 @@ import static net.yudichev.jiotty.persistence.domain.PersistenceDomainModule.Dep
 
 @SuppressWarnings("JDBCPrepareStatementWithNonConstantString")
 public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent implements PersistenceDomainService {
-    private static final Logger logger = LoggerFactory.getLogger(PersistenceDomainServiceImpl.class);
+    private static final Logger logger = LogManager.getLogger(PersistenceDomainServiceImpl.class);
     private static final String META_TABLE = "domain_meta";
     private static final String CREATE_META_TABLE_SQL =
             "CREATE TABLE IF NOT EXISTS " + META_TABLE + " (domain_name text primary key, schema_version integer);";

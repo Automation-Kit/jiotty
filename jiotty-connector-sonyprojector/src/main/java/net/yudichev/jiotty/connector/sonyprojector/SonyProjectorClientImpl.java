@@ -5,8 +5,8 @@ import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -34,7 +34,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 public final class SonyProjectorClientImpl extends BaseLifecycleComponent implements SonyProjectorClient {
-    private static final Logger logger = LoggerFactory.getLogger(SonyProjectorClientImpl.class);
+    private static final Logger logger = LogManager.getLogger(SonyProjectorClientImpl.class);
 
     private static final Charset CHARSET = StandardCharsets.US_ASCII;
     private static final String COMMAND_TERMINATOR = "\r\n";

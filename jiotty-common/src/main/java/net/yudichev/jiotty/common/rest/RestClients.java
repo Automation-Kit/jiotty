@@ -9,8 +9,8 @@ import okhttp3.Callback;
 import okhttp3.OkHttpClient;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -24,7 +24,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 
 public final class RestClients {
-    private static final Logger logger = LoggerFactory.getLogger(RestClients.class);
+    private static final Logger logger = LogManager.getLogger(RestClients.class);
 
     private static final int DEFAULT_CALL_RETRY_COUNT = 3;
     private static final Duration DEFAULT_HTTP_TIMEOUT = Duration.ofSeconds(60);

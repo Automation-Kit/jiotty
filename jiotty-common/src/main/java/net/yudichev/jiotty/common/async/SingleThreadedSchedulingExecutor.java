@@ -8,8 +8,8 @@ import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Runnables;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.util.Set;
@@ -23,7 +23,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 public final class SingleThreadedSchedulingExecutor implements SchedulingExecutor {
-    private static final Logger logger = LoggerFactory.getLogger(SingleThreadedSchedulingExecutor.class);
+    private static final Logger logger = LogManager.getLogger(SingleThreadedSchedulingExecutor.class);
 
     private final Set<Closeable> scheduleHandles = Sets.newConcurrentHashSet();
     private final ScheduledExecutorService executor;

@@ -6,10 +6,10 @@ import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.PackagePrivateImmutablesStyle;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -26,7 +26,7 @@ import static net.yudichev.jiotty.common.lang.Locks.inLock;
 
 public final class LivenessChecker extends BaseIdempotentCloseable implements Consumer<Object> {
     private static final int RUN_HISTORY_SIZE = 20;
-    private static final Logger logger = LoggerFactory.getLogger(LivenessChecker.class);
+    private static final Logger logger = LogManager.getLogger(LivenessChecker.class);
     private final Lock lock = new ReentrantLock();
     private final CurrentDateTimeProvider currentDateTimeProvider;
     private final Duration dataMissingThreshold;

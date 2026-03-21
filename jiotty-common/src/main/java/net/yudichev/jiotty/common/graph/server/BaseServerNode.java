@@ -4,8 +4,8 @@ import com.google.errorprone.annotations.OverridingMethodsMustInvokeSuper;
 import net.yudichev.jiotty.common.graph.BaseNode;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -16,7 +16,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 public abstract class BaseServerNode extends BaseNode implements ServerNode {
-    protected final Logger logger = LoggerFactory.getLogger(getClass());
+    protected final Logger logger = LogManager.getLogger(getClass());
     protected final GraphRunner runner;
     private final String name;
 

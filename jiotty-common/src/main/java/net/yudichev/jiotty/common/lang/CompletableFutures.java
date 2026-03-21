@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.common.lang;
 
 import com.google.common.collect.ImmutableList;
-import org.slf4j.Logger;
+import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -84,7 +84,7 @@ public final class CompletableFutures {
 
     public static <T, R> Collector<T, ?, CompletableFuture<List<R>>> toFutureOfListChaining(Function<T, CompletableFuture<R>> operation) {
         Object builderMutex = new Object();
-        return Collector.<T, FutureChainBuilder<T, R>, CompletableFuture<List<R>>>of(
+        return Collector.of(
                 () -> new FutureChainBuilder<>(operation, builderMutex),
                 FutureChainBuilder::accept,
                 FutureChainBuilder::combinedWith,

@@ -8,8 +8,8 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.FriendlyDurationFormat;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -26,7 +26,7 @@ public final class InitConfigurationOptionManager<T> extends BaseLifecycleCompon
     /// Amount of time after the option last changed before the application is restarted.
     static final Duration DEBOUNCE_TIME_BEFORE_RESTART = Duration.ofSeconds(5);
     private static final String DEBOUNCE_TIME_HUMAN_READABLE = FriendlyDurationFormat.formatHuman(DEBOUNCE_TIME_BEFORE_RESTART);
-    private static final Logger logger = LoggerFactory.getLogger(InitConfigurationOptionManager.class);
+    private static final Logger logger = LogManager.getLogger(InitConfigurationOptionManager.class);
 
     private final UIServer uiServer;
     private final ExecutorFactory executorFactory;

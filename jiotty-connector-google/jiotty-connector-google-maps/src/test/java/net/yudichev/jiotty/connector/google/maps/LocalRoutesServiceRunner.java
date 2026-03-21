@@ -6,8 +6,8 @@ import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.lang.Either;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Instant;
 
@@ -15,7 +15,7 @@ import static java.time.temporal.ChronoUnit.HOURS;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
 final class LocalRoutesServiceRunner {
-    private static final Logger logger = LoggerFactory.getLogger(LocalRoutesServiceRunner.class);
+    private static final Logger logger = LogManager.getLogger(LocalRoutesServiceRunner.class);
 
     static void main(String[] args) {
         Application.builder()

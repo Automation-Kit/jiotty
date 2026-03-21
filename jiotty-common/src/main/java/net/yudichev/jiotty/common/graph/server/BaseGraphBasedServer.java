@@ -8,8 +8,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -29,7 +29,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     private static final int PANIC_COUNT_BEFORE_ALERT = 10;
 
     protected final CurrentDateTimeProvider timeProvider;
-    private final Logger logger = LoggerFactory.getLogger(getClass());
+    private final Logger logger = LogManager.getLogger(getClass());
     private final Provider<SchedulingExecutor> executorProvider;
     private final List<ServerNode> nodes = new ArrayList<>();
     private final ExponentialBackOff reinitBackoff;
