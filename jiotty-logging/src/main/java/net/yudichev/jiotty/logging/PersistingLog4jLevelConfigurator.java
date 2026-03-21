@@ -11,7 +11,8 @@ import net.yudichev.jiotty.common.varstore.VarStore;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.core.config.Configurator;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
 
@@ -84,13 +85,13 @@ public final class PersistingLog4jLevelConfigurator extends BaseLifecycleCompone
     }
 
     private void resetAllLoggingLevels() {
-        levelsByLoggerName.keySet().forEach(name -> Configurator.setLevel(name, (Level) null));
+        levelsByLoggerName.keySet().forEach(name -> setLog4jLevel(name, null));
         log.info("Reset all logging levels");
     }
 
     private void doSetLoggingLevel(String loggerName, String logLevel) {
         var level = Level.toLevel(logLevel);
-        Configurator.setLevel(loggerName, level);
+        setLog4jLevel(loggerName, level);
         String oldLevel = levelsByLoggerName.put(loggerName, level.name());
         log.info("Set logger {} {} -> {}{}",
                  loggerName, oldLevel, level, level.name().equals(logLevel) ? "" : "(invalid level specified: " + logLevel + ")");
@@ -102,12 +103,24 @@ public final class PersistingLog4jLevelConfigurator extends BaseLifecycleCompone
         synchronized (levelsByLoggerName) {
             String oldLevel = levelsByLoggerName.remove(loggerName);
             if (oldLevel != null) {
-                Configurator.setLevel(loggerName, (Level) null);
+                setLog4jLevel(loggerName, null);
                 log.info("Reset logger {} (was set to {})", loggerName, oldLevel);
             }
             loggerLevels = LoggerLevels.of(levelsByLoggerName);
         }
         varStore.saveValue(storeKey, loggerLevels);
+    }
+
+    private static void setLog4jLevel(String loggerName, Level level) {
+        var ctx = (LoggerContext) LogManager.getContext(false);
+        var config = ctx.getConfiguration();
+        var loggerConfig = config.getLoggerConfig(loggerName);
+        if (loggerName.equals(loggerConfig.getName())) {
+            loggerConfig.setLevel(level);
+        } else {
+            config.addLogger(loggerName, new LoggerConfig(loggerName, level, true));
+        }
+        ctx.updateLoggers();
     }
 
     @Override

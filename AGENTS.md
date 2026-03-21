@@ -125,6 +125,7 @@
 
 ## Git hygiene
 
+- Never commit code unless the user explicitly asks for a commit. Stage files, but do not commit.
 - Always add new source/config files you create to git before responding, unless they are explicitly marked as non-shareable (e.g., secrets in `.env`).
 - Do not add temporary or local-only files (e.g., `~`, `tmp`, logs, build outputs) unless explicitly asked.
 - Before responding, run `git status --short` and stage any new files you created (excluding non-shareable or temporary files).
