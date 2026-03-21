@@ -111,8 +111,14 @@ public final class PersistingLog4jLevelConfigurator extends BaseLifecycleCompone
         varStore.saveValue(storeKey, loggerLevels);
     }
 
+    /// `LogManager.getContext(false)` may return a different context in shaded fat JARs with AsyncLoggerContextSelector; getting the context from our own
+    /// logger ensures we modify the one that application loggers are registered in.
+    private static LoggerContext getLoggerContext() {
+        return ((org.apache.logging.log4j.core.Logger) log).getContext();
+    }
+
     private static void setLog4jLevel(String loggerName, Level level) {
-        var ctx = (LoggerContext) LogManager.getContext(false);
+        var ctx = getLoggerContext();
         var config = ctx.getConfiguration();
         var loggerConfig = config.getLoggerConfig(loggerName);
         if (loggerName.equals(loggerConfig.getName())) {
