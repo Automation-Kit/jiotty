@@ -54,6 +54,8 @@
   `energyPriceService`).
 - All Guice module parameters must be supplied through a nested `Builder` class, not through public constructors or factory methods on the module itself. A
   no-arg public constructor is allowed only when the module has no parameters at all.
+- If the module is an `ExposedKeyModule`, its `Builder` must implement `TypedBuilder<ExposedKeyModule<T>>`. If the builder also supports annotation, it should
+  extend `BaseModuleBuilder<T, B>` which provides both `TypedBuilder` and `HasWithAnnotation`.
 - Only add documentation comments when they convey non-obvious information (contracts, invariants, side effects, performance). Do not add documentation that
   restates the signature; omit it even for public API.
 - Services that compute something, use I/O or otherwise perform long-running tasks must use the async interface by returning a `CompletableFuture`.
