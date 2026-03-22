@@ -3,7 +3,7 @@ Configuration:
     Console:
       name: STDOUT
       PatternLayout:
-        Pattern: "%d %p [%t] [%X{thread}] %C{1.} %m%n"
+        Pattern: "%d %p [%t] %replace{[%X{thread}] }{\\[\\] }{}%C{1.} %m%n"
   Loggers:
     Root:
       level: info

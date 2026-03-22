@@ -26,6 +26,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.inject.BindingSpec.annotatedWith;
 import static net.yudichev.jiotty.common.inject.BindingSpec.boundTo;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
+import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class RecordingModule extends BaseLifecycleComponentModule implements ExposedKeyModule<RecordingService> {
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
@@ -54,7 +55,10 @@ public final class RecordingModule extends BaseLifecycleComponentModule implemen
 
     @Override
     protected void configure() {
-        installLifecycleComponentModule(new ExecutorProviderModule("PSQL", PsqlExecutor.class));
+        installLifecycleComponentModule(ExecutorProviderModule.builder()
+                                                              .setThreadName(literally("PSQL"))
+                                                              .withAnnotation(forAnnotation(PsqlExecutor.class))
+                                                              .build());
         installLifecycleComponentModule(PersistenceDomainModule.builder()
                                                                .setDataSourceFactory(dataSourceFactorySpec)
                                                                .setExecutor(annotatedWith(PsqlExecutor.class))

@@ -14,6 +14,8 @@ import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPric
 import java.time.ZoneId;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
+import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 import static net.yudichev.jiotty.common.keystore.KeyStoreEntryModule.keyStoreEntry;
 import static net.yudichev.jiotty.energy.Bindings.AgilePredict;
 import static net.yudichev.jiotty.energy.Bindings.Dependency;
@@ -41,7 +43,10 @@ public final class OctopusPriceServiceModule extends BaseLifecycleComponentModul
     @Override
     protected void configure() {
         zoneIdSpec.bind(ZoneId.class).annotatedWith(Dependency.class).installedBy(this::installLifecycleComponentModule);
-        installLifecycleComponentModule(new ExecutorProviderModule("Prices", ExecutorProvider.class));
+        installLifecycleComponentModule(ExecutorProviderModule.builder()
+                                                              .setThreadName(literally("Prices"))
+                                                              .withAnnotation(forAnnotation(ExecutorProvider.class))
+                                                              .build());
         installLifecycleComponentModule(OctopusEnergyModule.builder()
                                                            // TODO:commerce these are user options
                                                            .setApiKey(keyStoreEntry("octopus-api-key"))

@@ -23,6 +23,7 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.inject.BindingSpec.annotatedWith;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
+import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class UserPersistenceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<UserPersistence> {
     private static final String DEFAULT_DOMAIN_NAME = "users";
@@ -67,7 +68,10 @@ public final class UserPersistenceModule extends BaseLifecycleComponentModule im
                     .annotatedWith(Migrator.class)
                     .installedBy(this::installLifecycleComponentModule);
 
-        installLifecycleComponentModule(new ExecutorProviderModule("UserPersistence", Executor.class));
+        installLifecycleComponentModule(ExecutorProviderModule.builder()
+                                                              .setThreadName(literally("UserPersistence"))
+                                                              .withAnnotation(forAnnotation(Executor.class))
+                                                              .build());
         installLifecycleComponentModule(PersistenceDomainModule.builder()
                                                                .setDataSourceFactory(dataSourceFactorySpec)
                                                                .setExecutor(annotatedWith(Executor.class))
