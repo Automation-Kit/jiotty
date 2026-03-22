@@ -17,7 +17,7 @@ class SingleUserHttpServerModuleTest {
     @Test
     void configure() {
         Guice.createInjector(new ExecutorModule(),
-                             new UIServerModule(),
+                             UIServerModule.builder().build(),
                              VarStoreModule.builder()
                                            .setPath(tempDir.resolve("data.json"))
                                            .build(),

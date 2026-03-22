@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.collect.ImmutableList;
+import com.google.inject.BindingAnnotation;
 import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.servlet.AsyncContext;
@@ -21,6 +22,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -36,6 +39,10 @@ import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.PARAMETER;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.Comparator.comparing;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.forCloseables;
@@ -55,6 +62,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     private final OptionPersistence persistence;
     private final List<Closeable> optionsPersistenceRegistrations = new ArrayList<>();
     private final ExecutorFactory executorFactory;
+    private final String threadNameSuffix;
     private final Set<SseClient> sseClients = new HashSet<>();
     private final AtomicInteger sseClientIdGenerator = new AtomicInteger();
 
@@ -62,9 +70,10 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     private Closeable sseHeartbeat = Closeable.noop();
 
     @Inject
-    public UIServerImpl(OptionPersistence persistence, ExecutorFactory executorFactory) {
+    public UIServerImpl(OptionPersistence persistence, ExecutorFactory executorFactory, @ThreadSuffix String threadNameSuffix) {
         this.persistence = checkNotNull(persistence);
         this.executorFactory = checkNotNull(executorFactory);
+        this.threadNameSuffix = checkNotNull(threadNameSuffix);
     }
 
     @Override
@@ -118,7 +127,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
     @Override
     protected void doStart() {
-        executor = executorFactory.createSingleThreadedSchedulingExecutor("UI");
+        executor = executorFactory.createSingleThreadedSchedulingExecutor("UI" + (threadNameSuffix.isBlank() ? "" : '-' + threadNameSuffix));
         sseHeartbeat = executor.scheduleAtFixedRate(Duration.ofSeconds(15), this::sendSseHeartbeat);
     }
 
@@ -463,4 +472,11 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             }
         }
     }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface ThreadSuffix {
+    }
+
 }

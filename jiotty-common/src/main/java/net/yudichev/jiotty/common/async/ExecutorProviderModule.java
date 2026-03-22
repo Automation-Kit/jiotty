@@ -2,11 +2,10 @@ package net.yudichev.jiotty.common.async;
 
 import com.google.inject.Key;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -35,9 +34,8 @@ public final class ExecutorProviderModule extends BaseLifecycleComponentModule i
         expose(exposedKey);
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<SchedulingExecutor>>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<SchedulingExecutor, Builder> {
         private BindingSpec<String> threadNameSpec;
-        private SpecifiedAnnotation specifiedAnnotation;
 
         private Builder() {
         }
@@ -48,14 +46,8 @@ public final class ExecutorProviderModule extends BaseLifecycleComponentModule i
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExecutorProviderModule build() {
-            return new ExecutorProviderModule(threadNameSpec, specifiedAnnotation);
+            return new ExecutorProviderModule(threadNameSpec, specifiedAnnotation());
         }
     }
 }
