@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.common.varstore;
+package net.yudichev.jiotty.persistence.varstore;
 
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;

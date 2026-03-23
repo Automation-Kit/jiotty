@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.common.security;
+package net.yudichev.jiotty.security;
 
 import net.yudichev.jiotty.common.lang.Closeable;
 

@@ -2,7 +2,7 @@ package net.yudichev.jiotty.user.ui;
 
 import com.google.common.reflect.TypeToken;
 import jakarta.inject.Inject;
-import net.yudichev.jiotty.common.varstore.VarStore;
+import net.yudichev.jiotty.persistence.varstore.VarStore;
 
 import java.util.Optional;
 

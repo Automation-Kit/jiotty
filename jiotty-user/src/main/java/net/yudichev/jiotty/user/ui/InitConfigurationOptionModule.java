@@ -6,7 +6,7 @@ import com.google.inject.Key;
 import net.yudichev.jiotty.common.app.ApplicationLifecycleControl;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.TypeLiterals;
-import net.yudichev.jiotty.common.varstore.VarStore;
+import net.yudichev.jiotty.persistence.varstore.VarStore;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 

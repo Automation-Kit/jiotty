@@ -24,5 +24,4 @@ module jiotty.common {
     exports net.yudichev.jiotty.common.lang.throttling;
     exports net.yudichev.jiotty.common.rest;
     exports net.yudichev.jiotty.common.time;
-    exports net.yudichev.jiotty.common.varstore;
 }

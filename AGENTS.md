@@ -133,6 +133,10 @@
 - After any shell command that creates, copies, moves, or extracts files, run `git status --short` immediately and remove unintended untracked paths before
   continuing.
 
+- When moving or renaming files, use `git mv` so git tracks the rename. When a move also changes file content (for example, a package rename), first `git mv`
+  the file to its new path, then edit the content. If files were already created at the new path and deleted at the old path, stage both the deletions and
+  additions together (`git add` both old and new paths) so `git diff --cached -M` detects renames instead of showing unrelated deletions and additions.
+
 ## Agent instructions maintenance
 
 - When asked to add or update a rule in agent instructions, apply the change to the `AGENTS.md` of all known Java repositories (`jiotty`, `car-engine`,

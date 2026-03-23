@@ -24,6 +24,10 @@
         </dependency>
         <dependency>
             <groupId>net.yudichev.jiotty</groupId>
+            <artifactId>jiotty-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.yudichev.jiotty</groupId>
             <artifactId>jiotty-connector-mqtt</artifactId>
             <optional>true</optional>
         </dependency>
@@ -69,6 +73,17 @@
         </dependency>
 
         <!-- test  -->
+        <dependency>
+            <groupId>net.yudichev.jiotty</groupId>
+            <artifactId>jiotty-persistence-varstore</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.yudichev.jiotty</groupId>
+            <artifactId>jiotty-persistence-varstore</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>

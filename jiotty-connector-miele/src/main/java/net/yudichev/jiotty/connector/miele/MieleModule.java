@@ -6,7 +6,7 @@ import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutorModule
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
-import net.yudichev.jiotty.common.security.OAuth2TokenManagerModule;
+import net.yudichev.jiotty.security.OAuth2TokenManagerModule;
 
 import java.time.Duration;
 

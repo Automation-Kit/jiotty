@@ -7,7 +7,7 @@ import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.PackagePrivateImmutablesStyle;
-import net.yudichev.jiotty.common.varstore.VarStore;
+import net.yudichev.jiotty.persistence.varstore.VarStore;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;

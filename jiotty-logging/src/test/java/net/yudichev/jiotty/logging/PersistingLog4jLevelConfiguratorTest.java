@@ -1,6 +1,6 @@
 package net.yudichev.jiotty.logging;
 
-import net.yudichev.jiotty.common.varstore.InMemoryVarStore;
+import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;

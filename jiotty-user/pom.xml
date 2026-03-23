@@ -19,6 +19,10 @@
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-persistence-varstore</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
             <artifactId>jiotty-persistence-sql</artifactId>
         </dependency>
         <dependency>

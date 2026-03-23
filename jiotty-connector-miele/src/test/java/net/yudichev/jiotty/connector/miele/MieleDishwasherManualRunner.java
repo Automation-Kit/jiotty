@@ -7,7 +7,7 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
 import net.yudichev.jiotty.common.time.TimeModule;
-import net.yudichev.jiotty.common.varstore.VarStoreModule;
+import net.yudichev.jiotty.persistence.varstore.VarStoreModule;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;

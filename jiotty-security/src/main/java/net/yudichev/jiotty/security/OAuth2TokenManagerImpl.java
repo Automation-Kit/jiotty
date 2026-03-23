@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.common.security;
+package net.yudichev.jiotty.security;
 
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
@@ -11,7 +11,7 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import net.yudichev.jiotty.common.varstore.VarStore;
+import net.yudichev.jiotty.persistence.varstore.VarStore;
 import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;

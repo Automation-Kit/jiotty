@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.common.security;
+package net.yudichev.jiotty.security;
 
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;

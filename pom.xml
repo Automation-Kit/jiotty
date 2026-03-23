@@ -261,6 +261,7 @@
         <module>jiotty-connector-slide</module>
         <module>jiotty-connector-webclient</module>
         <module>jiotty-persistence</module>
+        <module>jiotty-security</module>
         <module>jiotty-energy</module>
         <module>jiotty-logging</module>
         <module>jiotty-parent</module>

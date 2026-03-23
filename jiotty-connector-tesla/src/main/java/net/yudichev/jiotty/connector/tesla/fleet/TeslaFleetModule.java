@@ -8,7 +8,7 @@ import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.net.SslCustomisation;
-import net.yudichev.jiotty.common.security.OAuth2TokenManagerModule;
+import net.yudichev.jiotty.security.OAuth2TokenManagerModule;
 
 import java.util.Optional;
 import java.util.Set;

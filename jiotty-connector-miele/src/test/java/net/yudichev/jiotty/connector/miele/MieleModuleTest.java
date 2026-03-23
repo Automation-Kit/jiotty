@@ -3,7 +3,7 @@ package net.yudichev.jiotty.connector.miele;
 import com.google.inject.Guice;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.time.TimeModule;
-import net.yudichev.jiotty.common.varstore.VarStoreModule;
+import net.yudichev.jiotty.persistence.varstore.VarStoreModule;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Paths;

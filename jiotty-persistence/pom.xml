@@ -14,11 +14,17 @@
     <artifactId>jiotty-persistence</artifactId>
     <packaging>pom</packaging>
     <modules>
+        <module>jiotty-persistence-varstore</module>
         <module>jiotty-persistence-sql</module>
         <module>jiotty-persistence-recording</module>
     </modules>
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>jiotty-persistence-varstore</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>${project.groupId}</groupId>
                 <artifactId>jiotty-persistence-sql</artifactId>

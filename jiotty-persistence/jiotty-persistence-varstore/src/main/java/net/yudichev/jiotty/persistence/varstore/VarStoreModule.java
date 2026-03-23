@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.common.varstore;
+package net.yudichev.jiotty.persistence.varstore;
 
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;

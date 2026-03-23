@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.common.security;
+package net.yudichev.jiotty.security;
 
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;

@@ -9,7 +9,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 import net.yudichev.jiotty.common.rest.ContentTypes;
-import net.yudichev.jiotty.common.security.OAuth2TokenManager;
+import net.yudichev.jiotty.security.OAuth2TokenManager;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.FormBody;
