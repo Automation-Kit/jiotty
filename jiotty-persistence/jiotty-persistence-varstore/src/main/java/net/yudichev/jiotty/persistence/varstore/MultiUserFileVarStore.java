@@ -2,10 +2,7 @@ package net.yudichev.jiotty.persistence.varstore;
 
 import java.nio.file.Path;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-
-public final class MultiUserFileVarStore extends FileVarStore {
+final class MultiUserFileVarStore extends BaseFileVarStore {
 
     public MultiUserFileVarStore(Path storeFile) {
         super(storeFile);
@@ -13,8 +10,7 @@ public final class MultiUserFileVarStore extends FileVarStore {
 
     @Override
     public VarStore forUser(String userId) {
-        checkNotNull(userId, "userId");
-        checkArgument(!userId.isBlank(), "userId must not be blank");
+        Utils.validateUserId(userId);
         return new UserScopedVarStore(this, userId + '.');
     }
 }

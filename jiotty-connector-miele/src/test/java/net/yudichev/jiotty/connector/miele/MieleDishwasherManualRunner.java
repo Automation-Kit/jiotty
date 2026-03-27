@@ -25,7 +25,7 @@ final class MieleDishwasherManualRunner {
         Application.builder()
                    .addModule(TimeModule::new)
                    .addModule(ExecutorModule::new)
-                   .addModule(() -> VarStoreModule.builder().setPath(Paths.get(args[0], "varstore.json")).build())
+                   .addModule(() -> VarStoreModule.builder().withPath(literally(Paths.get(args[0], "varstore.json"))).build())
                    .addModule(() -> MieleModule.builder()
                                                .setDeviceId(literally(args[1]))
                                                .setClientId(literally(args[2]))

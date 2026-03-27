@@ -2,24 +2,20 @@ package net.yudichev.jiotty.user.ui;
 
 import com.google.inject.Guice;
 import net.yudichev.jiotty.common.async.ExecutorModule;
+import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.varstore.VarStoreModule;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-
-import java.nio.file.Path;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
+import static org.mockito.Mockito.mock;
 
 class SingleUserHttpServerModuleTest {
-    @TempDir
-    private Path tempDir;
-
     @Test
     void configure() {
         Guice.createInjector(new ExecutorModule(),
                              UIServerModule.builder().build(),
                              VarStoreModule.builder()
-                                           .setPath(tempDir.resolve("data.json"))
+                                           .withDataSourceFactory(literally(mock(DataSourceFactory.class)))
                                            .build(),
                              SingleUserHttpServerModule.builder().setListenPort(literally(4568)).build());
     }

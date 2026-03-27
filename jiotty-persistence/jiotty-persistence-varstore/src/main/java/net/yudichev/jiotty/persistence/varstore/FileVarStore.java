@@ -1,87 +1,34 @@
 package net.yudichev.jiotty.persistence.varstore;
 
-import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.datatype.guava.GuavaModule;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.reflect.TypeToken;
-import net.yudichev.jiotty.common.lang.MoreThrowables;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import jakarta.inject.Inject;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Optional;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-import static java.nio.file.Files.createDirectories;
-import static java.nio.file.Files.createFile;
-import static java.nio.file.Files.isRegularFile;
-import static java.nio.file.Files.move;
-import static java.nio.file.Files.readAllBytes;
-import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
-import static net.yudichev.jiotty.common.lang.Locks.inLock;
+import static net.yudichev.jiotty.persistence.varstore.Bindings.SingleUser;
+import static net.yudichev.jiotty.persistence.varstore.Bindings.ThePath;
 
-abstract class FileVarStore implements VarStore {
-    private static final ObjectMapper mapper = new ObjectMapper()
-            .registerModule(new Jdk8Module())
-            .registerModule(new JavaTimeModule())
-            .registerModule(new GuavaModule())
-            .enable(SerializationFeature.INDENT_OUTPUT);
+public final class FileVarStore implements VarStore {
+    private final BaseFileVarStore delegate;
 
-    protected final Logger logger = LogManager.getLogger(getClass());
-
-    private final Path storeFile;
-    private final Path storeFileTmp;
-    private final Lock lock = new ReentrantLock();
-
-    FileVarStore(Path storeFile) {
-        this.storeFile = checkNotNull(storeFile, "storeFile");
-        logger.info("Using store file {}", this.storeFile.toAbsolutePath());
-        storeFileTmp = this.storeFile.resolveSibling("data.tmp");
+    @Inject
+    public FileVarStore(@ThePath Path path, @SingleUser boolean singleUser) {
+        delegate = singleUser ? new SingleUserFileVarStore(path) : new MultiUserFileVarStore(path);
     }
 
     @Override
     public void saveValue(String key, Object value) {
-        inLock(lock, () -> MoreThrowables.asUnchecked(() -> {
-            ObjectNode configNode = readConfig();
-
-            configNode.set(key, mapper.valueToTree(value));
-            mapper.writeValue(storeFileTmp.toFile(), configNode);
-            move(storeFileTmp, storeFile, REPLACE_EXISTING);
-        }));
+        delegate.saveValue(key, value);
     }
 
     @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
-        return inLock(lock, () -> MoreThrowables.getAsUnchecked(() -> {
-            ObjectNode configNode = readConfig();
-
-            JavaType javaType = mapper.constructType(type.getType());
-            return Optional.ofNullable(configNode.get(key))
-                           .map(valueNode -> MoreThrowables.getAsUnchecked(() -> mapper.readerFor(javaType).readValue(valueNode)));
-        }));
+        return delegate.readValue(type, key);
     }
 
-    private ObjectNode readConfig() throws IOException {
-        if (!isRegularFile(storeFile)) {
-            createDirectories(storeFile.getParent());
-            createFile(storeFile);
-        }
-
-        ObjectNode configNode;
-        byte[] contents = readAllBytes(storeFile);
-        if (contents.length > 0) {
-            configNode = mapper.readValue(contents, ObjectNode.class);
-        } else {
-            configNode = mapper.createObjectNode();
-        }
-
-        return configNode;
+    @Override
+    public VarStore forUser(String userId) {
+        return delegate.forUser(userId);
     }
 }

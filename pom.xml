@@ -265,6 +265,7 @@
         <module>jiotty-energy</module>
         <module>jiotty-logging</module>
         <module>jiotty-parent</module>
+        <module>jiotty-process</module>
         <module>jiotty-user</module>
         <module>jiotty-world</module>
     </modules>

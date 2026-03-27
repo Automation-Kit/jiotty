@@ -13,9 +13,9 @@ public abstract class BaseLifecycleComponentModule extends PrivateModule {
     private final Set<Key<? extends LifecycleComponent>> lifecycleComponentKeys = new LinkedHashSet<>();
 
     protected final void installLifecycleComponentModule(Module module) {
-        if (module instanceof BaseLifecycleComponentModule) {
+        if (module instanceof BaseLifecycleComponentModule lifecycleComponentModule) {
             install(module);
-            ((BaseLifecycleComponentModule) module).lifecycleComponentKeys.forEach(this::exposeKey);
+            lifecycleComponentModule.lifecycleComponentKeys.forEach(this::exposeKey);
         } else {
             install(module);
         }

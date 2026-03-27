@@ -212,11 +212,11 @@ public final class Application {
     }
 
     public static final class Builder implements TypedBuilder<Application>, HasWithAnnotation {
-        private final ImmutableList.Builder<Supplier<Module>> moduleSupplierListBuilder = ImmutableList.builder();
+        private final ImmutableList.Builder<Supplier<? extends Module>> moduleSupplierListBuilder = ImmutableList.builder();
         private Injector parentInjector;
         private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
 
-        public Builder addModule(Supplier<Module> moduleSupplier) {
+        public Builder addModule(Supplier<? extends Module> moduleSupplier) {
             moduleSupplierListBuilder.add(moduleSupplier);
             return this;
         }
@@ -234,7 +234,7 @@ public final class Application {
 
         @Override
         public Application build() {
-            List<Supplier<Module>> moduleSuppliers = moduleSupplierListBuilder.build();
+            List<Supplier<? extends Module>> moduleSuppliers = moduleSupplierListBuilder.build();
             Module module = new AbstractModule() {
                 @Override
                 protected void configure() {

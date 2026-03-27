@@ -4,7 +4,7 @@ import java.nio.file.Path;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-public final class SingleUserFileVarStore extends FileVarStore {
+final class SingleUserFileVarStore extends BaseFileVarStore {
 
     public SingleUserFileVarStore(Path storeFile) {
         super(storeFile);

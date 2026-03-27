@@ -6,7 +6,8 @@
 - Treat components as black boxes; use only public APIs and avoid reflection.
 - Factor shared test setup/teardown into `@BeforeEach`/`@AfterEach` or shared fixtures/extensions; do not repeat the same setup in each test method.
 - Use `Closeable.closeIfNotNull(...)`/`Closeable.closeSafelyIfNotNull(...)` (varargs) for test cleanup; prefer `Closeable.forActions(...)` for teardown steps.
-- Use `MoreThrowables.asUnchecked(...)`/`getAsUnchecked(...)` instead of try/catch that only wraps checked exceptions in `RuntimeException`.
+- Use `MoreThrowables.asUnchecked(...)`/`getAsUnchecked(...)` instead of try/catch that only wraps checked exceptions in `RuntimeException`. When the lambda
+  returns no useful value, use `asUnchecked()`; do not use `getAsUnchecked()` with `return null` at the end.
 - Always statically import `TimeUnit` constants (for example, `SECONDS`) instead of `TimeUnit.SECONDS`.
 - In tests, reuse production constants by making them package-private instead of re-declaring them.
 - When creating a new `src/test/java` source root for unit tests, also create the corresponding `src/test/resources` and add `log4j2-test.yaml` by copying it
@@ -36,6 +37,8 @@
   value.
 - If a scenario suggests a possible bug but is not certain, ask for confirmation before encoding it in a test.
 - Build comprehensive coverage with edge cases and failure/timeout paths.
+- Never use `Thread.sleep()` for thread synchronisation in tests. Instead, expose the executor or async handle via a package-private getter and use
+  `executor.submit(() -> {}).get(timeout, unit)` or similar deterministic flush with a timeout.
 - Run jacoco or similar tool to uncover branches that do not have coverage and add tests for such scenarios. If the scenario is not possible, then analyse why
   and add a TODO in the code to investigate later.
 
@@ -49,7 +52,9 @@
 - Module builder setters of mandatory parameters must start with `set`. Setters for optional parameters must start with `with`, and all `with` setters must be
   declared after the `set` setters.
 - For Guice module builders, all builder parameters must be `BindingSpec`s rather than plain values, including primitives and `String`s; call sites should use
-  `literally(...)` when they want to pass a fixed value.
+  `literally(...)` when they want to pass a fixed value. Exception: `ExecutorFactory`, `CurrentDateTimeProvider`, and other bindings from `TimeModule`/
+  `ExecutorModule`
+  are assumed globally available in every app — inject them directly via `@Inject`, not via `BindingSpec`.
 - `BindingSpec` field names, constructor parameters, and builder method parameters must end with `Spec` (for example, `energyPriceServiceSpec`, not
   `energyPriceService`).
 - All Guice module parameters must be supplied through a nested `Builder` class, not through public constructors or factory methods on the module itself. A
@@ -120,7 +125,8 @@
 - When creating a `StringBuilder`, estimate the buffer size; only use the default constructor when an estimate is not practical.
 - SQL statements should be defined as constants or fields; do not build concatenated SQL strings inside methods.
 - Avoid blocking API - it is not compatible with `ProgrammableClock`-based tests. In lifecycling methods like `BaseLifecycleComponent.toStart() and doStop()` it
-  is allowed, but all the blocking methods must have a timeout. No no-arg calls to `Thread.join()` or `CompletableFuture.join()`.
+  is allowed, but all the blocking methods must have a timeout. No no-arg calls to `Thread.join()`, `CompletableFuture.join()`, or `Future.get()` without a
+  timeout.
 - When shutting down resources, for example in `BaseLifecycleComponent.doStop()`, always do it in the reverse order of their initialisateion.
 
 ## Git hygiene
