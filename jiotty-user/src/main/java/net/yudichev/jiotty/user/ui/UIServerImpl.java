@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.user.ui;
 
 import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.collect.ImmutableList;
@@ -17,6 +18,7 @@ import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.StabilisingConsumer;
 import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -54,7 +56,9 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 public final class UIServerImpl extends BaseLifecycleComponent implements UIServer, UIServerRuntime {
     private static final Logger logger = LogManager.getLogger(UIServerImpl.class);
     private static final Pattern TAB_NAME_TO_ID_CONVERSION_PATTERN = Pattern.compile("[^A-Za-z0-9_-]");
-    private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory()).registerModule(new JavaTimeModule());
+    private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory())
+            .registerModule(new JavaTimeModule())
+            .disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
 
     private final Map<String, Displayable> displayablesById = new LinkedHashMap<>();
     private final Map<String, List<Option<?>>> optionsByTabName = new HashMap<>();
@@ -63,17 +67,23 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     private final List<Closeable> optionsPersistenceRegistrations = new ArrayList<>();
     private final ExecutorFactory executorFactory;
     private final String threadNameSuffix;
+    private final Duration optionsStabilisationDelay;
     private final Set<SseClient> sseClients = new HashSet<>();
     private final AtomicInteger sseClientIdGenerator = new AtomicInteger();
 
     private SchedulingExecutor executor;
     private Closeable sseHeartbeat = Closeable.noop();
+    private StabilisingConsumer<Void> optionsStabiliser;
 
     @Inject
-    public UIServerImpl(OptionPersistence persistence, ExecutorFactory executorFactory, @ThreadSuffix String threadNameSuffix) {
+    public UIServerImpl(OptionPersistence persistence,
+                        ExecutorFactory executorFactory,
+                        @ThreadSuffix String threadNameSuffix,
+                        @OptionsStabilisationDelay Duration optionsStabilisationDelay) {
         this.persistence = checkNotNull(persistence);
         this.executorFactory = checkNotNull(executorFactory);
         this.threadNameSuffix = checkNotNull(threadNameSuffix);
+        this.optionsStabilisationDelay = checkNotNull(optionsStabilisationDelay);
     }
 
     @Override
@@ -84,7 +94,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             Closeable dataSubscription;
             @Nullable ThrottlingConsumer<Void> throttle;
             if (displayable.supportsData()) {
-                throttle = new ThrottlingConsumer<>(executor, Duration.ofSeconds(1), _ -> onNewData(displayable));
+                throttle = new ThrottlingConsumer<>(executor, Duration.ofSeconds(1), _ -> sendDisplayableUpdate(displayable));
                 dataSubscription = displayable.subscribeForUpdates(() -> throttle.accept(null));
             } else {
                 dataSubscription = noop();
@@ -92,7 +102,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             }
             logger.info("Registered displayable {} with title {}", displayable, displayable.getDisplayName());
             // deliver image to existing SSE clients
-            onNewData(displayable);
+            sendDisplayableUpdate(displayable);
             return idempotent(() -> whenStartedAndNotLifecycling(() -> {
                 if (displayablesById.remove(displayable.getId(), displayable)) {
                     Closeable.closeSafelyIfNotNull(logger, throttle, dataSubscription);
@@ -104,7 +114,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
     @Override
     public Closeable registerOption(Option<?> option) {
-        return whenNotLifecycling(() -> {
+        return whenStartedAndNotLifecycling(() -> {
             checkArgument(!optionsByKey.containsKey(option.meta().key()), "Option for key %s already registered: %s", option.meta().key(), option);
             persistence.load(option);
 
@@ -115,12 +125,14 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             Closeable persistenceRegistration = option.addChangeListener(persistence::save);
             optionsPersistenceRegistrations.add(persistenceRegistration);
             logger.info("Registered option {}", option.meta().key());
+            notifyOptionsChanged();
             return idempotent(() -> whenNotLifecycling(() -> {
                 options.remove(option);
                 optionsByKey.remove(option.meta().key());
                 Closeable.closeIfNotNull(persistenceRegistration);
                 optionsPersistenceRegistrations.remove(persistenceRegistration);
                 logger.info("Unregistered option {}", option.meta().key());
+                notifyOptionsChanged();
             }));
         });
     }
@@ -128,6 +140,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     @Override
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor("UI" + (threadNameSuffix.isBlank() ? "" : '-' + threadNameSuffix));
+        optionsStabiliser = new StabilisingConsumer<>(executor, optionsStabilisationDelay, _ -> broadcastOptionsUpdate());
         sseHeartbeat = executor.scheduleAtFixedRate(Duration.ofSeconds(15), this::sendSseHeartbeat);
     }
 
@@ -176,18 +189,9 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         }));
     }
 
-    @Override
-    public void writeOptionsJson(HttpServletResponse response) throws IOException {
-        response.setCharacterEncoding("utf-8");
-        response.setContentType("application/json");
-        // TODO:commerce also stream options/tabs updates because option list and tab composition may change dynamically at runtime.
-        Map<String, List<Option<?>>> optionsByTabNameCopy = whenStartedAndNotLifecycling(() -> {
-            var copy = new HashMap<>(optionsByTabName);
-            copy.replaceAll((_, options) -> new ArrayList<>(options));
-            return copy;
-        });
-        var tabs = new ArrayList<Map<String, Object>>();
-        for (var entry : optionsByTabNameCopy.entrySet()) {
+    private void sendOptionsUpdate(Iterable<SseClient> clients) {
+        var tabs = new ArrayList<Map<String, Object>>(optionsByTabName.size());
+        for (var entry : optionsByTabName.entrySet()) {
             String tabName = entry.getKey();
             String tabId = toDomId(tabName);
             List<Option<?>> options = entry.getValue();
@@ -197,7 +201,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             }
             tabs.add(Map.of("id", tabId, "name", tabName, "options", optionDtos));
         }
-        MAPPER.writeValue(response.getWriter(), Map.of("tabs", tabs));
+        broadcastSse("options-update", Map.of("tabs", tabs), clients);
     }
 
     @Override
@@ -314,7 +318,10 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             sseClients.add(client);
             client.init();
             logger.debug("[SSE {}] delivering initial image", clientId);
-            whenStartedAndNotLifecycling(() -> ImmutableList.copyOf(displayablesById.values())).forEach(this::onNewData);
+            var targetClients = List.of(client);
+            whenStartedAndNotLifecycling(() -> ImmutableList.copyOf(displayablesById.values()))
+                    .forEach(displayable -> sendDisplayableUpdate(displayable, targetClients));
+            sendOptionsUpdate(targetClients);
             try {
                 asyncContext.addListener(new AsyncListener() {
                     @Override
@@ -361,19 +368,26 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         Closeable.closeIfNotNull(streamClosed);
     }
 
-    private void onNewData(Displayable displayable) {
+    private void sendDisplayableUpdate(Displayable displayable) {
+        sendDisplayableUpdate(displayable, sseClients);
+    }
+
+    private void sendDisplayableUpdate(Displayable displayable, Iterable<SseClient> clients) {
         displayable.toDto().whenCompleteAsync((displayableDto, throwable) -> {
             if (throwable != null) {
                 logger.warn("Displayable {} failed to generate DTO", displayable.getId(), throwable);
                 return;
             }
-            try {
-                String json = MAPPER.writeValueAsString(Map.of("id", displayable.getId(), "dto", displayableDto));
-                broadcastSse("displayable-update", json);
-            } catch (@SuppressWarnings("OverlyBroadCatchBlock") IOException e) {
-                logger.warn("Failed to serialize update of displayable {}", displayable.getId(), e);
-            }
+            broadcastSse("displayable-update", Map.of("id", displayable.getId(), "dto", displayableDto), clients);
         }, executor);
+    }
+
+    private void notifyOptionsChanged() {
+        optionsStabiliser.accept(null);
+    }
+
+    private void broadcastOptionsUpdate() {
+        sendOptionsUpdate(sseClients);
     }
 
     private List<Option<?>> getOptionsForTab(String tabName) {
@@ -399,9 +413,9 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         };
     }
 
-    private void broadcastSse(String eventName, String jsonData) {
-        for (SseClient client : sseClients) {
-            client.sendEvent(eventName, jsonData);
+    private static void broadcastSse(String eventName, Object data, Iterable<SseClient> clients) {
+        for (SseClient client : clients) {
+            client.sendEvent(eventName, data);
         }
     }
 
@@ -430,21 +444,21 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                 logger.debug("[SSE {}] init", clientId);
                 out.print("retry: 3000\n\n");
                 // immediately inform the client of the server-assigned sequence number
-                sendEvent("hello", "{\"clientIdSeqNum\":" + clientIdSeqNum + "}");
+                sendEvent("hello", Map.of("clientIdSeqNum", clientIdSeqNum));
                 out.flush();
             } catch (IOException e) {
                 close();
             }
         }
 
-        private void sendEvent(String eventName, String data) {
+        private void sendEvent(String eventName, Object data) {
             try {
                 logger.debug("[SSE {}] send event {}, {}", clientId, eventName, data);
                 out.print("event: ");
                 out.print(eventName);
                 out.print('\n');
                 out.print("data: ");
-                out.print(data);
+                MAPPER.writeValue(out, data);
                 out.print("\n\n");
                 out.flush();
             } catch (IOException e) {
@@ -477,6 +491,12 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface ThreadSuffix {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface OptionsStabilisationDelay {
     }
 
 }

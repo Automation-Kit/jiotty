@@ -504,13 +504,17 @@ $(function () {
     }, 'json');
   }
 
-  function loadOptions() {
-    return $.get('api/options', function (data) {
+  function subscribeOptions() {
+    if (typeof DisplayableSse === 'undefined' || !DisplayableSse.onOptionsUpdate) return;
+    DisplayableSse.onOptionsUpdate(function (data) {
       if (data && data.tabs) {
+        const activeTab = activeOptionsTabId();
         buildOptionsTabs(data.tabs);
         attachOptionHandlers();
+        if (activeTab) selectOptionsSubTabById(activeTab);
+        setupMobileSubtabsFor('#optionsTab');
       }
-    }, 'json');
+    });
   }
 
   // ----- Init -----
@@ -520,9 +524,10 @@ $(function () {
     setupMobileSubtabsFor('#stateTab');
     setupMobileSubtabsFor('#optionsTab');
     ensureStateStreaming();
+    subscribeOptions();
   }
 
-  $.when(loadDisplayables(), loadOptions()).done(initAfterLoad);
+  $.when(loadDisplayables()).done(initAfterLoad);
 
   // ----- Mobile sub-tabs (chevron dropdown) -----
   function setupMobileSubtabsFor(navSelector) {

@@ -184,7 +184,6 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
             UIServerRuntime runtime = runtime(request);
             switch (request.getPathInfo()) {
-                case "/options" -> runtime.writeOptionsJson(response);
                 case "/displayables" -> runtime.writeDisplayablesListJson(response);
                 case "/displayables/item" -> runtime.writeDisplayableItemJson(request, response);
                 case "/displayables/stream" -> startDisplayablesSse(request, response, runtime);

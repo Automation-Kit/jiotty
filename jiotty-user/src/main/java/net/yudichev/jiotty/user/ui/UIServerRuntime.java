@@ -9,8 +9,6 @@ import java.io.IOException;
 public interface UIServerRuntime {
     void handleOptionsPost(HttpServletRequest request, HttpServletResponse response);
 
-    void writeOptionsJson(HttpServletResponse response) throws IOException;
-
     void writeDisplayablesListJson(HttpServletResponse response) throws IOException;
 
     void writeDisplayableItemJson(HttpServletRequest request, HttpServletResponse response) throws IOException;

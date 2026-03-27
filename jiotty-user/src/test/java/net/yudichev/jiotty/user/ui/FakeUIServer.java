@@ -21,11 +21,6 @@ final class FakeUIServer implements UIServer, UIServerRuntime {
     }
 
     @Override
-    public void writeOptionsJson(HttpServletResponse response) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
     public void writeDisplayablesListJson(HttpServletResponse response) {
         throw new UnsupportedOperationException();
     }

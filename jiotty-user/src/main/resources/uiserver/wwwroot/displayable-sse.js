@@ -14,6 +14,8 @@
   const listeners = Object.create(null); // id -> Set<fn>
   const lastDtoById = Object.create(null); // id -> last received dto
   let clientIdSeqNum = null;
+  let optionsCallback = null;
+  let lastOptionsData = null;
   let watchdogId = null;
   let lifecycleHandlersInstalled = false;
   let debug = (function () {
@@ -111,6 +113,23 @@
         if (data && data.id) notify(data.id, data.dto);
       } catch (err) {
         log('parse-error', 'failed to parse update', err);
+      }
+    });
+    eventSource.addEventListener('options-update', function (e) {
+      lastActivityTs = Date.now();
+      try {
+        const data = JSON.parse(e.data || '{}');
+        log('options-update', 'tabs=' + (data.tabs ? data.tabs.length : 0));
+        lastOptionsData = data;
+        if (optionsCallback) {
+          try {
+            optionsCallback(data);
+          } catch (err) {
+            log('options-listener-error', 'callback threw', err);
+          }
+        }
+      } catch (err) {
+        log('options-parse-error', 'failed to parse options-update', err);
       }
     });
     eventSource.addEventListener('ping', function () {
@@ -226,6 +245,20 @@
       .catch(function(err){ log('fetch-fail', 'GET '+url+' failed: '+(err && err.message || err)); throw err; });
   }
 
+  function onOptionsUpdate(callback) {
+    optionsCallback = callback;
+    ensureConnected();
+    if (lastOptionsData && callback) {
+      setTimeout(function () {
+        try {
+          callback(lastOptionsData);
+        } catch (e) {
+          log('options-replay-error', 'callback threw on replay', e);
+        }
+      }, 0);
+    }
+  }
+
   function setDebugEnabled(enabled){ debug = !!enabled; try { if (global.localStorage) localStorage.setItem('sseDebug', debug ? '1' : '0'); } catch(_){} }
 
   // Auto-init on DOMContentLoaded
@@ -240,6 +273,7 @@
   global.DisplayableSse = {
     ensureConnected: ensureConnected,
     subscribe: subscribe,
+    onOptionsUpdate: onOptionsUpdate,
     fetchItem: fetchItem,
     setDebug: setDebugEnabled
   };
