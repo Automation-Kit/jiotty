@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.ui;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import org.immutables.value.Value;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -31,7 +33,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
     private final Function<K, String> keyToKeyTitle;
     private final Function<DeviceStatus<T>, String> statusToEventTime;
     private final BiConsumer<DeviceStatus<T>, Appender> statusRenderer;
-    private final BiConsumer<String, HttpServletResponse> downloadHandler;
+    private final BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler;
     private final int windowSize;
     private final TextFormat textFormat;
     private final Listeners<Void> listeners = new Listeners<>();
@@ -42,7 +44,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
              keyToKeyTitle,
              status -> status.lastChanged().atZone(ZoneId.systemDefault()).format(RFC_1123_DATE_TIME),
              (status, appender) -> appender.append(status.status()),
-             (_, _) -> {},
+             (_, _) -> CompletableFutures.completedFuture(),
              TextFormat.PLAIN);
     }
 
@@ -51,7 +53,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
                                     Function<K, String> keyToKeyTitle,
                                     Function<DeviceStatus<T>, String> statusToEventTime,
                                     BiConsumer<DeviceStatus<T>, Appender> statusRenderer,
-                                    BiConsumer<String, HttpServletResponse> downloadHandler,
+                                    BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler,
                                     TextFormat textFormat) {
         this.title = checkNotNull(title);
         this.keyToKeyTitle = checkNotNull(keyToKeyTitle);
@@ -83,8 +85,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
 
     @Override
     public CompletableFuture<Void> handleDownload(String downloadId, HttpServletResponse resp) {
-        downloadHandler.accept(downloadId, resp);
-        return completedFuture(null);
+        return downloadHandler.apply(downloadId, resp);
     }
 
     @Override

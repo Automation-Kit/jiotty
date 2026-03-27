@@ -74,8 +74,6 @@ public final class InitConfigurationOptionManager<T> extends BaseLifecycleCompon
             checkState(!applicationLifecycleControl.restarting(), "Already restarting");
             Closeable.closeIfNotNull(restartSchedule);
             restartSchedule = executor.schedule(DEBOUNCE_TIME_BEFORE_RESTART, () -> {
-                // TODO:commerce "Application" here needs to be a sub-application of the main application, or something along these lines.
-                //  obviously not restarting the whole app if one custmer changed one of their own init config options
                 logger.info("[{}] option changed and {} passed, restarting application", optionMeta.key(), DEBOUNCE_TIME_HUMAN_READABLE);
                 applicationLifecycleControl.initiateRestart();
             });

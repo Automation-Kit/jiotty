@@ -7,9 +7,12 @@ import net.yudichev.jiotty.user.ui.TextFormat;
 import net.yudichev.jiotty.user.ui.UIServer;
 
 import java.time.ZoneId;
-import java.util.function.BiConsumer;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
+
+import static net.yudichev.jiotty.common.lang.CompletableFutures.completedFuture;
 
 public sealed interface UIDestination extends Destination permits UIDestinationImpl {
     interface HtmlRenderer<R> {
@@ -27,7 +30,7 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
                        int windowSize,
                        Function<R, String> displayableEventKeyExtractor,
                        Supplier<HtmlRenderer<R>> renderer,
-                       BiConsumer<String, HttpServletResponse> downloadHandler)
+                       BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler)
             implements Destination.Config<R> {
         public UIConfig(UIServer uiServer,
                         ZoneId zoneId,
@@ -37,7 +40,7 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
                         int windowSize,
                         Function<R, String> displayableEventKeyExtractor,
                         Supplier<HtmlRenderer<R>> renderer) {
-            this(uiServer, zoneId, recordType, title, textFormat, windowSize, displayableEventKeyExtractor, renderer, (ignored1, ignored2) -> {});
+            this(uiServer, zoneId, recordType, title, textFormat, windowSize, displayableEventKeyExtractor, renderer, (_, _) -> completedFuture());
         }
 
         @Override
