@@ -42,6 +42,7 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.Objects.requireNonNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
 
 final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
     private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
@@ -105,14 +106,14 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         return servletHolder;
     }
 
-    static void setRequestContext(HttpServletRequest request, UIRequestAuthoriser.UIRequestContext requestContext) {
+    static void setRequestContext(HttpServletRequest request, UIRequestContext requestContext) {
         request.setAttribute(REQUEST_CONTEXT, requestContext);
     }
 
-    static UIRequestAuthoriser.UIRequestContext requestContext(HttpServletRequest request) {
+    static UIRequestContext requestContext(HttpServletRequest request) {
         Object requestContext = request.getAttribute(REQUEST_CONTEXT);
-        checkState(requestContext instanceof UIRequestAuthoriser.UIRequestContext, "Request context is not initialised");
-        return (UIRequestAuthoriser.UIRequestContext) requestContext;
+        checkState(requestContext instanceof UIRequestContext, "Request context is not initialised");
+        return (UIRequestContext) requestContext;
     }
 
     private static UIServerRuntime runtime(HttpServletRequest request) {
@@ -198,7 +199,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
 
         /// @implNote there are 3 threads acting on the state in this method; it looks hard to reason about, however, I was not able to fault it - looks solid
         private static void startDisplayablesSse(HttpServletRequest request, HttpServletResponse response, UIServerRuntime runtime) throws IOException {
-            var requestContext = requestContext(request);
+            UIRequestContext requestContext = requestContext(request);
             var streamClosed = new AtomicBoolean();
             var invalidationSubscriptionRef = new AtomicReference<Closeable>();
             Closeable sseStream = runtime.startDisplayablesSse(request, response, () -> {
