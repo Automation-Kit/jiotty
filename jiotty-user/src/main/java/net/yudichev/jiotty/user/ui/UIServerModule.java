@@ -42,7 +42,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
 
     public static final class Builder implements TypedBuilder<UIServerModule> {
         private BindingSpec<String> threadNameSuffixSpec = literally("");
-        private BindingSpec<Duration> optionsStabilisationDelaySpec = literally(Duration.ofMillis(100));
+        private BindingSpec<Duration> optionsStabilisationDelaySpec = literally(Duration.ofMillis(500));
 
         private Builder() {
         }

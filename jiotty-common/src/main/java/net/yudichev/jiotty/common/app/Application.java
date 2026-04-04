@@ -91,6 +91,7 @@ public final class Application extends BaseIdempotentCloseable {
     /// @throws RuntimeException     if one of the components failed to start; note components that are already started won't be stopped, use [#stop()] for
     /// that.
     public void start() throws InterruptedException {
+        logger.info("[{}] Application Starting", name);
         startedAllComponentsSuccessfully.set(false);
         componentsAttemptedToStart.clear();
         logger.info("[{}] Creating injector", name);
@@ -118,7 +119,7 @@ public final class Application extends BaseIdempotentCloseable {
             }
 
             startedAllComponentsSuccessfully.set(true);
-            logger.info("[{}] Started", name);
+            logger.info("[{}] Application Started", name);
         } catch (RuntimeException e) {
             injectorRef.set(null);
             throw e;
@@ -165,8 +166,6 @@ public final class Application extends BaseIdempotentCloseable {
         }));
 
         do {
-            logger.info("[{}] Starting", name);
-
             shutdownLatch = new CountDownLatch(1);
             CountDownLatch fullyStoppedLatch = new CountDownLatch(1);
             fullyStoppedLatchRef.set(fullyStoppedLatch);
