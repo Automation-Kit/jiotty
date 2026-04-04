@@ -615,6 +615,10 @@
                 <version>4.21.0</version>
             </dependency>
             <dependency>
+                <!--
+                    This was added because this path htmlunit -> httpmime -> httpclient 4.5.14 -> commons-codec 1.11
+                    was yielding a very ancient commons-codec with vulnerabilities.
+                -->
                 <groupId>commons-codec</groupId>
                 <artifactId>commons-codec</artifactId>
                 <version>1.21.0</version>
