@@ -211,7 +211,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     }
 
     private void sendOptionSnapshotTo(Iterable<SseClient> clients) {
-        optionsByKey.values().stream().map(Option::toDto).collect(toFutureOfList()).whenCompleteAsync((allOptionDtos, throwable) -> {
+        ImmutableList.copyOf(optionsByKey.values()).stream().map(Option::toDto).collect(toFutureOfList()).whenCompleteAsync((allOptionDtos, throwable) -> {
             if (throwable == null) {
                 var optionsByTabName = LinkedListMultimap.<String, OptionDto>create(allOptionDtos.size());
                 for (OptionDto optionDto : allOptionDtos) {
@@ -421,7 +421,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     }
 
     private static void broadcastSse(String eventName, Object data, Iterable<SseClient> clients) {
-        for (SseClient client : clients) {
+        for (SseClient client : ImmutableList.copyOf(clients)) {
             client.sendEvent(eventName, data);
         }
     }
