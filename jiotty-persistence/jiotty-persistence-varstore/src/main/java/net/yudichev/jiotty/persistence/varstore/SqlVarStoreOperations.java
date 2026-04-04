@@ -13,6 +13,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -31,16 +32,18 @@ final class SqlVarStoreOperations {
     private final CloseableDataSource dataSource;
     private final String userId;
     private final String upsertSql;
+    private final String deleteSql;
     private final String selectAllSql;
     private final SchedulingExecutor executor;
     private final ConcurrentMap<String, Object> cache = new ConcurrentHashMap<>();
 
     public SqlVarStoreOperations(CloseableDataSource dataSource, SchedulingExecutor executor, String userId,
-                                 String upsertSql, String selectAllSql) {
+                                 String upsertSql, String deleteSql, String selectAllSql) {
         this.dataSource = checkNotNull(dataSource);
         this.executor = checkNotNull(executor);
         this.userId = checkNotNull(userId);
         this.upsertSql = checkNotNull(upsertSql);
+        this.deleteSql = checkNotNull(deleteSql);
         this.selectAllSql = checkNotNull(selectAllSql);
     }
 
@@ -61,22 +64,43 @@ final class SqlVarStoreOperations {
     }
 
     public void saveValue(String key, Object value) {
-        cache.put(key, value);
-        executor.execute(() -> asUnchecked(() -> {
-            var now = Timestamp.from(Instant.now());
-            try (var connection = dataSource.getConnection();
-                 var statement = connection.prepareStatement(upsertSql)) {
-                String jsonValue = getAsUnchecked(() -> OBJECT_MAPPER.writeValueAsString(value));
-                statement.setString(1, userId);
-                statement.setString(2, key);
-                statement.setString(3, jsonValue);
-                statement.setTimestamp(4, now);
-                statement.setTimestamp(5, now);
-                statement.setTimestamp(6, now);
-                statement.executeUpdate();
-            }
-            logger.debug("[{}] Saved {}", userId, key);
-        }));
+        var oldValue = cache.put(key, value);
+        if (Objects.equals(oldValue, value)) {
+            logger.debug("[{}] Skip persisting {} as it's unchanged", userId, key);
+        } else {
+            executor.execute(() -> asUnchecked(() -> {
+                var now = Timestamp.from(Instant.now());
+                try (var connection = dataSource.getConnection();
+                     var statement = connection.prepareStatement(upsertSql)) {
+                    String jsonValue = getAsUnchecked(() -> OBJECT_MAPPER.writeValueAsString(value));
+                    statement.setString(1, userId);
+                    statement.setString(2, key);
+                    statement.setString(3, jsonValue);
+                    statement.setTimestamp(4, now);
+                    statement.setTimestamp(5, now);
+                    statement.setTimestamp(6, now);
+                    statement.executeUpdate();
+                }
+                logger.debug("[{}] Saved {}", userId, key);
+            }));
+        }
+    }
+
+    public void clearValue(String key) {
+        Object oldValue = cache.remove(key);
+        if (oldValue == null) {
+            logger.debug("[{}] Skip clearing {} as it's absent", userId, key);
+        } else {
+            executor.execute(() -> asUnchecked(() -> {
+                try (var connection = dataSource.getConnection();
+                     var statement = connection.prepareStatement(deleteSql)) {
+                    statement.setString(1, userId);
+                    statement.setString(2, key);
+                    statement.executeUpdate();
+                }
+                logger.debug("[{}] Cleared {}", userId, key);
+            }));
+        }
     }
 
     @SuppressWarnings("unchecked")

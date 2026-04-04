@@ -42,10 +42,12 @@ public final class Either<L, R> {
         return isLeft ? leftMapper.apply(left) : rightMapper.apply(right);
     }
 
+    @SuppressWarnings("unchecked")
     public <T> Either<T, R> mapLeft(Function<? super L, ? extends T> leftMapper) {
         return isLeft ? left(leftMapper.apply(left)) : (Either<T, R>) this;
     }
 
+    @SuppressWarnings("unchecked")
     public <T> Either<L, T> mapRight(Function<? super R, ? extends T> rightMapper) {
         return isLeft ? (Either<L, T>) this : right(rightMapper.apply(right));
     }
@@ -56,6 +58,20 @@ public final class Either<L, R> {
 
     public Optional<R> getRight() {
         return Optional.ofNullable(right);
+    }
+
+    public L leftOrThrow(Function<? super R, ? extends RuntimeException> exceptionFactory) {
+        if (left == null) {
+            throw exceptionFactory.apply(right);
+        }
+        return left;
+    }
+
+    public R rightOrThrow(Function<? super L, ? extends RuntimeException> exceptionFactory) {
+        if (right == null) {
+            throw exceptionFactory.apply(left);
+        }
+        return right;
     }
 
     @Override
@@ -73,7 +89,7 @@ public final class Either<L, R> {
         }
         Either<?, ?> either = (Either<?, ?>) obj;
         return Objects.equals(left, either.left) &&
-                Objects.equals(right, either.right);
+               Objects.equals(right, either.right);
     }
 
     @SuppressWarnings("ObjectInstantiationInEqualsHashCode")

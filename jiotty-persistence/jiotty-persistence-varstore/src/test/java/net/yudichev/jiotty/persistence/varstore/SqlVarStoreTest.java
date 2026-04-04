@@ -56,6 +56,21 @@ class SqlVarStoreTest {
     }
 
     @Test
+    void clearValueRemovesExistingValue() {
+        startVarStore();
+        varStore.saveValue("key1", "hello");
+        flushExecutor();
+
+        varStore.clearValue("key1");
+        flushExecutor();
+
+        varStore.stop();
+        startVarStore();
+
+        assertThat(varStore.readValue(String.class, "key1")).isEmpty();
+    }
+
+    @Test
     void readMissingKeyReturnsEmpty() {
         startVarStore();
         assertThat(varStore.readValue(String.class, "nonexistent")).isEmpty();
@@ -74,6 +89,23 @@ class SqlVarStoreTest {
         assertThat(alice.readValue(String.class, "colour")).contains("red");
         assertThat(bob.readValue(String.class, "colour")).contains("blue");
         assertThat(varStore.readValue(String.class, "colour")).isEmpty();
+    }
+
+    @Test
+    void clearValueOnScopedStoreDoesNotAffectOtherUsers() {
+        startVarStore();
+        VarStore alice = varStore.forUser("alice");
+        VarStore bob = varStore.forUser("bob");
+
+        alice.saveValue("colour", "red");
+        bob.saveValue("colour", "blue");
+        flushExecutor();
+
+        alice.clearValue("colour");
+        flushExecutor();
+
+        assertThat(alice.readValue(String.class, "colour")).isEmpty();
+        assertThat(bob.readValue(String.class, "colour")).contains("blue");
     }
 
     @Test

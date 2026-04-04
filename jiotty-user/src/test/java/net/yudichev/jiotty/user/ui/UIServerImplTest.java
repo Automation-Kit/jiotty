@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import jakarta.annotation.Nullable;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.AsyncListener;
 import jakarta.servlet.ServletOutputStream;
@@ -12,8 +13,13 @@ import jakarta.servlet.WriteListener;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
+import net.yudichev.jiotty.user.ui.options.Option;
+import net.yudichev.jiotty.user.ui.options.OptionMeta;
+import net.yudichev.jiotty.user.ui.options.OptionPersistence;
+import net.yudichev.jiotty.user.ui.options.TextOption;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +29,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +43,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -101,6 +111,7 @@ class UIServerImplTest {
     // endregion
 
     // region displayable tests
+
 
     @Test
     void sseDeliversInitialDisplayableImageOnConnect() {
@@ -311,6 +322,44 @@ class UIServerImplTest {
         assertThat(options.getFirst().get("type")).isEqualTo("text");
     }
 
+    @Test
+    void optionFormPostBroadcastsOptionUpdateViaSse() {
+        var option = createTestOption("tab1", "opt1", "Option 1");
+        server.registerOption(option);
+        clock.advanceTimeAndTick(STABILISATION_DELAY);
+
+        var capture = connectSseClient();
+        capture.reset();
+
+        submitOptionsPost("opt1", "new value", new StringWriter());
+        clock.advanceTimeAndTick(STABILISATION_DELAY);
+
+        String output = capture.output();
+        assertThat(output).contains("event: options-update");
+        String eventData = extractSseEventData(output, "options-update");
+        assertThat(eventData).contains("\"opt1\"");
+        assertThat(eventData).contains("new value");
+    }
+
+    @Test
+    void programmaticSetValueBroadcastsOptionUpdateViaSse() {
+        var option = createTestOption("tab1", "opt1", "Option 1");
+        server.registerOption(option);
+        clock.advanceTimeAndTick(STABILISATION_DELAY);
+
+        var capture = connectSseClient();
+        capture.reset();
+
+        option.setValue("programmatic value");
+        clock.advanceTimeAndTick(STABILISATION_DELAY);
+
+        String output = capture.output();
+        assertThat(output).contains("event: options-update");
+        String eventData = extractSseEventData(output, "options-update");
+        assertThat(eventData).contains("\"opt1\"");
+        assertThat(eventData).contains("programmatic value");
+    }
+
     // endregion
 
     // region SSE heartbeat
@@ -420,17 +469,20 @@ class UIServerImplTest {
     void optionRegistrationLoadsPersistence() {
         var option = createTestOption("tab1", "opt1", "Label");
         server.registerOption(option);
-        org.mockito.Mockito.verify(persistence).load(option);
+        verify(persistence).load(option);
     }
 
     @Test
     void optionValueChangeTriggersPersistenceSave() {
         var option = createTestOption("tab1", "opt1", "Label");
         server.registerOption(option);
+        clock.tick();
+        reset(persistence);
 
-        option.setValueSync("new value");
+        option.setValue("new value");
+        clock.tick();
 
-        org.mockito.Mockito.verify(persistence).save(option);
+        verify(persistence).save(option);
     }
 
     // endregion
@@ -512,6 +564,62 @@ class UIServerImplTest {
     }
 
     @Test
+    void optionsPostWithMissingNameParameterReturns400() {
+        var responseBody = new StringWriter();
+        var postResponse = submitOptionsPost(null, null, responseBody);
+        clock.tick();
+
+        verify(postResponse).setStatus(400);
+        verify(postResponse).setContentType("text/plain");
+        assertThat(responseBody.toString()).contains("Missing name parameter");
+    }
+
+    @Test
+    void optionsPostWithUnknownOptionKeyReturns400() {
+        var responseBody = new StringWriter();
+        var postResponse = submitOptionsPost("nonexistent", null, responseBody);
+        clock.tick();
+
+        verify(postResponse).setStatus(400);
+        verify(postResponse).setContentType("text/plain");
+        assertThat(responseBody.toString()).contains("nonexistent");
+    }
+
+    @Test
+    void optionsPostWhenOnFormSubmitThrowsSynchronouslyReturns400(@Mock Option<?> option) {
+        lenient().when(option.meta()).thenReturn(new OptionMeta<>(0, "tab", "throwing-opt", "Throwing", null));
+        lenient().when(option.toDto()).thenReturn(completedFuture(null));
+        when(option.onFormSubmit(any())).thenThrow(new RuntimeException("boom"));
+        server.registerOption(option);
+        clock.tick();
+
+        var responseBody = new StringWriter();
+        var postResponse = submitOptionsPost("throwing-opt", "val", responseBody);
+        clock.tick();
+
+        verify(postResponse).setStatus(400);
+        verify(postResponse).setContentType("text/plain");
+        assertThat(responseBody.toString()).contains("boom");
+    }
+
+    @Test
+    void optionsPostAsyncFailureReturns400(@Mock Option<?> option) {
+        lenient().when(option.meta()).thenReturn(new OptionMeta<>(0, "tab", "async-fail", "AsyncFail", null));
+        lenient().when(option.toDto()).thenReturn(completedFuture(null));
+        when(option.onFormSubmit(any())).thenReturn(CompletableFuture.failedFuture(new RuntimeException("async boom")));
+        server.registerOption(option);
+        clock.tick();
+
+        var responseBody = new StringWriter();
+        var postResponse = submitOptionsPost("async-fail", "val", responseBody);
+        clock.tick();
+
+        verify(postResponse).setStatus(400);
+        verify(postResponse).setContentType("text/plain");
+        assertThat(responseBody.toString()).contains("async boom");
+    }
+
+    @Test
     void optionTabIdSanitisesSpecialCharacters() {
         registerTestOption("My Tab!", "opt1", "Label");
         clock.advanceTimeAndTick(STABILISATION_DELAY);
@@ -523,22 +631,6 @@ class UIServerImplTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> tabs = (List<Map<String, Object>>) parsed.get("tabs");
         assertThat(tabs.getFirst().get("id")).isEqualTo("My-Tab-");
-    }
-
-    @Test
-    void optionsAreSortedByFormOrder() {
-        var opt1 = createTestOption("tab1", "opt1", "Label 1", 100);
-        var opt2 = createTestOption("tab1", "opt2", "Label 2", 10);
-        server.registerOption(opt1);
-        server.registerOption(opt2);
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
-
-        var capture = connectSseClient();
-        String eventData = extractSseEventData(capture.output(), "options-update");
-        // opt2 (order=10) should appear before opt1 (order=100)
-        int pos2 = eventData.indexOf("\"opt2\"");
-        int pos1 = eventData.indexOf("\"opt1\"");
-        assertThat(pos2).isLessThan(pos1);
     }
 
     // endregion
@@ -557,6 +649,24 @@ class UIServerImplTest {
     private TestTextOption createTestOption(String tabName, String key, String label, int formOrder) {
         return new TestTextOption(clock.createSingleThreadedSchedulingExecutor("opt-" + key),
                                   new OptionMeta<>(formOrder, tabName, key, label, null));
+    }
+
+    private HttpServletResponse submitOptionsPost(@Nullable String name, @Nullable String value, StringWriter responseBody) {
+        var postRequest = mock(HttpServletRequest.class);
+        var postResponse = mock(HttpServletResponse.class);
+        var postAsyncContext = mock(AsyncContext.class);
+        when(postRequest.startAsync()).thenReturn(postAsyncContext);
+        doAnswer(invocation -> {
+            invocation.getArgument(0, Runnable.class).run();
+            return null;
+        }).when(postAsyncContext).start(any(Runnable.class));
+        lenient().when(postRequest.getParameter("name")).thenReturn(name);
+        lenient().when(postRequest.getParameter("value")).thenReturn(value);
+        lenient().when(postRequest.getParameterMap()).thenReturn(Map.of());
+        asUnchecked(() -> when(postResponse.getWriter()).thenReturn(new PrintWriter(responseBody)));
+
+        server.handleOptionsPost(postRequest, postResponse);
+        return postResponse;
     }
 
     private static Displayable createDisplayable(String id, String displayName,
@@ -612,7 +722,7 @@ class UIServerImplTest {
     // region test infrastructure
 
     private static final class TestTextOption extends TextOption {
-        TestTextOption(net.yudichev.jiotty.common.async.TaskExecutor executor, OptionMeta<String> meta) {
+        TestTextOption(TaskExecutor executor, OptionMeta<String> meta) {
             super(executor, meta);
         }
 

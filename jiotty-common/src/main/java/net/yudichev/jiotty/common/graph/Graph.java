@@ -45,6 +45,7 @@ public class Graph extends BaseIdempotentCloseable {
     }
 
     public <T extends Node> T registerNode(String name, T node) {
+        checkState(!isClosed(), "Closed");
         assertCallingThreadConsistent();
         checkState(!inWave(), "Cannot register nodes in-wave");
         var nodeState = new NodeState(name, node);
@@ -97,12 +98,12 @@ public class Graph extends BaseIdempotentCloseable {
         try {
             do {
                 nodesTriggeredInWave.add(currentNode);
+                nodesPendingTrigger.remove(currentNode);
                 boolean stateModified = currentNode.node.wave();
                 if (stateModified) {
                     // mark all children as pending trigger
                     currentNode.children.forEach(NodeState::triggerInNextWave);
                 }
-                nodesPendingTrigger.remove(currentNode);
                 currentNode = nodesPendingTrigger.higher(currentNode);
             } while (currentNode != null);
         } catch (RuntimeException e) {

@@ -13,6 +13,7 @@ public final class AppStarter {
     public static void start(Supplier<InitModule> initModuleSupplier) {
         try {
             Application.builder()
+                       .setName("init")
                        .addModule(initModuleSupplier)
                        .withAnnotation(forAnnotation(uniqueAnnotation()))
                        .build()

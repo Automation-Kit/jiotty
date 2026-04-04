@@ -31,6 +31,11 @@ final class ExecutorProvider extends BaseLifecycleComponent implements Provider<
     }
 
     @Override
+    public String name() {
+        return String.format("%s @ %s (%s)", getClass().getSimpleName(), System.identityHashCode(this), threadName);
+    }
+
+    @Override
     public SchedulingExecutor get() {
         return executor;
     }

@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.user.ui;
+package net.yudichev.jiotty.user.ui.options;
 
 public interface OptionPersistence {
     void save(Option<?> option);

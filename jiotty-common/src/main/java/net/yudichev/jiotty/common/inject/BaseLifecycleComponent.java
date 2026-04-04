@@ -10,12 +10,14 @@ import static net.yudichev.jiotty.common.lang.Locks.inLock;
 @SuppressWarnings("AbstractClassWithoutAbstractMethods") // designed for extension
 public abstract class BaseLifecycleComponent implements LifecycleComponent {
     private final Lock lifecycleStateLock = new ReentrantLock();
-    private boolean started;
+    private volatile boolean started;
+    private boolean startAttempted;
 
     @Override
     public final void start() {
         inLock(lifecycleStateLock, () -> {
-            checkState(!started, "Component %s is already started", this);
+            checkState(!startAttempted, "Component %s is already started", this);
+            startAttempted = true;
             doStart();
             started = true;
         });
@@ -24,7 +26,8 @@ public abstract class BaseLifecycleComponent implements LifecycleComponent {
     @Override
     public final void stop() {
         inLock(lifecycleStateLock, () -> {
-            if (started) {
+            if (startAttempted) {
+                startAttempted = false;
                 started = false;
                 doStop();
             }
@@ -32,11 +35,11 @@ public abstract class BaseLifecycleComponent implements LifecycleComponent {
     }
 
     protected final boolean isStarted() {
-        return inLock(lifecycleStateLock, () -> started);
+        return started;
     }
 
     protected final void checkStarted() {
-        inLock(lifecycleStateLock, () -> checkState(isStarted(), "Component %s is not started or already stopped", this));
+        checkState(isStarted(), "Component %s is not started or already stopped", this);
     }
 
     protected final void whenNotLifecycling(Runnable action) {

@@ -21,7 +21,6 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.Closeable.closeIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
-import static net.yudichev.jiotty.common.lang.CompletableFutures.logErrorOnFailure;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
@@ -77,7 +76,18 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     @Override
     protected final void doStop() {
         doStop0();
-        awaitShutdown(executor.submit(() -> closeSafelyIfNotNull(logger, nodes.reversed())).whenComplete(logErrorOnFailure(logger, "failed closing nodes")));
+        awaitShutdown(executor.submit(this::stopSync));
+    }
+
+    protected final void stopSync() {
+        try {
+            closeSafelyIfNotNull(logger, panicResetSchedule);
+            closeSafelyIfNotNull(logger, nodes.reversed());
+            closeSafelyIfNotNull(logger, graphRunner);
+            graphRunner = null;
+        } catch (RuntimeException e) {
+            logger.warn("Failed closing graph", e);
+        }
     }
 
     protected void doStop0() {

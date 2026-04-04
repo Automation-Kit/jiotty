@@ -23,7 +23,14 @@
 - When asserting a fixed collection of emitted values in tests, prefer concise AssertJ collection forms such as `satisfiesExactly(...)` instead of separate size
   checks plus extraction boilerplate.
 - When a lambda parameter is intentionally unused and the language level allows it, use Java 25 unnamed parameter syntax `_`.
-- When a unit test needs multiple Mockito mocks, use `@ExtendWith(MockitoExtension.class)` with `@Mock` fields or parameters instead of `Mockito.mock(...)`.
+- Always use `@Mock` (fields or method parameters) instead of `Mockito.mock(...)`. This preserves generic type information (e.g. `@Mock Option<?>`)
+  and avoids raw-type unchecked warnings that `mock(Option.class)` would produce. Use method parameters when only some tests need the mock.
+- When a test needs a `VarStore`, prefer `InMemoryVarStore` over Mockito or a bespoke test double unless mocking or a smaller alternative fake would be less
+  code.
+- Use `@Captor` annotation to create `ArgumentCaptor`s instead of `ArgumentCaptor.forClass(...)`.
+- In `@AfterEach` teardown methods, always account for the possibility that `@BeforeEach` failed partway through — guard against null fields (for example,
+  check `if (manager != null)` before calling `manager.stop()`).
+- Use AssertJ `isInstanceOfSatisfying(Type.class, consumer)` instead of `isInstanceOf(Type.class).satisfies(consumer)` to combine type checking and assertions.
 - In single-threaded tests, do not use `AtomicReference`, `AtomicBoolean`, or other atomic classes for test-owned state; use `MutableReference` or ordinary
   mutable state instead.
 - Do not add `@SuppressWarnings(...)` unless it suppresses a real compiler warning in that exact location; remove redundant suppressions.
@@ -85,6 +92,7 @@
 - Never use fully qualified class names in code; always add an import statement. Only use fully qualified names when two imported classes have the same simple
   name.
 - Generally, do not create private constants that are only used once. This creates indirection that makes the code harder to read.
+- Before adding a new helper or inline setup block, search the file for existing helpers that already do the same thing and reuse or extend them.
 - When the same logic repeats in a class, extract a helper method instead of duplicating the snippet.
 - Do not duplicate small helper classes across implementations or tests; extract a shared helper instead.
 - Do not store values as fields if they are only used to build other fields in the constructor; keep them as constructor-local variables.

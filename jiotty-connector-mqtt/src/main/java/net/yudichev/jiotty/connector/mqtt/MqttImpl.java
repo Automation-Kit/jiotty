@@ -17,6 +17,7 @@ import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.lang.backoff.NanoClock;
 import net.yudichev.jiotty.common.lang.backoff.SynchronizedBackOff;
 import net.yudichev.jiotty.common.lang.throttling.ThresholdThrottlingConsumerFactory;
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.paho.client.mqttv3.IMqttActionListener;
@@ -152,6 +153,20 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         });
     }
 
+    @Override
+    protected void doStop() {
+        // disconnect must not be scheduled to the executor that is potentially blocked on connect(); this method also seems to be thread safe
+        try {
+            client.disconnect().waitForCompletion(SECONDS.toMillis(10));
+        } catch (MqttException e) {
+            // if the client is already disconnected, disconnect() blows, and we do not care much about it
+            logger.info("Failed to disconnect client: {}", humanReadableMessage(e));
+        } finally {
+            closeSafelyIfNotNull(logger, client); // I have a right as both this component and the client provider are singletons
+        }
+        closeIfNotNull(executor); // after client shutdown because, while active, the client may still invoke callbacks which schedule tasks
+    }
+
     // overridable for tests
     void scheduleReconnect(Scheduler scheduler, Long delayMillis, Runnable runnable) {
         // must block the task, so that all user actions queue after start()
@@ -192,7 +207,12 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                     subscriptions.remove(subscription);
                     if (subscriptions.isEmpty()) {
                         if (client.isConnected()) {
-                            asUnchecked(() -> client.unsubscribe(topicFilter));
+                            try {
+                                asUnchecked(() -> client.unsubscribe(topicFilter));
+                            } catch (RuntimeException e) {
+                                boolean started = isStarted();
+                                logger.log(started ? Level.WARN : Level.DEBUG, "Failed to unsubscribe", started ? e : null);
+                            }
                         }
                         return null;
                     }
@@ -213,20 +233,6 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     @Override
     public Closeable subscribeToConnectionStatus(Consumer<ConnectionStatus> listener) {
         return connectionStatusListeners.addListener(executor, () -> Optional.ofNullable(connectionStatus), listener);
-    }
-
-    @Override
-    protected void doStop() {
-        closeIfNotNull(executor);
-        // disconnect must not be scheduled to the executor that is potentially blocked on connect; this method also seems to be thread safe
-        try {
-            client.disconnect().waitForCompletion(SECONDS.toMillis(10));
-        } catch (MqttException e) {
-            // if the client is already disconnected, disconnect() blows, and we do not care much about it
-            logger.info("Failed to disconnect client: {}", humanReadableMessage(e));
-        } finally {
-            closeSafelyIfNotNull(logger, client); // I have a right as both this component and the client provider are singletons
-        }
     }
 
     private static <T, U> BiConsumer<T, U> exceptionLogging(BiConsumer<T, U> delegate) {

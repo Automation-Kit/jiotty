@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.energy;
 
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.security.AuthState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -50,6 +51,12 @@ class RealAndPredictedPriceServiceTest {
                 realPriceConsumer = consumer;
                 return realPriceSubscription;
             }
+
+            @Override
+            public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
+                consumer.accept(new AuthState.Success("SUCCESS"));
+                return () -> {};
+            }
         }, new EnergyPriceService() {
             @Override
             public Optional<Prices> getPrices() {
@@ -61,6 +68,11 @@ class RealAndPredictedPriceServiceTest {
                 assertThat(predictedPriceConsumer).isNull();
                 predictedPriceConsumer = consumer;
                 return predictedPriceSubscription;
+            }
+
+            @Override
+            public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
+                throw new UnsupportedOperationException();
             }
         });
     }

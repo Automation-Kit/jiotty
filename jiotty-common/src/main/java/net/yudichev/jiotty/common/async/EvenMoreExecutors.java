@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.async;
 
+import java.time.Duration;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 
@@ -16,6 +17,11 @@ public final class EvenMoreExecutors {
             @Override
             public <T> CompletableFuture<T> submit(Callable<? extends T> task) {
                 return completedFuture(getAsUnchecked(task::call));
+            }
+
+            @Override
+            public void executeAndAwaitIfLive(Runnable command, Duration timeout) {
+                execute(command);
             }
         };
     }

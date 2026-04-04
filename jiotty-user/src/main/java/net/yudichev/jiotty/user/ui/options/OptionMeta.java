@@ -1,11 +1,11 @@
-package net.yudichev.jiotty.user.ui;
+package net.yudichev.jiotty.user.ui.options;
 
 import jakarta.annotation.Nullable;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static net.yudichev.jiotty.user.ui.Option.DEFAULT_FORM_ORDER;
+import static net.yudichev.jiotty.user.ui.options.Option.DEFAULT_FORM_ORDER;
 
-/// @param formOrder see [Option#getFormOrder() ]
+/// @param formOrder see [Option#getFormOrder()]
 public record OptionMeta<T>(int formOrder, String tabName, String key, String label, T defaultValue) {
     public OptionMeta(String tabName, String key, String label, @Nullable T defaultValue) {
         this(DEFAULT_FORM_ORDER, tabName, key, label, defaultValue);

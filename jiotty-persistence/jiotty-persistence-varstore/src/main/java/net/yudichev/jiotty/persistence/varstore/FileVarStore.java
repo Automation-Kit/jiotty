@@ -23,6 +23,11 @@ public final class FileVarStore implements VarStore {
     }
 
     @Override
+    public void clearValue(String key) {
+        delegate.clearValue(key);
+    }
+
+    @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return delegate.readValue(type, key);
     }

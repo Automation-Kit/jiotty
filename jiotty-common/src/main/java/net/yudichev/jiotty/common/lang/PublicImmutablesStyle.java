@@ -15,6 +15,11 @@ import static java.lang.annotation.RetentionPolicy.CLASS;
 // Builder initialization methods will have 'set' prefix
 // 'Abstract' prefix will be detected and trimmed
 // No prefix or suffix for generated immutable type
-@Value.Style(get = {"is*", "get*"}, init = "set*", typeAbstract = "Base*", typeImmutable = "*", visibility = Value.Style.ImplementationVisibility.PUBLIC)
+@Value.Style(get = {"is*", "get*"},
+        init = "set*",
+        typeAbstract = "Base*",
+        typeImmutable = "*",
+        visibility = Value.Style.ImplementationVisibility.PUBLIC,
+        redactedMask = "***")
 public @interface PublicImmutablesStyle {
 }

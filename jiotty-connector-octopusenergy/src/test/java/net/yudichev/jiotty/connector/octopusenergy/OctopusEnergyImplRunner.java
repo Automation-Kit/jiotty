@@ -11,6 +11,7 @@ final class OctopusEnergyImplRunner {
     static void main(String[] args) {
         var oe = new OctopusEnergyImpl(new TimeProvider(), args[0], args[1]);
         oe.start();
+        oe.subscribeToApiKeyState(apiKeyState -> System.out.println("KEY STATE -> " + apiKeyState));
         oe.getAgilePrices(Instant.now().minus(6, ChronoUnit.DAYS), Instant.now().plus(1, ChronoUnit.DAYS))
           .whenComplete((value, throwable) -> {
               if (value != null) {

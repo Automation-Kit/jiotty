@@ -88,21 +88,28 @@ public abstract class BaseServerNode extends BaseNode implements ServerNode {
     }
 
     private void triggerInNewWave(String triggeredBy, BooleanSupplier trigger) {
-        if (runner.graph().inWave()) {
-            trigger.getAsBoolean();
+        if (checkGraphClosedOnTrigger(triggeredBy)) {
+            return;
+        }
+        runner.executor().execute(() -> {
+            if (checkGraphClosedOnTrigger(triggeredBy)) {
+                return;
+            }
+            boolean wasNotAlreadyTriggered = trigger.getAsBoolean();
+            if (wasNotAlreadyTriggered) {
+                runner.scheduleNewWave(name + ": " + triggeredBy);
+            } else {
+                logger.debug("{}: not triggering as node is already pending trigger, tiggeredBy was: {}", name, triggeredBy);
+            }
+        });
+    }
+
+    private boolean checkGraphClosedOnTrigger(String triggeredBy) {
+        if (runner.graph().isClosedPlain()) {
+            logger.debug("{}: Not triggering, graph closed, triggeredBy was: {}", name, triggeredBy);
+            return true;
         } else {
-            runner.executor().execute(() -> {
-                if (runner.graph().isClosedPlain()) {
-                    logger.debug("{}: Not triggering, graph closed, tiggeredBy was: {}", name, triggeredBy);
-                } else {
-                    boolean wasNotAlreadyTriggered = trigger.getAsBoolean();
-                    if (wasNotAlreadyTriggered) {
-                        runner.scheduleNewWave(name + ": " + triggeredBy);
-                    } else {
-                        logger.debug("{}: not triggering as node is already pending trigger, tiggeredBy was: {}", name, triggeredBy);
-                    }
-                }
-            });
+            return false;
         }
     }
 }

@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.user.ui;
+package net.yudichev.jiotty.user.ui.options;
 
 import net.yudichev.jiotty.common.async.TaskExecutor;
 
@@ -11,20 +11,14 @@ import java.util.stream.Stream;
 public abstract class TextAreaOption extends BaseOption<String> {
     private static final Pattern LINES_PATTERN = Pattern.compile("[\\n\\r]+");
 
-    private final String label;
     protected int rowCount = 3;
 
     protected TextAreaOption(TaskExecutor executor, OptionMeta<String> meta) {
         super(executor, meta);
-        label = meta.label();
-    }
-
-    public String getLabel() {
-        return label;
     }
 
     @Override
-    public CompletableFuture<Void> onFormSubmit(Optional<String> value) {
+    public CompletableFuture<?> onFormSubmit(Optional<String> value) {
         return setValue(value.orElse(null));
     }
 
@@ -37,7 +31,7 @@ public abstract class TextAreaOption extends BaseOption<String> {
     }
 
     @Override
-    public OptionDtos.OptionDto toDto() {
-        return new OptionDtos.TextArea("textarea", meta().key(), label, meta().tabName(), getFormOrder(), getValue().orElse(""), rowCount);
+    public OptionDto toDtoUnsafe() {
+        return new StandardOptionDtos.TextArea("textarea", meta().key(), meta().label(), meta().tabName(), getFormOrder(), rowCount, getValue().orElse(""));
     }
 }

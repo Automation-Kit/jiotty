@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.user.ui;
+package net.yudichev.jiotty.user.ui.options;
 
 import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
@@ -21,41 +21,35 @@ import java.util.concurrent.CompletableFuture;
 /// The value is persisted as a java.time.Duration.
 public abstract class DurationOption extends BaseOption<Duration> {
 
-    private final String label;
-
     public DurationOption(TaskExecutor executor, OptionMeta<Duration> meta) {
         super(executor, meta);
-        label = meta.label();
-    }
-
-    public String getLabel() {
-        return label;
     }
 
     @Override
-    public CompletableFuture<Void> onFormSubmit(Optional<String> value) {
+    public CompletableFuture<?> onFormSubmit(Optional<String> value) {
         try {
             Duration parsed = value.map(String::trim)
                                    .filter(s -> !s.isEmpty())
                                    .map(FriendlyDurationFormat::parseHuman)
                                    .orElse(null);
-            return setValue(parsed);
+            return setValue(parsed).thenApply(FriendlyDurationFormat::formatHuman);
         } catch (IllegalArgumentException e) {
             return CompletableFutures.failure(e.getMessage());
         }
     }
 
     @Override
-    public OptionDtos.OptionDto toDto() {
+    public OptionDto toDtoUnsafe() {
         String placeholder = "e.g. 1d 02:30, 2h 15m, 90m, 3600s or PT2H30M";
         String title = "Accepted: HH:MM[:SS], Nd HH:MM[:SS], unit forms (e.g. 2h 30m, 90m), or ISO-8601 (PT...)";
-        return new OptionDtos.Duration("duration",
-                                       meta().key(),
-                                       label,
-                                       meta().tabName(),
-                                       getFormOrder(),
-                                       getValue().map(FriendlyDurationFormat::formatHuman).orElse(null),
-                                       placeholder,
-                                       title);
+        return new StandardOptionDtos.Duration("duration",
+                                               meta().key(),
+                                               meta().label(),
+                                               meta().tabName(),
+                                               getFormOrder(),
+                                               placeholder,
+                                               title,
+                                               getValue().map(FriendlyDurationFormat::formatHuman).orElse(null)
+        );
     }
 }

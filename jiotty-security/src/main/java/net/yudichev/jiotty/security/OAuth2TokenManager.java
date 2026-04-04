@@ -11,5 +11,8 @@ public interface OAuth2TokenManager {
 
     String scope();
 
-    Closeable subscribeToAccessToken(Consumer<? super String> accessTokenHandler);
+    Closeable subscribeToAccessTokenState(Consumer<? super AuthState> handler);
+
+    /// Supply the new auth code received from the target system after the user logged in. This initiates exchanging this code for an access token.
+    void onNewAuthCode(String authCode, String redirectUri);
 }

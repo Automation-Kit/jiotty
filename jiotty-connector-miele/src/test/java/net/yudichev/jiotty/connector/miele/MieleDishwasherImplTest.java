@@ -8,6 +8,7 @@ import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.TimeProvider;
+import net.yudichev.jiotty.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -64,9 +65,13 @@ class MieleDishwasherImplTest {
             }
 
             @Override
-            public Closeable subscribeToAccessToken(Consumer<? super String> accessTokenHandler) {
-                accessTokenHandler.accept(ACCESS_TOKEN);
+            public Closeable subscribeToAccessTokenState(Consumer<? super AuthState> handler) {
+                handler.accept(new AuthState.Success(ACCESS_TOKEN));
                 return () -> {};
+            }
+
+            @Override
+            public void onNewAuthCode(String authCode, String redirectUri) {
             }
         };
 

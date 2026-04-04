@@ -8,9 +8,9 @@ import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
-import net.yudichev.jiotty.user.ui.OptionMeta;
-import net.yudichev.jiotty.user.ui.TextOption;
 import net.yudichev.jiotty.user.ui.UIServer;
+import net.yudichev.jiotty.user.ui.options.OptionMeta;
+import net.yudichev.jiotty.user.ui.options.TextOption;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 

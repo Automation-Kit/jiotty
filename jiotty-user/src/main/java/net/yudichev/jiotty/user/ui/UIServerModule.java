@@ -3,6 +3,8 @@ package net.yudichev.jiotty.user.ui;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.user.ui.options.OptionPersistence;
+import net.yudichev.jiotty.user.ui.options.OptionPersistenceImpl;
 
 import java.time.Duration;
 

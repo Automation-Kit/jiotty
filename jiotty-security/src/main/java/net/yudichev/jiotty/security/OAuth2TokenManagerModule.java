@@ -2,6 +2,7 @@ package net.yudichev.jiotty.security;
 
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
+import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -17,7 +18,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
     private final BindingSpec<String> clientIdSpec;
     private final BindingSpec<String> clientSecretSpec;
     private final BindingSpec<String> apiNameSpec;
-    private final BindingSpec<String> loginUrlSpec;
+    private final @Nullable BindingSpec<String> loginUrlSpec;
     private final BindingSpec<String> tokenUrlSpec;
     private final BindingSpec<String> scopeSpec;
     private final BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec;
@@ -26,7 +27,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
     private OAuth2TokenManagerModule(BindingSpec<String> clientIdSpec,
                                      BindingSpec<String> clientSecretSpec,
                                      BindingSpec<String> apiNameSpec,
-                                     BindingSpec<String> loginUrlSpec,
+                                     @Nullable BindingSpec<String> loginUrlSpec,
                                      BindingSpec<String> tokenUrlSpec,
                                      BindingSpec<String> scopeSpec,
                                      BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec,
@@ -34,7 +35,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.clientSecretSpec = checkNotNull(clientSecretSpec);
         this.apiNameSpec = checkNotNull(apiNameSpec);
-        this.loginUrlSpec = checkNotNull(loginUrlSpec);
+        this.loginUrlSpec = loginUrlSpec;
         this.tokenUrlSpec = checkNotNull(tokenUrlSpec);
         this.scopeSpec = checkNotNull(scopeSpec);
         this.fixedCallbackHttpPortSpec = checkNotNull(fixedCallbackHttpPortSpec);
@@ -49,28 +50,33 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
     @Override
     protected void configure() {
         clientIdSpec.bind(String.class)
-                    .annotatedWith(OAuth2TokenManagerImpl.ClientID.class)
+                    .annotatedWith(Bindings.ClientID.class)
                     .installedBy(this::installLifecycleComponentModule);
         clientSecretSpec.bind(String.class)
-                        .annotatedWith(OAuth2TokenManagerImpl.ClientSecret.class)
+                        .annotatedWith(Bindings.ClientSecret.class)
                         .installedBy(this::installLifecycleComponentModule);
         apiNameSpec.bind(String.class)
-                   .annotatedWith(OAuth2TokenManagerImpl.ApiName.class)
+                   .annotatedWith(Bindings.ApiName.class)
                    .installedBy(this::installLifecycleComponentModule);
-        loginUrlSpec.bind(String.class)
-                    .annotatedWith(OAuth2TokenManagerImpl.LoginUrl.class)
-                    .installedBy(this::installLifecycleComponentModule);
         tokenUrlSpec.bind(String.class)
-                    .annotatedWith(OAuth2TokenManagerImpl.TokenUrl.class)
+                    .annotatedWith(Bindings.TokenUrl.class)
                     .installedBy(this::installLifecycleComponentModule);
         scopeSpec.bind(String.class)
-                 .annotatedWith(OAuth2TokenManagerImpl.Scope.class)
+                 .annotatedWith(Bindings.Scope.class)
                  .installedBy(this::installLifecycleComponentModule);
-        fixedCallbackHttpPortSpec.bind(new TypeLiteral<>() {})
-                                 .annotatedWith(OAuth2TokenManagerImpl.FixedCallbackHttpPort.class)
-                                 .installedBy(this::installLifecycleComponentModule);
 
-        bind(exposedKey).to(registerLifecycleComponent(OAuth2TokenManagerImpl.class));
+        if (loginUrlSpec != null) {
+            loginUrlSpec.bind(String.class)
+                        .annotatedWith(LocalLoginOAuth2TokenManager.LoginUrl.class)
+                        .installedBy(this::installLifecycleComponentModule);
+            fixedCallbackHttpPortSpec.bind(new TypeLiteral<>() {})
+                                     .annotatedWith(LocalLoginOAuth2TokenManager.FixedCallbackHttpPort.class)
+                                     .installedBy(this::installLifecycleComponentModule);
+            bind(exposedKey).to(registerLifecycleComponent(LocalLoginOAuth2TokenManager.class));
+        } else {
+            bind(exposedKey).to(registerLifecycleComponent(OAuth2TokenManagerImpl.class));
+        }
+
         expose(exposedKey);
     }
 
@@ -103,12 +109,13 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
             return this;
         }
 
-        public Builder setLoginUrl(BindingSpec<String> loginUrlSpec) {
+        /// If this is specified, then support for local HTTP auth login is enabled, which is suitable for local unsecured environments.
+        public Builder withLoginUrl(BindingSpec<String> loginUrlSpec) {
             this.loginUrlSpec = checkNotNull(loginUrlSpec);
             return this;
         }
 
-        public Builder setTokenUrlSpec(BindingSpec<String> tokenUrlSpec) {
+        public Builder setTokenUrl(BindingSpec<String> tokenUrlSpec) {
             this.tokenUrlSpec = checkNotNull(tokenUrlSpec);
             return this;
         }
@@ -118,6 +125,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
             return this;
         }
 
+        /// Only makes sense if [#withLoginUrl] is also called.
         public Builder withFixedCallbackHttpPort(BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec) {
             this.fixedCallbackHttpPortSpec = checkNotNull(fixedCallbackHttpPortSpec);
             return this;

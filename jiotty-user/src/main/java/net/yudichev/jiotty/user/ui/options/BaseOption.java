@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.user.ui;
+package net.yudichev.jiotty.user.ui.options;
 
 import com.google.common.reflect.TypeToken;
 import jakarta.annotation.Nullable;
@@ -40,17 +40,22 @@ public abstract class BaseOption<T> implements Option<T> {
     }
 
     @Override
-    public final Optional<T> getValue() {
-        return Optional.ofNullable(value);
+    public CompletableFuture<OptionDto> toDto() {
+        return executor.submit(this::toDtoUnsafe);
+    }
+
+    @Override
+    public final @Nullable T value() {
+        return value;
     }
 
     @Override
     public Closeable addChangeListener(Consumer<Option<T>> listener) {
-        return changeListeners.addListener(listener);
+        return changeListeners.addListener(executor, () -> Optional.of(this), listener);
     }
 
     @Override
-    public final CompletableFuture<Void> setValue(T value) {
+    public final CompletableFuture<T> setValue(T value) {
         return executor.submit(() -> setValueSync(value));
     }
 
@@ -72,7 +77,7 @@ public abstract class BaseOption<T> implements Option<T> {
     }
 
     @Override
-    public void setValueSync(T value) {
+    public T setValueSync(T value) {
         if (!Objects.equals(this.value, value)) {
             T oldValue = this.value;
             this.value = value;
@@ -84,5 +89,10 @@ public abstract class BaseOption<T> implements Option<T> {
             }
             changeListeners.notify(this);
         }
+        return value;
+    }
+
+    protected final TaskExecutor executor() {
+        return executor;
     }
 }

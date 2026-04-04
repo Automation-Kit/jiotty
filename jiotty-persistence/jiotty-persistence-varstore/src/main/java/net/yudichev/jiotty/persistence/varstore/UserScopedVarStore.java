@@ -21,6 +21,11 @@ final class UserScopedVarStore implements VarStore {
     }
 
     @Override
+    public void clearValue(String key) {
+        delegate.clearValue(keyPrefix + key);
+    }
+
+    @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return delegate.readValue(type, keyPrefix + key);
     }

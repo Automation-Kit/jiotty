@@ -16,6 +16,7 @@ import net.yudichev.jiotty.common.lang.backoff.BackOff;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.rest.ContentTypes;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import net.yudichev.jiotty.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -95,8 +96,8 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
              dateTimeProvider,
              retryableOperationExecutor,
              "https://api.mcs3.miele.com/v1",
-             builder -> {},
-             builder -> {},
+             _ -> {},
+             _ -> {},
              3);
     }
 
@@ -128,9 +129,12 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
         });
         commandClient = newClient(commandClientCustomiser);
         CompletableFuture<Void> firstToken = new CompletableFuture<>();
-        tokenSubscription = tokenManager.subscribeToAccessToken(token -> {
+        tokenSubscription = tokenManager.subscribeToAccessTokenState(authState -> {
             boolean firstTime = accessToken == null;
-            accessToken = token;
+            accessToken = switch (authState) {
+                case AuthState.Success success -> success.authInfo();
+                case AuthState.Failure failure -> throw new RuntimeException("Failed to obtain access token: " + failure.description());
+            };
             if (firstTime) {
                 firstToken.complete(null);
             }
@@ -310,11 +314,6 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
                         if (!response.isSuccessful()) {
                             executor.execute(() -> handleFailure(
                                     "failed to open SSE stream: response code " + response.code() + ", body " + getResponseBodyStr(responseBody)));
-                            return;
-                        }
-
-                        if (responseBody == null) {
-                            executor.execute(() -> handleFailure("failed to open SSE stream: response is empty"));
                             return;
                         }
 

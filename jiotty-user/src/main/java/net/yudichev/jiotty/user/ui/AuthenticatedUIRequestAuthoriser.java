@@ -46,7 +46,7 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
 
         AsyncContext asyncContext = request.startAsync();
         asyncContext.setTimeout(0);
-        userTokenAuthoriser.deliverTokenState(token, state -> asyncContext.start(() -> {
+        userTokenAuthoriser.deliverTokenStateTo(token, state -> asyncContext.start(() -> {
             switch (state) {
                 case TokenAuthenticated tokenAuthenticated -> {
                     UIHttpServerImpl.setRequestContext(request, createRequestContext(token, tokenAuthenticated));

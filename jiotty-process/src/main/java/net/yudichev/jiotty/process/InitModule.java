@@ -4,6 +4,7 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
+import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
@@ -26,7 +27,7 @@ import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotatio
 
 public final class InitModule extends AbstractModule {
     private final DbConnectionConfig dbConnectionConfig;
-    private final BindingSpec<Path> varStorePathSpec;
+    private final @Nullable BindingSpec<Path> varStorePathSpec;
     private final BindingSpec<Path> pathToKeystoreSpec;
     private final BindingSpec<String> keystorePassSpec;
     private final BindingSpec<Boolean> singeUserSpec;
@@ -34,14 +35,14 @@ public final class InitModule extends AbstractModule {
     private final BindingSpec<String> varStoreTableNameSpec;
 
     private InitModule(DbConnectionConfig dbConnectionConfig,
-                       BindingSpec<Path> varStorePathSpec,
+                       @Nullable BindingSpec<Path> varStorePathSpec,
                        BindingSpec<Path> pathToKeystoreSpec,
                        BindingSpec<String> keystorePassSpec,
                        BindingSpec<Boolean> singeUserSpec,
                        Function<Injector, Module> appModuleFactory,
                        BindingSpec<String> varStoreTableNameSpec) {
         this.dbConnectionConfig = checkNotNull(dbConnectionConfig);
-        this.varStorePathSpec = checkNotNull(varStorePathSpec);
+        this.varStorePathSpec = varStorePathSpec;
         this.pathToKeystoreSpec = checkNotNull(pathToKeystoreSpec);
         this.keystorePassSpec = checkNotNull(keystorePassSpec);
         this.singeUserSpec = checkNotNull(singeUserSpec);
@@ -62,12 +63,14 @@ public final class InitModule extends AbstractModule {
                                                                  .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                                  .build();
         install(dataSourceFactoryModule);
-        var varStoreModule = VarStoreModule.builder()
-                                           .withPath(varStorePathSpec)
-                                           .withDataSourceFactory(boundTo(dataSourceFactoryModule.getExposedKey()))
-                                           .withSingleUser(singeUserSpec)
-                                           .withTableName(varStoreTableNameSpec)
-                                           .build();
+        var varStoreModuleBuilder = VarStoreModule.builder();
+        if (varStorePathSpec != null) {
+            varStoreModuleBuilder.withPath(varStorePathSpec);
+        }
+        var varStoreModule = varStoreModuleBuilder.withDataSourceFactory(boundTo(dataSourceFactoryModule.getExposedKey()))
+                                                  .withSingleUser(singeUserSpec)
+                                                  .withTableName(varStoreTableNameSpec)
+                                                  .build();
         install(varStoreModule);
         bind(new TypeLiteral<Function<Injector, Module>>() {}).annotatedWith(AppManager.Dependency.class).toInstance(appModuleFactory);
         bind(LifecycleComponent.class).annotatedWith(uniqueAnnotation()).to(AppManager.class);
@@ -91,11 +94,6 @@ public final class InitModule extends AbstractModule {
             return this;
         }
 
-        public Builder setVarStorePath(BindingSpec<Path> varStorePathSpec) {
-            this.varStorePathSpec = checkNotNull(varStorePathSpec);
-            return this;
-        }
-
         public Builder setPathToKeystore(BindingSpec<Path> pathToKeystoreSpec) {
             this.pathToKeystoreSpec = checkNotNull(pathToKeystoreSpec);
             return this;
@@ -113,6 +111,11 @@ public final class InitModule extends AbstractModule {
 
         public Builder withSingleUser(BindingSpec<Boolean> singleUserSpec) {
             this.singleUserSpec = checkNotNull(singleUserSpec);
+            return this;
+        }
+
+        public Builder withVarStorePath(BindingSpec<Path> varStorePathSpec) {
+            this.varStorePathSpec = checkNotNull(varStorePathSpec);
             return this;
         }
 

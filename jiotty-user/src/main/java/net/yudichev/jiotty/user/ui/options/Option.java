@@ -1,6 +1,7 @@
-package net.yudichev.jiotty.user.ui;
+package net.yudichev.jiotty.user.ui.options;
 
 import com.google.common.reflect.TypeToken;
+import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.Closeable;
 
 import java.util.Optional;
@@ -17,9 +18,16 @@ public interface Option<T> {
 
     int getFormOrder();
 
-    OptionDtos.OptionDto toDto();
+    OptionDto toDtoUnsafe();
 
-    Optional<T> getValue();
+    CompletableFuture<OptionDto> toDto();
+
+    default Optional<T> getValue() {
+        return Optional.ofNullable(value());
+    }
+
+    @Nullable
+    T value();
 
     default T requireValue() {
         return getValue().orElseThrow(() -> new IllegalStateException(meta().key() + " is required"));
@@ -27,11 +35,12 @@ public interface Option<T> {
 
     Closeable addChangeListener(Consumer<Option<T>> listener);
 
-    CompletableFuture<Void> setValue(T value);
+    CompletableFuture<T> setValue(T value);
 
-    CompletableFuture<Void> onFormSubmit(Optional<String> value);
+    /// @return the response to be sent to the UI. If completed successfully, the object will be serialised to JSON and written to the response stream
+    CompletableFuture<?> onFormSubmit(Optional<String> value);
 
     void applyDefault();
 
-    void setValueSync(T value);
+    T setValueSync(T value);
 }

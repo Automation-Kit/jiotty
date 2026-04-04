@@ -12,7 +12,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// Subscriptions are token-scoped. If a state is already known for `token`, the handler may be called synchronously from
 /// [#subscribeToTokenState(String,Consumer)]. If the token is still being resolved, the handler is called later when a final state becomes available.
 public interface UserTokenAuthoriser {
-    void deliverTokenState(String token, Consumer<? super TokenState> handler);
+    void deliverTokenStateTo(String token, Consumer<? super TokenState> handler);
 
     Closeable subscribeToTokenState(String token, Consumer<? super TokenState> handler);
 

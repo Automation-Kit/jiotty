@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.user.ui;
+package net.yudichev.jiotty.user.ui.options;
 
 import com.google.common.reflect.TypeToken;
 import jakarta.inject.Inject;
@@ -9,7 +9,7 @@ import java.util.Optional;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 public final class OptionPersistenceImpl implements OptionPersistence {
-    private static final String UI_OPTIONS_KEY_PREFIX = "UiOption";
+    static final String UI_OPTIONS_KEY_PREFIX = "UiOption";
 
     private final VarStore varStore;
 
@@ -20,11 +20,15 @@ public final class OptionPersistenceImpl implements OptionPersistence {
 
     @Override
     public void save(Option<?> option) {
-        save(option.meta().key(), option.requireValue());
+        option.getValue().ifPresentOrElse(value -> save(option.meta().key(), value), () -> clear(option.meta().key()));
     }
 
     public void save(String optionKey, Object value) {
-        varStore.saveValue(UI_OPTIONS_KEY_PREFIX + '.' + optionKey, value);
+        varStore.saveValue(createStoreKey(optionKey), value);
+    }
+
+    public void clear(String optionKey) {
+        varStore.clearValue(createStoreKey(optionKey));
     }
 
     @Override
@@ -33,6 +37,10 @@ public final class OptionPersistenceImpl implements OptionPersistence {
     }
 
     public <T> Optional<T> load(TypeToken<T> valueType, String optionKey) {
-        return varStore.readValue(valueType, UI_OPTIONS_KEY_PREFIX + '.' + optionKey);
+        return varStore.readValue(valueType, createStoreKey(optionKey));
+    }
+
+    private static String createStoreKey(String optionKey) {
+        return UI_OPTIONS_KEY_PREFIX + '.' + optionKey;
     }
 }

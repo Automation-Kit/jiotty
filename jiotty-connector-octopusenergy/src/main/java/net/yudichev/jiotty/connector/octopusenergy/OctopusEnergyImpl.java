@@ -5,8 +5,10 @@ import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import net.yudichev.jiotty.common.lang.CompletableFutures;
+import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import net.yudichev.jiotty.security.AuthState;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import org.apache.logging.log4j.LogManager;
@@ -18,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.io.BaseEncoding.base64;
@@ -26,6 +29,7 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
+import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
@@ -33,13 +37,14 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 /// <a href="https://octopus.energy/blog/agile-smart-home-diy/">Guide 1</a>,
 /// <a href="https://www.guylipman.com/octopus/api_guide.html">Guide 2</a>
 public final class OctopusEnergyImpl extends BaseLifecycleComponent implements OctopusEnergy {
+    public static final AuthState.Success SUCCESS = new AuthState.Success("unused");
     private static final Logger logger = LogManager.getLogger(OctopusEnergyImpl.class);
-
     private static final String BASE_URL = "https://api.octopus.energy/v1";
-
     private final String apiKey;
     private final String accountId;
     private final CurrentDateTimeProvider currentDateTimeProvider;
+
+    private final ObservableValue<AuthState> apiKeyState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"));
     private OkHttpClient client;
     private CompletableFuture<OctopusAccount> account;
 
@@ -59,12 +64,24 @@ public final class OctopusEnergyImpl extends BaseLifecycleComponent implements O
                                               .get()
                                               .build()),
                        new TypeToken<>() {});
-        account.whenComplete(CompletableFutures.logErrorOnFailure(logger, "Failed to retrieve account info"));
+        account.whenComplete((octopusAccount, throwable) -> {
+            if (octopusAccount == null) {
+                logger.info("Account retrieval failed", throwable);
+                apiKeyState.accept(new AuthState.PermanentFailure(humanReadableMessage(throwable)));
+            } else {
+                apiKeyState.accept(SUCCESS);
+            }
+        });
     }
 
     @Override
     protected void doStop() {
         closeSafelyIfNotNull(logger, () -> shutdown(client));
+    }
+
+    @Override
+    public Closeable subscribeToApiKeyState(Consumer<AuthState> handler) {
+        return apiKeyState.subscribe(handler);
     }
 
     @Override

@@ -4,6 +4,7 @@ import com.google.common.base.Verify;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.security.AuthState;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -39,6 +40,11 @@ final class RealAndPredictedPriceService implements EnergyPriceService {
     @Override
     public Closeable subscribeToPrices(Consumer<Prices> consumer) {
         return new CombiningSubscription(consumer);
+    }
+
+    @Override
+    public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
+        return realPricesService.subscribeToAuthState(consumer);
     }
 
     private static Prices combine(Prices realPrices, Prices predictedPrices) {

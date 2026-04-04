@@ -10,6 +10,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPrice;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPriceService;
+import net.yudichev.jiotty.security.AuthState;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -30,13 +31,11 @@ import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 
 final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent implements EnergyPriceService {
     private static final Logger logger = LogManager.getLogger(AgilePredictEnergyPriceServiceImpl.class);
-
     private static final long PRICE_PERIOD_LENGTH_MIN = 30;
     private static final int PRICE_PERIOD_LENGTH_SEC = toIntExact(TimeUnit.MINUTES.toSeconds(PRICE_PERIOD_LENGTH_MIN));
     private static final Duration RETRIEVAL_PERIOD = Duration.ofMinutes(15);
     private static final Duration RETRY_DELAY = Duration.ofMinutes(1);
     private static final Duration ONE_HOUR = Duration.ofHours(1);
-
     private final Provider<SchedulingExecutor> executorProvider;
     private final AgilePredictPriceService priceService;
     private final Listeners<Prices> listeners = new Listeners<>();
@@ -69,6 +68,11 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
     }
 
     @Override
+    public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
+        throw new UnsupportedOperationException("subscribeToAuthState");
+    }
+
+    @Override
     protected void doStart() {
         executor = executorProvider.get();
         refreshSchedule = executor.scheduleAtFixedRate(Duration.ZERO, RETRIEVAL_PERIOD, () -> {
@@ -90,7 +94,7 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
 
     private void retrievePrices() {
         logger.info("Requesting AgilePredict prices for 13 days");
-        // TODO:commerce region must be a parameter, # of days must be a dynamic parameter of this serice (will need to change on the fly)
+        // TODO:commerce region must be a parameter, # of days must be a dynamic parameter of this service (will need to change on the fly)
         priceService.getPrices("A", 13)
                     .thenAcceptAsync(prices -> listeners.notify(handleAgilePredictPrices(prices)), executor)
                     .whenCompleteAsync((_, throwable) -> {

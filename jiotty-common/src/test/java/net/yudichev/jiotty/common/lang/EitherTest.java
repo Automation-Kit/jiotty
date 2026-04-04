@@ -3,6 +3,7 @@ package net.yudichev.jiotty.common.lang;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class EitherTest {
     @Test
@@ -17,12 +18,12 @@ class EitherTest {
 
     @Test
     void mapsLeftNull() {
-        assertThat(Either.<String, String>left(null).<String>map(s -> "left", s -> "right")).isEqualTo("left");
+        assertThat(Either.<String, String>left(null).<String>map(_ -> "left", _ -> "right")).isEqualTo("left");
     }
 
     @Test
     void mapsRightNull() {
-        assertThat(Either.<String, String>right(null).<String>map(s -> "left", s -> "right")).isEqualTo("right");
+        assertThat(Either.<String, String>right(null).<String>map(_ -> "left", _ -> "right")).isEqualTo("right");
     }
 
     @Test
@@ -35,5 +36,29 @@ class EitherTest {
     void mapRight() {
         assertThat(Either.<String, String>left("left").mapRight(String::toUpperCase)).isEqualTo(Either.left("left"));
         assertThat(Either.<String, String>right("right").mapRight(String::toUpperCase)).isEqualTo(Either.right("RIGHT"));
+    }
+
+    @Test
+    void leftOrThrowReturnsLeftWhenPresent() {
+        assertThat(Either.<String, String>left("value").leftOrThrow(IllegalStateException::new)).isEqualTo("value");
+    }
+
+    @Test
+    void leftOrThrowThrowsWhenRight() {
+        assertThatThrownBy(() -> Either.<String, String>right("error").leftOrThrow(IllegalStateException::new))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error");
+    }
+
+    @Test
+    void rightOrThrowReturnsRightWhenPresent() {
+        assertThat(Either.<String, String>right("value").rightOrThrow(IllegalStateException::new)).isEqualTo("value");
+    }
+
+    @Test
+    void rightOrThrowThrowsWhenLeft() {
+        assertThatThrownBy(() -> Either.<String, String>left("error").rightOrThrow(IllegalStateException::new))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error");
     }
 }

@@ -8,6 +8,8 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.FriendlyDurationFormat;
+import net.yudichev.jiotty.user.ui.options.Option;
+import net.yudichev.jiotty.user.ui.options.OptionMeta;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -37,6 +39,7 @@ public final class InitConfigurationOptionManager<T> extends BaseLifecycleCompon
     private SchedulingExecutor executor;
     private boolean initialValueReceived;
     private Closeable restartSchedule;
+    private Closeable optionRegistration;
 
     @Inject
     public InitConfigurationOptionManager(UIServer uiServer,
@@ -59,12 +62,12 @@ public final class InitConfigurationOptionManager<T> extends BaseLifecycleCompon
     @Override
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor("InitOption-" + optionMeta.key());
-        uiServer.registerOption(type.createInstance(optionMeta, executor, this::onValueChange));
+        optionRegistration = uiServer.registerOption(type.createInstance(optionMeta, executor, this::onValueChange));
     }
 
     @Override
     protected void doStop() {
-        Closeable.closeIfNotNull(executor);
+        Closeable.closeIfNotNull(optionRegistration, executor);
     }
 
     private T onValueChange(Option<T> option) {

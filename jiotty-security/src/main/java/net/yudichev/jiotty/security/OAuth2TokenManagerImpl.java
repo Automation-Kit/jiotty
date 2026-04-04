@@ -1,77 +1,67 @@
 package net.yudichev.jiotty.security;
 
-import com.google.common.reflect.TypeToken;
-import com.google.inject.BindingAnnotation;
-import com.sun.net.httpserver.HttpServer;
 import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Either;
+import net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage;
+import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import okhttp3.Callback;
 import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
-import java.io.OutputStream;
-import java.lang.annotation.Retention;
-import java.lang.annotation.Target;
-import java.net.DatagramSocket;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.URLDecoder;
-import java.net.URLEncoder;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static java.lang.annotation.ElementType.FIELD;
-import static java.lang.annotation.ElementType.METHOD;
-import static java.lang.annotation.ElementType.PARAMETER;
-import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.logErrorOnFailure;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
-import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
+import static net.yudichev.jiotty.security.Bindings.ApiName;
+import static net.yudichev.jiotty.security.Bindings.ClientID;
+import static net.yudichev.jiotty.security.Bindings.ClientSecret;
+import static net.yudichev.jiotty.security.Bindings.Scope;
+import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
 public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OAuth2TokenManager {
-    private static final Logger logger = LogManager.getLogger(OAuth2TokenManagerImpl.class);
+    protected final Logger logger = LogManager.getLogger(getClass());
 
+    protected final String clientId;
+    protected final String apiName;
+    protected final String scope;
     private final ExecutorFactory executorFactory;
     private final VarStore varStore;
-    private final String clientId;
     private final String clientSecret;
     private final CurrentDateTimeProvider currentDateTimeProvider;
-    private final Listeners<String> listeners = new Listeners<>();
+    private final Listeners<AuthState> listeners = new Listeners<>();
     private final String varStoreKey;
-    private final String apiName;
-    private final String loginUrl;
     private final String tokenUrl;
-    private final String scope;
-    private final Optional<Integer> fixedCallbackHttpPort;
-    private OkHttpClient httpClient;
 
+    protected SchedulingExecutor executor;
+    private OkHttpClient httpClient;
     private OauthAccessToken currentToken;
-    private SchedulingExecutor executor;
-    /// Non-nullness of this field means we are in the process of obtaining the initial token.
-    @Nullable
-    private HttpServer httpServer;
 
     @Inject
     public OAuth2TokenManagerImpl(ExecutorFactory executorFactory,
@@ -80,20 +70,16 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                   @ClientID String clientId,
                                   @ClientSecret String clientSecret,
                                   @ApiName String apiName,
-                                  @LoginUrl String loginUrl,
                                   @TokenUrl String tokenUrl,
-                                  @Scope String scope,
-                                  @FixedCallbackHttpPort Optional<Integer> fixedCallbackHttpPort) {
+                                  @Scope String scope) {
         this.clientId = checkNotNull(clientId);
         this.clientSecret = checkNotNull(clientSecret);
         this.executorFactory = checkNotNull(executorFactory);
         this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider);
         this.varStore = checkNotNull(varStore);
         this.apiName = checkNotNull(apiName);
-        this.loginUrl = checkNotNull(loginUrl);
         this.scope = checkNotNull(scope);
         this.tokenUrl = checkNotNull(tokenUrl);
-        this.fixedCallbackHttpPort = checkNotNull(fixedCallbackHttpPort);
         varStoreKey = apiName + "Oauth2Token_" + clientId + "_" + scope;
     }
 
@@ -111,6 +97,10 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                      }
                                  },
                                  this::obtainAccessToken);
+    }
+
+    protected void obtainAccessToken() {
+        logger.info("[{}] No valid access token, awaiting login authCode ", apiName);
     }
 
     @Override
@@ -139,66 +129,11 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     }
 
     @Override
-    public Closeable subscribeToAccessToken(Consumer<? super String> accessTokenHandler) {
+    public Closeable subscribeToAccessTokenState(Consumer<? super AuthState> handler) {
         return whenStartedAndNotLifecycling(() -> listeners.addListener(executor,
-                                                                        () -> Optional.ofNullable(currentToken).map(OauthAccessToken::accessToken),
-                                                                        accessTokenHandler));
-    }
-
-    private void obtainAccessToken() {
-        if (httpServer != null) {
-            logger.info("[{}] already obtaining the access token", clientId);
-            return;
-        }
-
-        String state = UUID.randomUUID().toString();
-        // authorisation code based process, need to communicate with the user
-        String callbackUrl = startRedirectHttpServer(state);
-        logger.warn("{} login required: {}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}",
-                    apiName, loginUrl,
-                    URLEncoder.encode(clientId, US_ASCII),
-                    URLEncoder.encode(callbackUrl, US_ASCII),
-                    URLEncoder.encode(scope, US_ASCII),
-                    URLEncoder.encode(state, US_ASCII));
-    }
-
-    private String startRedirectHttpServer(String state) {
-        return getAsUnchecked(() -> {
-            int port = fixedCallbackHttpPort.orElseGet(() -> getAsUnchecked(OAuth2TokenManagerImpl::findFreeTcpPort));
-            httpServer = HttpServer.create(new InetSocketAddress("localhost", port), 0);
-            String callbackUrl = "http://localhost:" + httpServer.getAddress().getPort() + "/callback";
-            httpServer.createContext("/callback", exchange -> {
-                var query = exchange.getRequestURI().getQuery();
-                logger.info("[{}] callback received: {}", clientId, query);
-                Map<String, String> queryParams = splitQuery(query);
-                var stateFromServer = queryParams.get("state");
-                String response;
-                if (stateFromServer != null && !stateFromServer.equals(state)) {
-                    response = "'state' mismatch: expected " + state + ", got " + stateFromServer;
-                    exchange.sendResponseHeaders(400, response.length());
-                } else {
-                    String authCode = queryParams.get("code");
-                    if (authCode != null) {
-                        onAuthCodeReceived(authCode, callbackUrl);
-                        response = "Auth Code Success";
-                        exchange.sendResponseHeaders(200, response.length());
-                    } else {
-                        // probably token callback? TODO test miele
-//                        response = "No 'code' in query " + query;
-//                        exchange.sendResponseHeaders(400, response.length());
-                        logger.info("[{}] token callback received?", clientId);
-                        response = "No Code - token callback?";
-                        exchange.sendResponseHeaders(200, response.length());
-                    }
-                }
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(response.getBytes());
-                }
-            });
-            httpServer.setExecutor(executor); // creates a default executor
-            httpServer.start();
-            return callbackUrl;
-        });
+                                                                        () -> Optional.ofNullable(currentToken)
+                                                                                      .map(token -> new AuthState.Success(token.accessToken())),
+                                                                        handler));
     }
 
     public static Map<String, String> splitQuery(String query) {
@@ -211,35 +146,18 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         return queryValuesByKey;
     }
 
-    private static InetAddress getOutboundAddress() {
-        return getAsUnchecked(() -> {
-            try (DatagramSocket socket = new DatagramSocket()) {
-                socket.connect(InetAddress.getByName("8.8.8.8"), 10002);
-                return socket.getLocalAddress();
-            }
-        });
-    }
-
-    private void onAuthCodeReceived(String authCode, String callbackUrl) {
-        logger.info("[{}] auth code received", clientId);
-        assert httpServer != null;
+    @Override
+    public void onNewAuthCode(String authCode, String redirectUri) {
+        logger.info("[{}] auth code received", apiName);
         requestToken(new FormBody.Builder()
                              .add("grant_type", "authorization_code")
                              .add("code", authCode)
-                             .add("redirect_uri", callbackUrl)
+                             .add("redirect_uri", redirectUri)
                              .add("client_id", clientId)
                              .add("client_secret", clientSecret)
-                             .build());
+                             .build(),
+                     null);
     }
-
-    public static int findFreeTcpPort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
-    }
-
-
-    // Function to refresh the access token
 
     private void refreshAccessToken(String refreshToken) {
         requestToken(new FormBody.Builder()
@@ -247,96 +165,104 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                              .add("refresh_token", refreshToken)
                              .add("client_id", clientId)
                              .add("client_secret", clientSecret)
-                             .build());
+                             .build(),
+                     refreshToken);
     }
 
-    private void requestToken(RequestBody formBody) {
-        logger.info("[{}] requesting token", clientId);
-        var request = new Request.Builder().url(tokenUrl)
-                                           .post(formBody)
-                                           .build();
-
+    private void requestToken(RequestBody formBody, @Nullable String fallbackRefreshToken) {
+        logger.info("[{}] requesting token", apiName);
+        Request request = new Request.Builder().url(tokenUrl).post(formBody).build();
         Instant requestTime = currentDateTimeProvider.currentInstant();
-        call(httpClient.newCall(request), new TypeToken<OauthAccessTokenResponse>() {})
-                .thenAcceptAsync(response -> {
-                    logger.info("[{}] token received", clientId);
-                    // async is better not to delay processing; the stopping of the server is not important
-                    executor.execute(() -> {
-                        if (httpServer != null) {
-                            httpServer.stop(10);
-                            httpServer = null;
+
+        var future = new CompletableFuture<Either<OauthAccessTokenResponse, OauthErrorResponse>>();
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(okhttp3.Call call, IOException e) {
+                future.completeExceptionally(e);
+            }
+
+            @Override
+            public void onResponse(okhttp3.Call call, Response response) {
+                try (ResponseBody body = response.body()) {
+                    String bodyString = checkNotNull(body).string();
+                    if (response.isSuccessful()) {
+                        future.complete(Either.left(Json.parse(bodyString, OauthAccessTokenResponse.class)));
+                    } else {
+                        try {
+                            future.complete(Either.right(Json.parse(bodyString, OauthErrorResponse.class)));
+                        } catch (RuntimeException e) {
+                            future.completeExceptionally(
+                                    new RuntimeException("Token request failed with HTTP " + response.code() + ": " + bodyString, e));
                         }
-                    });
-                    setCurrentToken(responseToToken(requestTime, response));
-                    varStore.saveValue(varStoreKey, currentToken);
-                    scheduleTokenRefresh();
-                }, executor)
-                .whenComplete(logErrorOnFailure(logger, "Failed to obtain token for client %s", clientId));
+                    }
+                } catch (RuntimeException | IOException e) {
+                    future.completeExceptionally(new RuntimeException("Failed to process token response", e));
+                }
+            }
+        });
+
+        future.thenAcceptAsync(responseEither -> responseEither.accept(
+                                       successResponse -> handleSuccessResponse(requestTime, successResponse, fallbackRefreshToken),
+                                       this::handleErrorResponse),
+                               executor)
+              .exceptionallyAsync(exception -> {
+                  logger.info("[{}] failed to obtain token", apiName, exception);
+                  listeners.notify(new AuthState.TransientFailure(HumanReadableExceptionMessage.humanReadableMessage(exception)));
+                  return null;
+              }, executor)
+              .whenComplete(logErrorOnFailure(logger, "[%s] Unhandled exception", apiName));
     }
 
-    private OauthAccessToken responseToToken(Instant currentTime, OauthAccessTokenResponse response) {
-        Duration refreshThisLongBeforeExpiry = Duration.ofSeconds(response.expiresInSec() / 10 * 8);
+    private void handleSuccessResponse(Instant requestTime, OauthAccessTokenResponse response, @Nullable String fallbackRefreshToken) {
+        logger.info("[{}] token received", apiName);
+        validateTokenType(response);
+        OauthAccessToken token = responseToToken(requestTime, response, fallbackRefreshToken);
+        varStore.saveValue(varStoreKey, token);
+        setCurrentToken(token);
+        scheduleTokenRefresh();
+    }
+
+    private void validateTokenType(OauthAccessTokenResponse response) {
+        String tokenType = response.tokenType()
+                                   .orElseThrow(() -> new IllegalArgumentException(apiName + ": token response missing required 'token_type' field"));
+        checkArgument("bearer".equals(tokenType.toLowerCase(Locale.ROOT)),
+                      "%s: unsupported token type '%s', only 'Bearer' is supported", apiName, tokenType);
+    }
+
+    private void handleErrorResponse(OauthErrorResponse errorResponse) {
+        String description = errorResponse.errorDescription().orElse(errorResponse.error());
+        logger.info("[{}] token request failed: {} ({})", apiName, errorResponse.error(), description);
+        AuthState failure = "invalid_grant".equals(errorResponse.error())
+                            ? new AuthState.PermanentFailure(description)
+                            : new AuthState.TransientFailure(description);
+        listeners.notify(failure);
+    }
+
+    private OauthAccessToken responseToToken(Instant currentTime, OauthAccessTokenResponse response, @Nullable String fallbackRefreshToken) {
+        String refreshToken = response.refreshToken().orElse(fallbackRefreshToken);
+        checkArgument(refreshToken != null,
+                      "%s: token response missing 'refresh_token' and no existing refresh token available", apiName);
+
         Instant expiryTime = currentTime.plusSeconds(response.expiresInSec());
-        Instant refreshTime = expiryTime.minus(refreshThisLongBeforeExpiry);
-        checkArgument(refreshThisLongBeforeExpiry.compareTo(Duration.ofMinutes(1)) >= 0,
+        Instant refreshTime = currentTime.plusSeconds((long) response.expiresInSec() * 8 / 10);
+        Duration bufferBeforeExpiry = Duration.between(refreshTime, expiryTime);
+        checkArgument(bufferBeforeExpiry.compareTo(Duration.ofMinutes(1)) >= 0,
                       """
-                      Client ID %s: OAuth2 response token's 'expires in, seconds' value %s is too small:\
+                      %s: OAuth2 response token's 'expires_in' value %s is too small:\
                       the resulting token refresh time %s is too close to expiry time %s""",
-                      clientId, response.expiresInSec(), refreshTime, expiryTime);
-        return OauthAccessToken.of(response.accessToken(), response.refreshToken(), refreshTime);
+                      apiName, response.expiresInSec(), refreshTime, expiryTime);
+        return OauthAccessToken.of(response.accessToken(), refreshToken, refreshTime);
     }
 
-    private void setCurrentToken(OauthAccessToken accessToken) {
-        logger.debug("[{}] token set, expires at {}", clientId, accessToken.expiryTime());
+    protected void setCurrentToken(OauthAccessToken accessToken) {
+        logger.debug("[{}] token set, expires at {}", apiName, accessToken.expiryTime());
         currentToken = accessToken;
-        listeners.notify(currentToken.accessToken());
+        listeners.notify(new AuthState.Success(currentToken.accessToken()));
     }
 
     private void scheduleTokenRefresh() {
-        var expiryDelay = Duration.between(currentDateTimeProvider.currentInstant(), currentToken.expiryTime());
-        logger.info("[{}] will refresh token in {} ({})", clientId, expiryDelay, currentToken.expiryTime());
+        Duration expiryDelay = Duration.between(currentDateTimeProvider.currentInstant(), currentToken.expiryTime());
+        logger.info("[{}] will refresh token in {} ({})", apiName, expiryDelay, currentToken.expiryTime());
         executor.schedule(expiryDelay, () -> refreshAccessToken(currentToken.refreshToken()));
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface ClientID {
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface ClientSecret {
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface ApiName {
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface LoginUrl {
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface TokenUrl {
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface Scope {
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface FixedCallbackHttpPort {
     }
 }

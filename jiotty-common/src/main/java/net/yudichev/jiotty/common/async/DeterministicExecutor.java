@@ -34,6 +34,11 @@ final class DeterministicExecutor extends BaseIdempotentCloseable implements Sch
     }
 
     @Override
+    public void executeAndAwaitIfLive(Runnable command, Duration timeout) {
+        execute(command);
+    }
+
+    @Override
     public Closeable schedule(Duration delay, Runnable command) {
         checkNotClosed();
         return clock.schedule(this, delay, command);

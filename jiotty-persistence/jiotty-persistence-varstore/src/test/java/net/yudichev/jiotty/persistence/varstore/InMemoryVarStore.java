@@ -29,6 +29,11 @@ public final class InMemoryVarStore implements VarStore {
     }
 
     @Override
+    public void clearValue(String key) {
+        serialisedValuesByKey.remove(key);
+    }
+
+    @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         JavaType javaType = mapper.constructType(type.getType());
         return Optional.ofNullable(serialisedValuesByKey.get(key))

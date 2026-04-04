@@ -31,14 +31,20 @@ final class AppManager extends BaseLifecycleComponent {
     @Override
     protected void doStart() {
         application = Application.builder()
+                                 .setName("app")
                                  .addModule(() -> appModuleFactory.apply(injector))
                                  .withParentInjector(injector)
                                  .build();
         try {
-            application.start();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException(e);
+            try {
+                application.start();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        } catch (RuntimeException e) {
+            application.stop();
+            throw e;
         }
     }
 

@@ -16,7 +16,6 @@ import java.time.ZoneId;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
-import static net.yudichev.jiotty.common.keystore.KeyStoreEntryModule.keyStoreEntry;
 import static net.yudichev.jiotty.energy.Bindings.AgilePredict;
 import static net.yudichev.jiotty.energy.Bindings.Dependency;
 import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
@@ -25,10 +24,17 @@ import static net.yudichev.jiotty.energy.Bindings.Octopus;
 public final class OctopusPriceServiceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<EnergyPriceService> {
     private final Key<EnergyPriceService> exposedKey;
     private final BindingSpec<ZoneId> zoneIdSpec;
+    private final BindingSpec<String> octopusApiKeySpec;
+    private final BindingSpec<String> octopusAccountId;
 
-    private OctopusPriceServiceModule(SpecifiedAnnotation specifiedAnnotation, BindingSpec<ZoneId> zoneIdSpec) {
+    private OctopusPriceServiceModule(SpecifiedAnnotation specifiedAnnotation,
+                                      BindingSpec<ZoneId> zoneIdSpec,
+                                      BindingSpec<String> octopusApiKeySpec,
+                                      BindingSpec<String> octopusAccountId) {
         exposedKey = checkNotNull(specifiedAnnotation).specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.zoneIdSpec = checkNotNull(zoneIdSpec);
+        this.octopusApiKeySpec = checkNotNull(octopusApiKeySpec);
+        this.octopusAccountId = checkNotNull(octopusAccountId);
     }
 
     public static Builder builder() {
@@ -48,9 +54,8 @@ public final class OctopusPriceServiceModule extends BaseLifecycleComponentModul
                                                               .withAnnotation(forAnnotation(ExecutorProvider.class))
                                                               .build());
         installLifecycleComponentModule(OctopusEnergyModule.builder()
-                                                           // TODO:commerce these are user options
-                                                           .setApiKey(keyStoreEntry("octopus-api-key"))
-                                                           .setAccountId(keyStoreEntry("octopus-account"))
+                                                           .setApiKey(octopusApiKeySpec)
+                                                           .setAccountId(octopusAccountId)
                                                            .build());
         bind(EnergyPriceService.class).annotatedWith(Octopus.class).to(registerLifecycleComponent(OctopusEnergyPriceServiceImpl.class));
 
@@ -64,6 +69,18 @@ public final class OctopusPriceServiceModule extends BaseLifecycleComponentModul
     public static final class Builder implements TypedBuilder<ExposedKeyModule<EnergyPriceService>>, HasWithAnnotation {
         private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
         private BindingSpec<ZoneId> zoneIdSpec = BindingSpec.boundTo(ZoneId.class);
+        private BindingSpec<String> octopusApiKeySpec;
+        private BindingSpec<String> octopusAccountIdSpec;
+
+        public Builder setOctopusAccountId(BindingSpec<String> octopusAccountIdSpec) {
+            this.octopusAccountIdSpec = checkNotNull(octopusAccountIdSpec);
+            return this;
+        }
+
+        public Builder setOctopusApiKey(BindingSpec<String> octopusApiKeySpec) {
+            this.octopusApiKeySpec = octopusApiKeySpec;
+            return this;
+        }
 
         @Override
         public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
@@ -78,7 +95,10 @@ public final class OctopusPriceServiceModule extends BaseLifecycleComponentModul
 
         @Override
         public ExposedKeyModule<EnergyPriceService> build() {
-            return new OctopusPriceServiceModule(specifiedAnnotation, zoneIdSpec);
+            return new OctopusPriceServiceModule(specifiedAnnotation,
+                                                 zoneIdSpec,
+                                                 octopusApiKeySpec,
+                                                 octopusAccountIdSpec);
         }
     }
 }

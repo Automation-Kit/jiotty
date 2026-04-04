@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.nio.file.Files.createDirectories;
@@ -48,13 +49,12 @@ abstract class BaseFileVarStore implements VarStore {
 
     @Override
     public void saveValue(String key, Object value) {
-        inLock(lock, () -> MoreThrowables.asUnchecked(() -> {
-            ObjectNode configNode = readConfig();
+        updateConfig(configNode -> configNode.set(key, OBJECT_MAPPER.valueToTree(value)));
+    }
 
-            configNode.set(key, OBJECT_MAPPER.valueToTree(value));
-            OBJECT_MAPPER.writeValue(storeFileTmp.toFile(), configNode);
-            move(storeFileTmp, storeFile, REPLACE_EXISTING);
-        }));
+    @Override
+    public void clearValue(String key) {
+        updateConfig(configNode -> configNode.remove(key));
     }
 
     @Override
@@ -65,6 +65,16 @@ abstract class BaseFileVarStore implements VarStore {
             JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
             return Optional.ofNullable(configNode.get(key))
                            .map(valueNode -> MoreThrowables.getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(valueNode)));
+        }));
+    }
+
+    private void updateConfig(Consumer<ObjectNode> updater) {
+        inLock(lock, () -> MoreThrowables.asUnchecked(() -> {
+            ObjectNode configNode = readConfig();
+
+            updater.accept(configNode);
+            OBJECT_MAPPER.writeValue(storeFileTmp.toFile(), configNode);
+            move(storeFileTmp, storeFile, REPLACE_EXISTING);
         }));
     }
 

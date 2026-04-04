@@ -22,7 +22,7 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
-final class JavalinRestServer extends BaseLifecycleComponent implements RestServer {
+public final class JavalinRestServer extends BaseLifecycleComponent implements RestServer {
     private static final Logger logger = LogManager.getLogger(JavalinRestServer.class);
 
     private final int listenPort;
@@ -30,7 +30,7 @@ final class JavalinRestServer extends BaseLifecycleComponent implements RestServ
     private volatile Javalin javalin;
 
     @Inject
-    JavalinRestServer(@ListenPort int listenPort) {
+    public JavalinRestServer(@ListenPort int listenPort) {
         checkArgument(listenPort >= 0 && listenPort <= 65_535, "listenPort: %s", listenPort);
         this.listenPort = listenPort;
     }

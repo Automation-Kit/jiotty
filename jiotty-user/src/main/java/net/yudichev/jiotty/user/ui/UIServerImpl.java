@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.LinkedListMultimap;
 import com.google.inject.BindingAnnotation;
 import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
@@ -17,11 +18,16 @@ import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
+import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.StabilisingConsumer;
 import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
+import net.yudichev.jiotty.user.ui.options.Option;
+import net.yudichev.jiotty.user.ui.options.OptionDto;
+import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.util.StringBuilderFormattable;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -45,11 +51,12 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
-import static java.util.Comparator.comparing;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.forCloseables;
 import static net.yudichev.jiotty.common.lang.Closeable.idempotent;
 import static net.yudichev.jiotty.common.lang.Closeable.noop;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.toFutureOfList;
+import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.appendHumanReadableMessage;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
@@ -61,8 +68,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             .disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
 
     private final Map<String, Displayable> displayablesById = new LinkedHashMap<>();
-    private final Map<String, List<Option<?>>> optionsByTabName = new HashMap<>();
-    private final Map<String, Option<?>> optionsByKey = new HashMap<>();
+    private final Map<String, Option<?>> optionsByKey = new LinkedHashMap<>();
     private final OptionPersistence persistence;
     private final List<Closeable> optionsPersistenceRegistrations = new ArrayList<>();
     private final ExecutorFactory executorFactory;
@@ -73,7 +79,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
     private SchedulingExecutor executor;
     private Closeable sseHeartbeat = Closeable.noop();
-    private StabilisingConsumer<Void> optionsStabiliser;
+    private StabilisingConsumer<Void> optionSnapshotStabiliser;
 
     @Inject
     public UIServerImpl(OptionPersistence persistence,
@@ -112,27 +118,26 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         });
     }
 
+
     @Override
     public Closeable registerOption(Option<?> option) {
         return whenStartedAndNotLifecycling(() -> {
             checkArgument(!optionsByKey.containsKey(option.meta().key()), "Option for key %s already registered: %s", option.meta().key(), option);
             persistence.load(option);
-
             optionsByKey.put(option.meta().key(), option);
-            List<Option<?>> options = getOptionsForTab(option.meta().tabName());
-            options.add(option);
-            options.sort(comparing(Option::getFormOrder));
-            Closeable persistenceRegistration = option.addChangeListener(persistence::save);
+            Closeable persistenceRegistration = option.addChangeListener(theOption -> {
+                persistence.save(theOption);
+                notifyOptionSnapshotChanged(); // devise some cleverer snapshot/delta protocol, if ever needed
+            });
             optionsPersistenceRegistrations.add(persistenceRegistration);
             logger.info("Registered option {}", option.meta().key());
-            notifyOptionsChanged();
+            notifyOptionSnapshotChanged();
             return idempotent(() -> whenNotLifecycling(() -> {
-                options.remove(option);
                 optionsByKey.remove(option.meta().key());
                 Closeable.closeIfNotNull(persistenceRegistration);
                 optionsPersistenceRegistrations.remove(persistenceRegistration);
                 logger.info("Unregistered option {}", option.meta().key());
-                notifyOptionsChanged();
+                notifyOptionSnapshotChanged();
             }));
         });
     }
@@ -140,7 +145,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     @Override
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor("UI" + (threadNameSuffix.isBlank() ? "" : '-' + threadNameSuffix));
-        optionsStabiliser = new StabilisingConsumer<>(executor, optionsStabilisationDelay, _ -> broadcastOptionsUpdate());
+        optionSnapshotStabiliser = new StabilisingConsumer<>(executor, optionsStabilisationDelay, _ -> broadcastOptionSnapshot());
         sseHeartbeat = executor.scheduleAtFixedRate(Duration.ofSeconds(15), this::sendSseHeartbeat);
     }
 
@@ -161,47 +166,65 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                                         .map(entry -> entry.getKey() + '=' + Arrays.toString(entry.getValue()))
                                         .toList());
                 }
-                whenStartedAndNotLifecycling(() -> {
-                    var optionKey = request.getParameter("name");
-                    checkArgument(optionKey != null, "Missing name parameter");
-                    Option<?> option = optionsByKey.get(optionKey);
-                    checkArgument(option != null, "Unknown optionKey: %s, known options are: %s", optionKey, optionsByKey.keySet());
-                    option.onFormSubmit(Optional.ofNullable(request.getParameter("value")))
-                          .whenComplete((_, throwable) -> {
-                              try {
-                                  response.setCharacterEncoding("utf-8");
-                                  response.setContentType("text/plain");
-                                  if (throwable != null) {
-                                      logger.info("Option form submission failed", throwable);
-                                      response.setStatus(400);
-                                      response.getWriter().write(humanReadableMessage(throwable));
-                                  } else {
-                                      response.getWriter().write(optionPostResponse(option));
+                try {
+                    whenStartedAndNotLifecycling(() -> {
+                        var optionKey = request.getParameter("name");
+                        checkArgument(optionKey != null, "Missing name parameter");
+                        Option<?> option = optionsByKey.get(optionKey);
+                        checkArgument(option != null, "Unknown optionKey: %s, known options are: %s", optionKey, optionsByKey.keySet());
+                        option.onFormSubmit(Optional.ofNullable(request.getParameter("value")))
+                              .whenComplete((responseData, throwable) -> {
+                                  try {
+                                      response.setCharacterEncoding("utf-8");
+                                      if (throwable != null) {
+                                          writeOptionFormPostFailure(response, throwable);
+                                      } else {
+                                          response.setContentType("application/json");
+                                          MAPPER.writeValue(response.getWriter(), responseData);
+                                      }
+                                  } catch (IOException e) {
+                                      logger.warn("Value rendering failed for option {}", option, e);
+                                  } finally {
+                                      asyncContext.complete();
                                   }
-                              } catch (IOException e) {
-                                  logger.warn("Value rendering failed for option {}", option, e);
-                              } finally {
-                                  asyncContext.complete();
-                              }
-                          });
-                });
+                              });
+                    });
+                } catch (RuntimeException e) {
+                    response.setCharacterEncoding("utf-8");
+                    try {
+                        writeOptionFormPostFailure(response, e);
+                    } catch (IOException ex) {
+                        logger.warn("Failed writing option submit failure response", e);
+                    } finally {
+                        asyncContext.complete();
+                    }
+                }
             });
         }));
     }
 
-    private void sendOptionsUpdate(Iterable<SseClient> clients) {
-        var tabs = new ArrayList<Map<String, Object>>(optionsByTabName.size());
-        for (var entry : optionsByTabName.entrySet()) {
-            String tabName = entry.getKey();
-            String tabId = toDomId(tabName);
-            List<Option<?>> options = entry.getValue();
-            var optionDtos = new ArrayList<OptionDtos.OptionDto>(options.size());
-            for (var option : options) {
-                optionDtos.add(option.toDto());
+    private static void writeOptionFormPostFailure(HttpServletResponse response, Throwable throwable) throws IOException {
+        response.setContentType("text/plain");
+        logger.info("Option form submission failed", throwable);
+        response.setStatus(400);
+        response.getWriter().write(humanReadableMessage(throwable));
+    }
+
+    private void sendOptionSnapshotTo(Iterable<SseClient> clients) {
+        optionsByKey.values().stream().map(Option::toDto).collect(toFutureOfList()).whenCompleteAsync((allOptionDtos, throwable) -> {
+            if (throwable == null) {
+                var optionsByTabName = LinkedListMultimap.<String, OptionDto>create(allOptionDtos.size());
+                for (OptionDto optionDto : allOptionDtos) {
+                    optionsByTabName.put(optionDto.tabName(), optionDto);
+                }
+                var tabs = new ArrayList<Map<String, Object>>(optionsByTabName.keySet().size());
+                optionsByTabName.asMap().forEach((tabName, tabDtos) -> tabs.add(Map.of("id", toDomId(tabName), "name", tabName, "options", tabDtos)));
+                broadcastSse("options-update", Map.of("tabs", tabs), clients);
+            } else {
+                // this is a bug, so fine to spam
+                logger.warn("Failed to generate options DTOs", throwable);
             }
-            tabs.add(Map.of("id", tabId, "name", tabName, "options", optionDtos));
-        }
-        broadcastSse("options-update", Map.of("tabs", tabs), clients);
+        }, executor);
     }
 
     @Override
@@ -321,7 +344,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             var targetClients = List.of(client);
             whenStartedAndNotLifecycling(() -> ImmutableList.copyOf(displayablesById.values()))
                     .forEach(displayable -> sendDisplayableUpdate(displayable, targetClients));
-            sendOptionsUpdate(targetClients);
+            sendOptionSnapshotTo(targetClients);
             try {
                 asyncContext.addListener(new AsyncListener() {
                     @Override
@@ -338,7 +361,8 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
                     @Override
                     public void onError(AsyncEvent event) {
-                        logger.debug("[SSE {}] onError", clientId);
+                        logger.debug("[SSE {}] onError: {}",
+                                     clientId, (StringBuilderFormattable) buffer -> appendHumanReadableMessage(event.getThrowable(), Appender.wrap(buffer)));
                         removeClient();
                     }
 
@@ -348,10 +372,12 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                     }
 
                     private void removeClient() {
-                        executor.execute(() -> {
-                            sseClients.remove(client);
-                            Closeable.closeIfNotNull(streamCloseCallback);
-                        });
+                        if (isStarted()) {
+                            executor.execute(() -> {
+                                sseClients.remove(client);
+                                Closeable.closeIfNotNull(streamCloseCallback);
+                            });
+                        }
                     }
                 });
             } catch (RuntimeException e) {
@@ -382,35 +408,16 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         }, executor);
     }
 
-    private void notifyOptionsChanged() {
-        optionsStabiliser.accept(null);
+    private void notifyOptionSnapshotChanged() {
+        optionSnapshotStabiliser.accept(null);
     }
 
-    private void broadcastOptionsUpdate() {
-        sendOptionsUpdate(sseClients);
-    }
-
-    private List<Option<?>> getOptionsForTab(String tabName) {
-        return optionsByTabName.computeIfAbsent(tabName, _ -> new ArrayList<>());
+    private void broadcastOptionSnapshot() {
+        sendOptionSnapshotTo(sseClients);
     }
 
     private static String toDomId(String raw) {
         return TAB_NAME_TO_ID_CONVERSION_PATTERN.matcher(raw).replaceAll("-");
-    }
-
-    private static String optionPostResponse(Option<?> option) {
-        var dto = option.toDto();
-        return switch (dto) {
-            case OptionDtos.Checkbox checkbox -> Boolean.toString(checkbox.checked());
-            case OptionDtos.MultiSelect multiSelect -> String.join(",", multiSelect.selectedIds());
-            case OptionDtos.Duration duration -> duration.valueHuman() == null ? "" : duration.valueHuman();
-            case OptionDtos.Time time -> time.value() == null ? "" : time.value();
-            case OptionDtos.Select select -> select.value() == null ? "" : select.value();
-            case OptionDtos.TextArea textArea -> textArea.value() == null ? "" : textArea.value();
-            case OptionDtos.Text text -> text.value() == null ? "" : text.value();
-            case OptionDtos.Chat chat -> chat.historyText() == null ? "" : chat.historyText();
-            case null -> "";
-        };
     }
 
     private static void broadcastSse(String eventName, Object data, Iterable<SseClient> clients) {

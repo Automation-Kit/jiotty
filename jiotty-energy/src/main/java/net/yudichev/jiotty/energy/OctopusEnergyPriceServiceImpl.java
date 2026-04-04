@@ -12,6 +12,7 @@ import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
 import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
+import net.yudichev.jiotty.security.AuthState;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -79,6 +80,11 @@ final class OctopusEnergyPriceServiceImpl extends BaseLifecycleComponent impleme
     @Override
     public Closeable subscribeToPrices(Consumer<Prices> consumer) {
         return whenStartedAndNotLifecycling(() -> listeners.addListener(executor, this::getPrices, consumer));
+    }
+
+    @Override
+    public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
+        return octopusEnergy.subscribeToApiKeyState(consumer);
     }
 
     @Override

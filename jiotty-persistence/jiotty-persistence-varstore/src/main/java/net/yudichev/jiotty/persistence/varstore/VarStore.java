@@ -7,6 +7,8 @@ import java.util.Optional;
 public interface VarStore {
     void saveValue(String key, Object value);
 
+    void clearValue(String key);
+
     <T> Optional<T> readValue(TypeToken<T> type, String key);
 
     /// Returns a user-scoped view of the store.

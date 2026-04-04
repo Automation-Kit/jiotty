@@ -6,9 +6,12 @@ import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Json;
+import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 import net.yudichev.jiotty.common.rest.ContentTypes;
+import net.yudichev.jiotty.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -31,8 +34,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -44,13 +47,13 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.stream.Collectors.joining;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 
 public final class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet {
+    public static final AuthState.Success SUCCESS = new AuthState.Success("SUCCESS");
     static final String AUDIENCE = "https://fleet-api.prd.eu.vn.cloud.tesla.com";
     private static final Logger logger = LogManager.getLogger(TeslaFleetImpl.class);
     private static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
@@ -62,12 +65,12 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
     private final String listVehiclesUrl;
     private final String telemetryConfigCreateUrl;
     private final String registerPartnerDomainUrl;
+    private final String partnerPublicKeyUrl;
     private final @Nullable SslCustomisation sslCustomisation;
-
+    private final ObservableValue<AuthState> accessTokenObservable = ObservableValue.concurrent(new AuthState.TransientFailure("Not authenticated yet"));
     private OkHttpClient httpClient;
     @Nullable
     private Closeable tokenSubscription;
-    private volatile String accessToken;
 
     @Inject
     public TeslaFleetImpl(@Dependency OAuth2TokenManager tokenManager,
@@ -79,6 +82,7 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
         listVehiclesUrl = baseUrl + "/vehicles";
         telemetryConfigCreateUrl = listVehiclesUrl + "/fleet_telemetry_config";
         registerPartnerDomainUrl = baseUrl + "/partner_accounts";
+        partnerPublicKeyUrl = baseUrl + "/partner_accounts/public_key";
     }
 
     @Override
@@ -88,19 +92,7 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
                 builder.sslSocketFactory(sslCustomisation.socketFactory(), sslCustomisation.trustManager());
             }
         });
-        CompletableFuture<Void> firstToken = new CompletableFuture<>();
-        tokenSubscription = tokenManager.subscribeToAccessToken(token -> {
-            boolean firstTime = accessToken == null;
-            accessToken = token;
-            if (firstTime) {
-                firstToken.complete(null);
-            }
-        });
-        if (!firstToken.isDone()) {
-            logger.info("Awaiting for the access token to be delivered...");
-            asUnchecked(() -> firstToken.get(5, TimeUnit.MINUTES));
-            logger.info("Access token obtained");
-        }
+        tokenSubscription = tokenManager.subscribeToAccessTokenState(accessTokenObservable);
     }
 
     @Override
@@ -109,8 +101,21 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
     }
 
     @Override
+    public Closeable subscribeToTokenState(Consumer<AuthState> handler) {
+        return whenStartedAndNotLifecycling(() -> accessTokenObservable.subscribe(authState -> handler.accept(switch (authState) {
+            case AuthState.Failure failure -> failure;
+            case AuthState.Success _ -> SUCCESS; // hide the actual token
+        })));
+    }
+
+    @Override
+    public void onNewAuthCode(String authCode, String redirectUri) {
+        whenStartedAndNotLifecycling(() -> tokenManager.onNewAuthCode(authCode, redirectUri));
+    }
+
+    @Override
     public CompletableFuture<List<TeslaVehicleData>> listVehicles() {
-        return whenStartedAndNotLifecycling(() -> {
+        return withValidTokenOrFail(accessToken -> {
             var request = new Request.Builder()
                     .url(listVehiclesUrl)
                     .header("Authorization", "Bearer " + accessToken)
@@ -124,13 +129,40 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
             return call(httpClient.newCall(request), LIST_VEHICLES_RESPONSE_TYPE, 0)
                     .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
                     .thenApply(listResponseWrapper -> listResponseWrapper.response()
-                                                                         .orElseThrow(() -> new IllegalStateException("No 'response' attribute in response")));
+                                                                         .orElseThrow(() -> new IllegalStateException(
+                                                                                 "No 'response' attribute in response")));
         });
     }
 
     @Override
     public CompletableFuture<PartnerAccount> registerPartnerDomain(String domain) {
-        // first, get the partner token
+        return acquirePartnerToken()
+                .thenCompose(partnerToken -> executePost(registerPartnerDomainUrl,
+                                                         partnerToken,
+                                                         "{\"domain\": \"" + domain + "\"}",
+                                                         new TypeToken<ResponseWrapper<PartnerAccount>>() {})
+                        .thenApply(unwrapOrFail()));
+    }
+
+    @Override
+    public CompletableFuture<PartnerPublicKey> getPartnerPublicKey(String domain) {
+        return acquirePartnerToken()
+                .thenCompose(partnerToken -> {
+                    String url = partnerPublicKeyUrl + "?domain=" + URLEncoder.encode(domain, UTF_8);
+                    var request = new Request.Builder()
+                            .url(url)
+                            .header("Authorization", "Bearer " + partnerToken)
+                            .get()
+                            .build();
+                    int requestId = requestIdGenerator.incrementAndGet();
+                    logger.debug("[{}] executing GET {}", requestId, url);
+                    return call(httpClient.newCall(request), new TypeToken<ResponseWrapper<PartnerPublicKey>>() {}, 0)
+                            .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
+                            .thenApply(unwrapOrFail());
+                });
+    }
+
+    private CompletableFuture<String> acquirePartnerToken() {
         RequestBody form = new FormBody.Builder()
                 .add("grant_type", "client_credentials")
                 .add("client_id", tokenManager.clientId())
@@ -139,26 +171,20 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
                 .add("audience", AUDIENCE)
                 .build();
 
-        Request request = new Request.Builder()
+        var request = new Request.Builder()
                 .url("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token")
                 .post(form)
                 .build();
 
         int requestId = requestIdGenerator.incrementAndGet();
         logger.debug("[{}] executing {}", requestId, request.url());
-        var httpClient = newClient(); // use non-customised generic client
-        return call(httpClient.newCall(request), TokenResponse.class, 0)
+        OkHttpClient partnerHttpClient = newClient(); // use non-customised generic client
+        return call(partnerHttpClient.newCall(request), TokenResponse.class, 0)
                 .whenComplete((resp, throwable) -> {
                     logger.debug("[{}] result {}", requestId, resp, throwable);
-                    shutdown(httpClient);
+                    shutdown(partnerHttpClient);
                 })
-                .thenCompose(tokenResponse ->
-                                     // with the token, register the domain
-                                     executePost(registerPartnerDomainUrl,
-                                                 tokenResponse.accessToken(),
-                                                 "{\"domain\": \"" + domain + "\"}",
-                                                 new TypeToken<ResponseWrapper<PartnerAccount>>() {})
-                                             .thenApply(unwrapOrFail()));
+                .thenApply(TokenResponse::accessToken);
     }
 
     @Override
@@ -178,22 +204,32 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
         return new TeslaVehicleImpl(vin);
     }
 
+    private <T> CompletableFuture<T> withValidTokenOrFail(Function<String, CompletableFuture<T>> code) {
+        return whenStartedAndNotLifecycling(() -> switch (accessTokenObservable.get()) {
+            case AuthState.Success success -> code.apply(success.authInfo());
+            case AuthState.Failure failure -> CompletableFutures.failure(failure.description());
+        });
+    }
 
     private <T> CompletableFuture<Optional<T>> executeGetForData(String url, TypeToken<ResponseWrapper<T>> responseType) {
-        var request = new Request.Builder().url(url)
-                                           .header("Authorization", "Bearer " + accessToken)
-                                           .get()
-                                           .build();
-        int requestId = requestIdGenerator.incrementAndGet();
-        logger.debug("[{}] executing {}", requestId, url);
-        return callAndAllow408(requestId, httpClient.newCall(request), responseType)
-                .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
-                .thenApply(wrapperOptional -> wrapperOptional.map(unwrapOrFail()));
+        return withValidTokenOrFail(accessToken -> {
+            var request = new Request.Builder().url(url)
+                                               .header("Authorization", "Bearer " + accessToken)
+                                               .get()
+                                               .build();
+            int requestId = requestIdGenerator.incrementAndGet();
+            logger.debug("[{}] executing {}", requestId, url);
+            return callAndAllow408(requestId, httpClient.newCall(request), responseType)
+                    .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
+                    .thenApply(wrapperOptional -> wrapperOptional.map(unwrapOrFail()));
+        });
     }
 
     private <T> CompletableFuture<T> executeGet(String url, TypeToken<ResponseWrapper<T>> responseType) {
-        var request = new Request.Builder().url(url).header("Authorization", "Bearer " + accessToken).get().build();
-        return call(httpClient.newCall(request), responseType, 0).thenApply(unwrapOrFail());
+        return withValidTokenOrFail(accessToken -> {
+            var request = new Request.Builder().url(url).header("Authorization", "Bearer " + accessToken).get().build();
+            return call(httpClient.newCall(request), responseType, 0).thenApply(unwrapOrFail());
+        });
     }
 
     private static <T> CompletableFuture<Optional<T>> callAndAllow408(int requestId, Call theCall, TypeToken<? extends T> responseType) {
@@ -261,7 +297,7 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
     private <T> CompletableFuture<ResponseWrapper<T>> executePost(String url,
                                                                   @Nullable String jsonBody,
                                                                   TypeToken<ResponseWrapper<T>> responseType) {
-        return executePost(url, accessToken, jsonBody, responseType);
+        return withValidTokenOrFail(accessToken -> executePost(url, accessToken, jsonBody, responseType));
     }
 
     private <T> CompletableFuture<ResponseWrapper<T>> executePost(String url,
@@ -283,15 +319,17 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
     }
 
     private <T> CompletableFuture<T> executeDelete(String url, TypeToken<ResponseWrapper<T>> responseType) {
-        Request request = new Request.Builder().url(url)
-                                               .header("Authorization", "Bearer " + accessToken)
-                                               .delete()
-                                               .build();
-        int requestId = requestIdGenerator.incrementAndGet();
-        logger.debug("[{}] executing DELETE {}", requestId, url);
-        return call(httpClient.newCall(request), responseType, 0, true)
-                .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
-                .thenApply(unwrapOrFail());
+        return withValidTokenOrFail(accessToken -> {
+            Request request = new Request.Builder().url(url)
+                                                   .header("Authorization", "Bearer " + accessToken)
+                                                   .delete()
+                                                   .build();
+            int requestId = requestIdGenerator.incrementAndGet();
+            logger.debug("[{}] executing DELETE {}", requestId, url);
+            return call(httpClient.newCall(request), responseType, 0, true)
+                    .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
+                    .thenApply(unwrapOrFail());
+        });
     }
 
     @BindingAnnotation

@@ -11,6 +11,7 @@ import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
+import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import org.apache.logging.log4j.LogManager;
@@ -30,7 +31,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
-public final class Application {
+public final class Application extends BaseIdempotentCloseable {
     private static final Logger logger = LogManager.getLogger(Application.class);
 
     static {
@@ -39,6 +40,7 @@ public final class Application {
         java.util.logging.Logger.getLogger("").setLevel(Level.FINEST);
     }
 
+    private final String name;
     private final List<LifecycleComponent> componentsAttemptedToStart = new CopyOnWriteArrayList<>();
     private final AtomicBoolean restarting = new AtomicBoolean();
     private final AtomicBoolean jvmShuttingDown = new AtomicBoolean();
@@ -53,14 +55,15 @@ public final class Application {
     private CountDownLatch shutdownLatch;
     private Thread runThread;
 
-    private Application(@Nullable Injector parentInjector, SpecifiedAnnotation specifiedAnnotation, Supplier<Module> moduleSupplier) {
+    private Application(String name, @Nullable Injector parentInjector, SpecifiedAnnotation specifiedAnnotation, Supplier<Module> moduleSupplier) {
+        this.name = checkNotNull(name);
         this.parentInjector = parentInjector;
         this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
         this.moduleSupplier = moduleSupplier;
         applicationLifecycleControl = new ApplicationLifecycleControl() {
             @Override
             public void initiateShutdown() {
-                logger.info("Application requested shutdown");
+                logger.info("[{}] Application requested shutdown", name);
                 initiateStop();
             }
 
@@ -68,10 +71,10 @@ public final class Application {
             public void initiateRestart() {
                 if (restarting.compareAndSet(false, true)) {
                     checkState(!jvmShuttingDown.get(), "Cannot initiate restart while JVM is shutting down");
-                    logger.info("Application requested restart");
+                    logger.info("[{}] Application requested restart", name);
                     initiateStop();
                 } else {
-                    logger.info("Ignoring restart request - application restart already in progress");
+                    logger.info("[{}] Ignoring restart request - application restart already in progress", name);
                 }
             }
 
@@ -90,13 +93,13 @@ public final class Application {
     public void start() throws InterruptedException {
         startedAllComponentsSuccessfully.set(false);
         componentsAttemptedToStart.clear();
-        logger.info("Creating injector");
+        logger.info("[{}] Creating injector", name);
         var applicationSupportModule = new ApplicationSupportModule(specifiedAnnotation, applicationLifecycleControl);
         var mainModule = moduleSupplier.get();
         Injector injector = parentInjector == null ? Guice.createInjector(applicationSupportModule, mainModule)
                                                    : parentInjector.createChildInjector(applicationSupportModule, mainModule);
         injectorRef.set(injector);
-        logger.info("Initialising components");
+        logger.info("[{}] Initialising components", name);
         try {
             List<LifecycleComponent> allComponents = injector
                     .findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
@@ -104,7 +107,7 @@ public final class Application {
                     .map(lifecycleComponentBinding -> lifecycleComponentBinding.getProvider().get())
                     .collect(toImmutableList());
 
-            logger.info("Starting components");
+            logger.info("[{}] Starting components", name);
             for (LifecycleComponent component : allComponents) {
                 if (Thread.interrupted()) {
                     throw new InterruptedException(String.format("Interrupted while starting; components attempted to start: %s out of %s",
@@ -115,7 +118,7 @@ public final class Application {
             }
 
             startedAllComponentsSuccessfully.set(true);
-            logger.info("Started");
+            logger.info("[{}] Started", name);
         } catch (RuntimeException e) {
             injectorRef.set(null);
             throw e;
@@ -130,10 +133,15 @@ public final class Application {
     /// Stop all components that have been started - must be called on same thread that called [#start()]. Attempts to stop all components regardless of any
     /// failures. Never throws exceptions.
     public void stop() {
-        logger.info("Shutting down");
+        logger.info("[{}] Shutting down", name);
         stop(componentsAttemptedToStart);
         componentsAttemptedToStart.clear();
-        logger.info("Shut down");
+        logger.info("[{}] Shut down", name);
+    }
+
+    @Override
+    protected void doClose() {
+        stop();
     }
 
     /// Run as a daemon: start and blocks until application initiates shutdown (or JVM is requested to shut down) and all components are stopped.
@@ -146,18 +154,18 @@ public final class Application {
             jvmShuttingDown.set(true);
             CountDownLatch fullyStoppedLatch = fullyStoppedLatchRef.get();
             if (fullyStoppedLatch != null && fullyStoppedLatch.getCount() > 0) {
-                logger.info("Shutdown hook fired");
+                logger.info("[{}] Shutdown hook fired", name);
                 initiateStop();
                 MoreThrowables.asUnchecked(() -> {
                     if (!fullyStoppedLatch.await(1, TimeUnit.MINUTES)) {
-                        logger.warn("Timed out waiting for partially initialised application to shut down");
+                        logger.warn("[{}] Timed out waiting for partially initialised application to shut down", name);
                     }
                 });
             }
         }));
 
         do {
-            logger.info("Starting");
+            logger.info("[{}] Starting", name);
 
             shutdownLatch = new CountDownLatch(1);
             CountDownLatch fullyStoppedLatch = new CountDownLatch(1);
@@ -166,7 +174,7 @@ public final class Application {
             try {
                 start();
             } catch (InterruptedException | RuntimeException e) {
-                logger.error("Unable to initialize", e);
+                logger.error("[{}] Unable to initialize", name, e);
                 shutdownLatch.countDown();
                 // intentionally clearing the interrupted flag to guarantee the immediately following latch await not to fail
                 //noinspection ResultOfMethodCallIgnored
@@ -188,33 +196,44 @@ public final class Application {
         if (startedAllComponentsSuccessfully.get()) {
             shutdownLatch.countDown();
         } else {
-            logger.info("Interrupting startup sequence");
+            logger.info("[{}] Interrupting startup sequence", name);
             runThread.interrupt();
         }
     }
 
-    private static void start(LifecycleComponent lifecycleComponent) {
-        logger.info("Starting component {}", lifecycleComponent.name());
+    private void start(LifecycleComponent lifecycleComponent) {
+        logger.info("[{}] Starting component {}", name, lifecycleComponent.name());
         lifecycleComponent.start();
-        logger.info("Started component {}", lifecycleComponent.name());
+        logger.info("[{}] Started component {}", name, lifecycleComponent.name());
     }
 
-    private static void stop(List<LifecycleComponent> lifecycleComponents) {
+    private void stop(List<LifecycleComponent> lifecycleComponents) {
         Lists.reverse(lifecycleComponents).forEach(lifecycleComponent -> {
             try {
-                logger.info("Stopping component {}", lifecycleComponent.name());
+                logger.info("[{}] Stopping component {}", name, lifecycleComponent.name());
                 lifecycleComponent.stop();
-                logger.info("Stopped component {}", lifecycleComponent.name());
+                logger.info("[{}] Stopped component {}", name, lifecycleComponent.name());
             } catch (Throwable e) {
-                logger.error("Failed stopping component {}", lifecycleComponent.name(), e);
+                logger.error("[{}] Failed stopping component {}", name, lifecycleComponent.name(), e);
             }
         });
     }
 
+    @Override
+    public String toString() {
+        return "Application " + name;
+    }
+
     public static final class Builder implements TypedBuilder<Application>, HasWithAnnotation {
         private final ImmutableList.Builder<Supplier<? extends Module>> moduleSupplierListBuilder = ImmutableList.builder();
+        private String name = "app";
         private Injector parentInjector;
         private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
+
+        public Builder setName(String name) {
+            this.name = checkNotNull(name);
+            return this;
+        }
 
         public Builder addModule(Supplier<? extends Module> moduleSupplier) {
             moduleSupplierListBuilder.add(moduleSupplier);
@@ -243,7 +262,7 @@ public final class Application {
                                    .forEach(this::install);
                 }
             };
-            return new Application(parentInjector, specifiedAnnotation, () -> module);
+            return new Application(name, parentInjector, specifiedAnnotation, () -> module);
         }
     }
 }

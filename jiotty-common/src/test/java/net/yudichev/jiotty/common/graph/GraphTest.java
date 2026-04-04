@@ -175,6 +175,24 @@ class GraphTest {
     }
 
     @Test
+    void nodeCanTriggerItselfForTheNextWave() {
+        nodeWaveReturnValue = false;
+        node1 = graph.registerNode("1", new TestNode("1"));
+        assertThat(graph.wave()).isFalse();
+        triggeredNodes.clear();
+
+        willTrigger("1", node1);
+        node1.trigger();
+        assertThat(graph.wave()).isTrue();
+        assertThat(triggeredNodes).containsExactly("1");
+
+        triggeredNodes.clear();
+        clearTriggers();
+        assertThat(graph.wave()).isFalse();
+        assertThat(triggeredNodes).containsExactly("1");
+    }
+
+    @Test
     void nodesTriggeringOthersWithParentsAndNodeWaveReturningFalse() {
         nodeWaveReturnValue = false;
 

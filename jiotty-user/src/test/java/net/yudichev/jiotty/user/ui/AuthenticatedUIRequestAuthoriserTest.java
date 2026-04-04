@@ -66,7 +66,7 @@ class AuthenticatedUIRequestAuthoriserTest {
         authoriser.authorise(request, response, chain);
 
         verify(response).setStatus(401);
-        verify(userTokenAuthoriser, never()).deliverTokenState(anyString(), any());
+        verify(userTokenAuthoriser, never()).deliverTokenStateTo(anyString(), any());
         assertThat(responseBody.toString()).contains("INVALID").contains("Missing or invalid Authorization bearer token");
     }
 
@@ -80,7 +80,7 @@ class AuthenticatedUIRequestAuthoriserTest {
             Consumer<? super UserTokenAuthoriser.TokenState> handler = invocation.getArgument(1);
             handler.accept(new UserTokenAuthoriser.TokenNotAuthenticated(reason, "failure"));
             return null;
-        }).when(userTokenAuthoriser).deliverTokenState(eq("token-1"), any());
+        }).when(userTokenAuthoriser).deliverTokenStateTo(eq("token-1"), any());
 
         authoriser.authorise(request, response, chain);
 
@@ -101,7 +101,7 @@ class AuthenticatedUIRequestAuthoriserTest {
             Consumer<? super UserTokenAuthoriser.TokenState> handler = invocation.getArgument(1);
             handler.accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, uiServer));
             return null;
-        }).when(userTokenAuthoriser).deliverTokenState(eq("token-1"), any());
+        }).when(userTokenAuthoriser).deliverTokenStateTo(eq("token-1"), any());
         when(userTokenAuthoriser.subscribeToTokenState(eq("token-1"), any())).thenAnswer(invocation -> {
             tokenStateSubscriptionHandler.set(invocation.getArgument(1));
             return Closeable.noop();

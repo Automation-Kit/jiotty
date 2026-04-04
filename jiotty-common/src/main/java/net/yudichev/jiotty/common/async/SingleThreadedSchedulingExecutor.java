@@ -15,9 +15,11 @@ import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeoutException;
 
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -57,6 +59,18 @@ public final class SingleThreadedSchedulingExecutor implements SchedulingExecuto
     }
 
     @Override
+    public void executeAndAwaitIfLive(Runnable command, Duration timeout) {
+        try {
+            executor.submit(guard("task", command)).get(timeout.toNanos(), NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (ExecutionException | TimeoutException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
     public Closeable schedule(Duration delay, Runnable command) {
         Closeable scheduledHandle = new ScheduledHandle(executor.schedule(
                 guard("scheduled task", command), delay.toNanos(), NANOSECONDS));
@@ -75,9 +89,17 @@ public final class SingleThreadedSchedulingExecutor implements SchedulingExecuto
     @Override
     public void close() {
         Closeable.forCloseables(scheduleHandles).close();
-        if (!MoreExecutors.shutdownAndAwaitTermination(executor, 10, SECONDS)) {
+        logger.info("Shutting down {}", threadNameBase);
+        if (MoreExecutors.shutdownAndAwaitTermination(executor, 10, SECONDS)) {
+            logger.info("Shut down {}", threadNameBase);
+        } else {
             logger.warn("Was not able to gracefully stop executor '{}' in 10 seconds", threadNameBase);
         }
+    }
+
+    @Override
+    public String toString() {
+        return getClass().getSimpleName() + '-' + threadNameBase;
     }
 
     private static Runnable guard(String task, Runnable command) {

@@ -6,6 +6,7 @@ import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import org.immutables.value.Value.Immutable;
 
 import java.util.List;
+import java.util.Optional;
 
 @Immutable
 @PublicImmutablesStyle
@@ -13,4 +14,7 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 interface BaseOctopusAccount {
     List<AccountProperty> properties();
+
+    /// error detail in case of failure
+    Optional<String> detail();
 }

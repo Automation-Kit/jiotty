@@ -7,9 +7,14 @@ import net.yudichev.jiotty.common.app.ApplicationLifecycleControl;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.TypeLiterals;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import net.yudichev.jiotty.user.ui.options.Option;
+import net.yudichev.jiotty.user.ui.options.OptionMeta;
+import net.yudichev.jiotty.user.ui.options.OptionPersistenceImpl;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
+/// Registers a single [Option] of an arbitrary type and [restarts][ApplicationLifecycleControl#initiateRestart()] the application when the option changes
+/// (after a short debounce period).
 public class InitConfigurationOptionModule<T> extends BaseLifecycleComponentModule {
     private final T value;
     private final Key<ApplicationLifecycleControl> applicationLifecycleControlKey;
