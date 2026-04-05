@@ -3,11 +3,13 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.TypeLiteral;
+import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.net.SslCustomisation;
+import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.security.OAuth2TokenManagerModule;
 
 import java.util.Optional;
@@ -23,7 +25,7 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
     private final BindingSpec<String> baseUrlSpec;
     private final BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec;
     private final BindingSpec<Set<String>> oauthScopesSpec;
-
+    private final @Nullable BindingSpec<VarStore> varStoreSpec;
     private final boolean localLogin;
 
     private TeslaFleetModule(BindingSpec<String> clientIdSpec,
@@ -31,12 +33,14 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
                              BindingSpec<String> baseUrlSpec,
                              BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec,
                              BindingSpec<Set<String>> oauthScopesSpec,
+                             @Nullable BindingSpec<VarStore> varStoreSpec,
                              boolean localLogin) {
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.clientSecretSpec = checkNotNull(clientSecretSpec);
         this.baseUrlSpec = checkNotNull(baseUrlSpec);
         this.sslCustomisationSpec = checkNotNull(sslCustomisationSpec);
         this.oauthScopesSpec = checkNotNull(oauthScopesSpec);
+        this.varStoreSpec = varStoreSpec;
         this.localLogin = localLogin;
     }
 
@@ -58,6 +62,9 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
                                                   return result;
                                               }))
                 .withAnnotation(forAnnotation(TeslaFleetImpl.Dependency.class));
+        if (varStoreSpec != null) {
+            tokenManagerModuleBuilder.withVarStore(varStoreSpec);
+        }
         if (localLogin) {
             tokenManagerModuleBuilder.withLoginUrl(literally("https://auth.tesla.com/oauth2/v3/authorize"))
                                      .withFixedCallbackHttpPort(literally(Optional.of(53904)));
@@ -79,6 +86,7 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
         private BindingSpec<String> baseUrlSpec = literally(TeslaFleetImpl.AUDIENCE + "/api/1");
         private BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec = literally(Optional.empty());
         private BindingSpec<Set<String>> oauthScopesSpec = literally(ImmutableSet.of("offline_access"));
+        private BindingSpec<VarStore> varStoreSpec;
         private boolean localLogin;
 
         public Builder setClientId(BindingSpec<String> clientIdSpec) {
@@ -106,6 +114,11 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
             return this;
         }
 
+        public Builder withVarStore(BindingSpec<VarStore> varStoreSpec) {
+            this.varStoreSpec = checkNotNull(varStoreSpec);
+            return this;
+        }
+
         /// installs a local login redirect server that listens on `http://localhost:<port>/callback`
         @SuppressWarnings("JavadocLinkAsPlainText")
         public Builder withLocalLogin(boolean localLogin) {
@@ -115,7 +128,7 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
 
         @Override
         public ExposedKeyModule<TeslaFleet> build() {
-            return new TeslaFleetModule(clientIdSpec, clientSecretSpec, baseUrlSpec, sslCustomisationSpec, oauthScopesSpec, localLogin);
+            return new TeslaFleetModule(clientIdSpec, clientSecretSpec, baseUrlSpec, sslCustomisationSpec, oauthScopesSpec, varStoreSpec, localLogin);
         }
     }
 }

@@ -8,6 +8,7 @@ import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccessModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.time.TimeModule;
@@ -32,6 +33,7 @@ public final class InitModule extends AbstractModule {
     private final BindingSpec<String> keystorePassSpec;
     private final BindingSpec<Boolean> singeUserSpec;
     private final Function<Injector, Module> appModuleFactory;
+    private final @Nullable SpecifiedAnnotation varStoreAnnotation;
     private final BindingSpec<String> varStoreTableNameSpec;
 
     private InitModule(DbConnectionConfig dbConnectionConfig,
@@ -40,6 +42,7 @@ public final class InitModule extends AbstractModule {
                        BindingSpec<String> keystorePassSpec,
                        BindingSpec<Boolean> singeUserSpec,
                        Function<Injector, Module> appModuleFactory,
+                       @Nullable SpecifiedAnnotation varStoreAnnotation,
                        BindingSpec<String> varStoreTableNameSpec) {
         this.dbConnectionConfig = checkNotNull(dbConnectionConfig);
         this.varStorePathSpec = varStorePathSpec;
@@ -47,6 +50,7 @@ public final class InitModule extends AbstractModule {
         this.keystorePassSpec = checkNotNull(keystorePassSpec);
         this.singeUserSpec = checkNotNull(singeUserSpec);
         this.appModuleFactory = checkNotNull(appModuleFactory);
+        this.varStoreAnnotation = varStoreAnnotation;
         this.varStoreTableNameSpec = checkNotNull(varStoreTableNameSpec);
     }
 
@@ -64,13 +68,17 @@ public final class InitModule extends AbstractModule {
                                                                  .build();
         install(dataSourceFactoryModule);
         var varStoreModuleBuilder = VarStoreModule.builder();
+        if (varStoreAnnotation != null) {
+            varStoreModuleBuilder.withAnnotation(varStoreAnnotation);
+        }
         if (varStorePathSpec != null) {
             varStoreModuleBuilder.withPath(varStorePathSpec);
         }
-        var varStoreModule = varStoreModuleBuilder.withDataSourceFactory(boundTo(dataSourceFactoryModule.getExposedKey()))
-                                                  .withSingleUser(singeUserSpec)
-                                                  .withTableName(varStoreTableNameSpec)
-                                                  .build();
+        var varStoreModule = varStoreModuleBuilder
+                .withDataSourceFactory(boundTo(dataSourceFactoryModule.getExposedKey()))
+                .withSingleUser(singeUserSpec)
+                .withTableName(varStoreTableNameSpec)
+                .build();
         install(varStoreModule);
         bind(new TypeLiteral<Function<Injector, Module>>() {}).annotatedWith(AppManager.Dependency.class).toInstance(appModuleFactory);
         bind(LifecycleComponent.class).annotatedWith(uniqueAnnotation()).to(AppManager.class);
@@ -88,6 +96,7 @@ public final class InitModule extends AbstractModule {
         private BindingSpec<Boolean> singleUserSpec = literally(FALSE);
         private Function<Injector, Module> appModuleFactory;
         private BindingSpec<String> varStoreTableNameSpec = literally("var_store");
+        private SpecifiedAnnotation varStoreAnnotation;
 
         public Builder setDbConnectionConfig(DbConnectionConfig dbConnectionConfig) {
             this.dbConnectionConfig = checkNotNull(dbConnectionConfig);
@@ -124,6 +133,11 @@ public final class InitModule extends AbstractModule {
             return this;
         }
 
+        public Builder withVarStoreAnnotation(SpecifiedAnnotation varStoreAnnotation) {
+            this.varStoreAnnotation = checkNotNull(varStoreAnnotation);
+            return this;
+        }
+
         @Override
         public InitModule build() {
             return new InitModule(dbConnectionConfig,
@@ -132,6 +146,7 @@ public final class InitModule extends AbstractModule {
                                   keystorePassSpec,
                                   singleUserSpec,
                                   appModuleFactory,
+                                  varStoreAnnotation,
                                   varStoreTableNameSpec);
         }
     }

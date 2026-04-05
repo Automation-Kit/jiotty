@@ -14,6 +14,8 @@
   from a neighbouring module.
 - Tests that need executor or time control must use `ProgrammableClock` and its deterministic single-threaded executor rather than real thread-creating
   executors, unless that is genuinely impossible.
+- Resources obtained from `ProgrammableClock` (such as executors) do not create real threads and need no cleanup. Do not close them in `@AfterEach` unless the
+  test is specifically verifying close behaviour.
 - In such tests, do not block on futures or create test-side multithreaded coordination primitives such as `CompletableFuture`; drive the system by advancing
   the `ProgrammableClock` and assert on synchronous test-owned state instead.
 - Test fakes/stubs that need time, timestamps, or clock-dependent behaviour must receive `CurrentDateTimeProvider`/`ProgrammableClock` from the test rather than
@@ -33,7 +35,9 @@
 - Use AssertJ `isInstanceOfSatisfying(Type.class, consumer)` instead of `isInstanceOf(Type.class).satisfies(consumer)` to combine type checking and assertions.
 - In single-threaded tests, do not use `AtomicReference`, `AtomicBoolean`, or other atomic classes for test-owned state; use `MutableReference` or ordinary
   mutable state instead.
-- Do not add `@SuppressWarnings(...)` unless it suppresses a real compiler warning in that exact location; remove redundant suppressions.
+- Do not add `@SuppressWarnings(...)` unless it suppresses a real compiler warning in that exact location; remove redundant suppressions. When the same
+  suppression is needed more than once in the same scope (for example, multiple unchecked casts in one test method), place it on the enclosing method or class
+  instead of repeating it on each local variable.
 - When unit-testing a connector or client for an external system, mock or fake the external collaborators directly. Add a package-private alternative
   constructor on the object under test for injecting those fakes. If collaborator creation needs overriding for non-final collaborator types, prefer
   package-private factory methods on the production class and override them in the test instead of introducing a wider abstraction just for the test.

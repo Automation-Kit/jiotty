@@ -1,5 +1,8 @@
 package net.yudichev.jiotty.persistence.recording;
 
+import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
+import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.CompositeException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -9,7 +12,7 @@ import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class CompositeRecorder<R> implements Recorder<R> {
+public final class CompositeRecorder<R> extends BaseIdempotentCloseable implements Recorder<R> {
     private static final Logger logger = LogManager.getLogger(CompositeRecorder.class);
 
     private final List<Recorder<R>> recorders;
@@ -41,5 +44,10 @@ public final class CompositeRecorder<R> implements Recorder<R> {
                 logger.warn("Failed recording {} to {}", recordable, recorder, e);
             }
         }
+    }
+
+    @Override
+    public void doClose() {
+        CompositeException.runForAll(recorders, Closeable::close);
     }
 }

@@ -1,12 +1,19 @@
 package net.yudichev.jiotty.user.ui.options;
 
 import com.google.common.reflect.TypeToken;
+import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.PARAMETER;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 public final class OptionPersistenceImpl implements OptionPersistence {
     static final String UI_OPTIONS_KEY_PREFIX = "UiOption";
@@ -14,7 +21,7 @@ public final class OptionPersistenceImpl implements OptionPersistence {
     private final VarStore varStore;
 
     @Inject
-    public OptionPersistenceImpl(VarStore varStore) {
+    public OptionPersistenceImpl(@Dependency VarStore varStore) {
         this.varStore = checkNotNull(varStore);
     }
 
@@ -42,5 +49,11 @@ public final class OptionPersistenceImpl implements OptionPersistence {
 
     private static String createStoreKey(String optionKey) {
         return UI_OPTIONS_KEY_PREFIX + '.' + optionKey;
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    public @interface Dependency {
     }
 }

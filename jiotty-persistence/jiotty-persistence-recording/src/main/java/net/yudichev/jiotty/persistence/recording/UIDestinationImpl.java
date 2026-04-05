@@ -1,13 +1,17 @@
 package net.yudichev.jiotty.persistence.recording;
 
+import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.DateTimeUtils;
 import net.yudichev.jiotty.user.ui.StatusHistoryDisplayable;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Instant;
 import java.util.Objects;
 import java.util.function.Function;
 
 final class UIDestinationImpl implements UIDestination {
+    private static final Logger logger = LogManager.getLogger(UIDestinationImpl.class);
 
     @Override
     public <R> Recorder<R> createRecorder(Config<R> destinationConfig) {
@@ -23,7 +27,7 @@ final class UIDestinationImpl implements UIDestination {
                 (status, appender) -> renderer.render(status.status(), appender),
                 config.downloadHandler(),
                 config.textFormat());
-        config.uiServer().registerDisplayable(displayable);
+        var displayableRegistration = config.uiServer().registerDisplayable(displayable);
         return new Recorder<>() {
             private R lastRecorded;
 
@@ -40,6 +44,11 @@ final class UIDestinationImpl implements UIDestination {
                 if (destinationType == config.destinationType()) {
                     record(timestamp, recordable);
                 }
+            }
+
+            @Override
+            public void close() {
+                Closeable.closeSafelyIfNotNull(logger, displayableRegistration);
             }
         };
     }

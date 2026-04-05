@@ -1,11 +1,14 @@
 package net.yudichev.jiotty.persistence.varstore;
 
 import com.google.common.reflect.TypeToken;
+import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.HasWithAnnotation;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 
@@ -18,12 +21,14 @@ import static java.lang.Boolean.FALSE;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
 public final class VarStoreModule extends BaseLifecycleComponentModule implements ExposedKeyModule<VarStore> {
+    private final Key<VarStore> exposedKey;
     private final @Nullable BindingSpec<Path> pathSpec;
     private final @Nullable BindingSpec<DataSourceFactory> dataSourceFactorySpec;
     private final BindingSpec<String> tableNameSpec;
     private final BindingSpec<Boolean> singleUserSpec;
 
-    private VarStoreModule(@Nullable BindingSpec<Path> pathSpec,
+    private VarStoreModule(SpecifiedAnnotation specifiedAnnotation,
+                           @Nullable BindingSpec<Path> pathSpec,
                            @Nullable BindingSpec<DataSourceFactory> dataSourceFactorySpec,
                            BindingSpec<String> tableNameSpec,
                            BindingSpec<Boolean> singleUserSpec) {
@@ -31,6 +36,12 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
         this.dataSourceFactorySpec = dataSourceFactorySpec;
         this.tableNameSpec = checkNotNull(tableNameSpec);
         this.singleUserSpec = checkNotNull(singleUserSpec);
+        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+    }
+
+    @Override
+    public Key<VarStore> getExposedKey() {
+        return exposedKey;
     }
 
     @Override
@@ -62,12 +73,13 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<VarStoreModule> {
+    public static final class Builder implements TypedBuilder<VarStoreModule>, HasWithAnnotation {
 
         private BindingSpec<Path> pathSpec;
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec;
         private BindingSpec<String> tableNameSpec = literally("var_store");
         private BindingSpec<Boolean> singleUserSpec = literally(FALSE);
+        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
 
         private Builder() {
         }
@@ -93,8 +105,14 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
         }
 
         @Override
+        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
+            this.specifiedAnnotation = specifiedAnnotation;
+            return this;
+        }
+
+        @Override
         public VarStoreModule build() {
-            return new VarStoreModule(pathSpec, dataSourceFactorySpec, tableNameSpec, singleUserSpec);
+            return new VarStoreModule(specifiedAnnotation, pathSpec, dataSourceFactorySpec, tableNameSpec, singleUserSpec);
         }
     }
 }

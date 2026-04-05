@@ -43,4 +43,10 @@ final class Bindings {
     @Retention(RUNTIME)
     @interface Scope {
     }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Dependency {
+    }
 }

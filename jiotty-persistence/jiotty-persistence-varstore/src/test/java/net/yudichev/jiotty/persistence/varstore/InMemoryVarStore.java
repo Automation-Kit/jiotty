@@ -8,8 +8,10 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.reflect.TypeToken;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
@@ -44,5 +46,9 @@ public final class InMemoryVarStore implements VarStore {
     public VarStore forUser(String userId) {
         Utils.validateUserId(userId);
         return new UserScopedVarStore(this, userId + '.');
+    }
+
+    public Set<String> allKeys() {
+        return Collections.unmodifiableSet(serialisedValuesByKey.keySet());
     }
 }

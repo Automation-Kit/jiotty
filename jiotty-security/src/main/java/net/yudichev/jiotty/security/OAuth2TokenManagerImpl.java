@@ -42,6 +42,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
 import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
+import static net.yudichev.jiotty.security.Bindings.Dependency;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
@@ -66,7 +67,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     @Inject
     public OAuth2TokenManagerImpl(ExecutorFactory executorFactory,
                                   CurrentDateTimeProvider currentDateTimeProvider,
-                                  VarStore varStore,
+                                  @Dependency VarStore varStore,
                                   @ClientID String clientId,
                                   @ClientSecret String clientSecret,
                                   @ApiName String apiName,
