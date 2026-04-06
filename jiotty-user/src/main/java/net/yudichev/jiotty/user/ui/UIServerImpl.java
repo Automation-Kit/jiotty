@@ -428,7 +428,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
     private void sendSseHeartbeat() {
         for (SseClient client : sseClients) {
-            client.ping();
+            client.sendEvent("ping", null);
         }
     }
 
@@ -467,17 +467,6 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                 out.print("data: ");
                 MAPPER.writeValue(out, data);
                 out.print("\n\n");
-                out.flush();
-            } catch (IOException e) {
-                close();
-            }
-        }
-
-        public void ping() {
-            try {
-                logger.debug("[SSE {}] ping", clientId);
-                out.print("event: ping\n");
-                out.print("data: {}\n\n");
                 out.flush();
             } catch (IOException e) {
                 close();
