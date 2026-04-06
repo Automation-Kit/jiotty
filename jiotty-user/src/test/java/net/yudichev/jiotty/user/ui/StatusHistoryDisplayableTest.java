@@ -166,7 +166,7 @@ class StatusHistoryDisplayableTest {
                 10,
                 String::valueOf,
                 DeviceStatus::lastChanged,
-                (_, _) -> {},
+                null,
                 (_, _) -> CompletableFuture.completedFuture(null),
                 HistoryDisplayableDto.Format.OBJECT);
 

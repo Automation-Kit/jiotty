@@ -59,7 +59,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
         this.keyToKeyTitle = checkNotNull(keyToKeyTitle);
         this.statusToEventTime = checkNotNull(statusToEventTime);
         checkArgument((entryFormat == HistoryDisplayableDto.Format.OBJECT) == (statusRenderer == null),
-                      "entryFormat %s is not compatible with nullness of statusRenderer");
+                      "entryFormat %s is not compatible with statusRenderer being %s", entryFormat, statusRenderer == null ? "null" : "not null");
         this.statusRenderer = statusRenderer;
         this.downloadHandler = checkNotNull(downloadHandler);
         checkArgument(windowSize > 0);
