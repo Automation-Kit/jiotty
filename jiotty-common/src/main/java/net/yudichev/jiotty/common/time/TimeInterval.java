@@ -1,5 +1,8 @@
 package net.yudichev.jiotty.common.time;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -17,10 +20,12 @@ public final class TimeInterval {
         this.end = end;
     }
 
+    @JsonProperty
     public Instant start() {
         return start;
     }
 
+    @JsonProperty
     public Instant end() {
         return end;
     }
@@ -64,6 +69,7 @@ public final class TimeInterval {
         return duration;
     }
 
+    @JsonIgnore
     public boolean isEmpty() {
         return start.equals(end);
     }

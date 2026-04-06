@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.user.ui;
 
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import jakarta.annotation.Nullable;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -31,7 +32,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
     private final String title;
     private final Function<K, String> keyToKeyTitle;
     private final Function<DeviceStatus<T>, Instant> statusToEventTime;
-    private final BiConsumer<DeviceStatus<T>, Appender> statusRenderer;
+    private final @Nullable BiConsumer<DeviceStatus<T>, Appender> statusRenderer;
     private final BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler;
     private final int windowSize;
     private final HistoryDisplayableDto.Format entryFormat;
@@ -51,13 +52,15 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
                                     int windowSize,
                                     Function<K, String> keyToKeyTitle,
                                     Function<DeviceStatus<T>, Instant> statusToEventTime,
-                                    BiConsumer<DeviceStatus<T>, Appender> statusRenderer,
+                                    @Nullable BiConsumer<DeviceStatus<T>, Appender> statusRenderer,
                                     BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler,
                                     HistoryDisplayableDto.Format entryFormat) {
         this.title = checkNotNull(title);
         this.keyToKeyTitle = checkNotNull(keyToKeyTitle);
         this.statusToEventTime = checkNotNull(statusToEventTime);
-        this.statusRenderer = checkNotNull(statusRenderer);
+        checkArgument((entryFormat == HistoryDisplayableDto.Format.OBJECT) == (statusRenderer == null),
+                      "entryFormat %s is not compatible with nullness of statusRenderer");
+        this.statusRenderer = statusRenderer;
         this.downloadHandler = checkNotNull(downloadHandler);
         checkArgument(windowSize > 0);
         this.windowSize = windowSize;
@@ -111,6 +114,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
                         // newest first
                         stats.statusHistory().descendingIterator().forEachRemaining(status -> {
                             Instant time = statusToEventTime.apply(status);
+                            assert statusRenderer != null;
                             statusRenderer.accept(status, appender);
                             entries.add(new HistoryDisplayableDto.Entry(time, entryFormat, sb.toString()));
                             sb.setLength(0);

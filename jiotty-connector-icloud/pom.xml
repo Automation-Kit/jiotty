@@ -23,6 +23,12 @@
             <groupId>com.github.caldav4j</groupId>
             <artifactId>caldav4j</artifactId>
         </dependency>
+        <!-- caldav4j -> httpclient requires commons-logging; this bridge routes it to Log4j2 -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-jcl</artifactId>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>com.google.errorprone</groupId>
             <artifactId>error_prone_annotations</artifactId>

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.recording;
 
+import jakarta.annotation.Nullable;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.time.DateTimeUtils;
@@ -29,7 +30,7 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
                        HistoryDisplayableDto.Format format,
                        int windowSize,
                        Function<R, String> displayableEventKeyExtractor,
-                       Supplier<HtmlRenderer<R>> renderer,
+                       @Nullable Supplier<HtmlRenderer<R>> renderer,
                        BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler)
             implements Destination.Config<R> {
         public UIConfig(UIServer uiServer,
@@ -39,7 +40,7 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
                         HistoryDisplayableDto.Format format,
                         int windowSize,
                         Function<R, String> displayableEventKeyExtractor,
-                        Supplier<HtmlRenderer<R>> renderer) {
+                        @Nullable Supplier<HtmlRenderer<R>> renderer) {
             this(uiServer, zoneId, recordType, title, format, windowSize, displayableEventKeyExtractor, renderer, (_, _) -> completedFuture());
         }
 

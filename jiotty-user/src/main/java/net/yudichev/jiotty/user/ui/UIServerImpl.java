@@ -20,6 +20,7 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.StabilisingConsumer;
 import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
 import net.yudichev.jiotty.user.ui.options.Option;
@@ -464,7 +465,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
         private void sendEvent(String eventName, Object data) {
             try {
-                logger.debug("[SSE {}] send event {}, {}", clientId, eventName, data);
+                logger.debug("[SSE {}] send event {}, {}", clientId, eventName, logger.isTraceEnabled() ? Json.stringify(data) : data);
                 out.print("event: ");
                 out.print(eventName);
                 out.print('\n');

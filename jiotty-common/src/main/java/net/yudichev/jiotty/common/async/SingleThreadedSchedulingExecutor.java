@@ -43,13 +43,13 @@ public final class SingleThreadedSchedulingExecutor implements SchedulingExecuto
     @Override
     public <T> CompletableFuture<T> submit(Callable<? extends T> task) {
         var resultFuture = new CompletableFuture<T>();
-        executor.submit(() -> {
+        executor.execute(guard("task", () -> {
             try {
                 resultFuture.complete(task.call());
             } catch (Exception e) {
                 resultFuture.completeExceptionally(e);
             }
-        });
+        }));
         return resultFuture;
     }
 
