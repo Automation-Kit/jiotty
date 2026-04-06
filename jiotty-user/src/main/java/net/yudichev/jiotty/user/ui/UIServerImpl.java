@@ -173,7 +173,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                         Option<?> option = optionsByKey.get(optionKey);
                         checkArgument(option != null, "Unknown optionKey: %s, known options are: %s", optionKey, optionsByKey.keySet());
                         option.onFormSubmit(Optional.ofNullable(request.getParameter("value")))
-                              .whenComplete((responseData, throwable) -> {
+                              .whenCompleteAsync((responseData, throwable) -> {
                                   try {
                                       response.setCharacterEncoding("utf-8");
                                       if (throwable != null) {
@@ -187,7 +187,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                                   } finally {
                                       asyncContext.complete();
                                   }
-                              });
+                              }, executor);
                     });
                 } catch (RuntimeException e) {
                     response.setCharacterEncoding("utf-8");
@@ -271,7 +271,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                        } finally {
                            asyncContext.complete();
                        }
-                   });
+                   }, executor);
     }
 
     @Override
@@ -320,7 +320,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     }
 
     @Override
-    public Closeable startDisplayablesSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException {
+    public Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException {
         int clientIdSeqNum = sseClientIdGenerator.incrementAndGet();
         String clientId = clientIdSeqNum + "/" + request.getRemoteHost() + ":" + request.getRemotePort();
         AsyncContext asyncContext = request.startAsync();
@@ -342,8 +342,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
             client.init();
             logger.debug("[SSE {}] delivering initial image", clientId);
             var targetClients = List.of(client);
-            whenStartedAndNotLifecycling(() -> ImmutableList.copyOf(displayablesById.values()))
-                    .forEach(displayable -> sendDisplayableUpdate(displayable, targetClients));
+            sendDisplayablesSnapshotTo(targetClients);
             sendOptionSnapshotTo(targetClients);
             try {
                 asyncContext.addListener(new AsyncListener() {
@@ -392,6 +391,11 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         client.close();
         sseClients.remove(client);
         Closeable.closeIfNotNull(streamClosed);
+    }
+
+    private void sendDisplayablesSnapshotTo(List<SseClient> targetClients) {
+        whenStartedAndNotLifecycling(() -> ImmutableList.copyOf(displayablesById.values()))
+                .forEach(displayable -> sendDisplayableUpdate(displayable, targetClients));
     }
 
     private void sendDisplayableUpdate(Displayable displayable) {

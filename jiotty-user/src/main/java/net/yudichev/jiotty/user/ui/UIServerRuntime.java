@@ -15,5 +15,5 @@ public interface UIServerRuntime {
 
     void handleDownload(HttpServletRequest request, HttpServletResponse response);
 
-    Closeable startDisplayablesSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException;
+    Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException;
 }

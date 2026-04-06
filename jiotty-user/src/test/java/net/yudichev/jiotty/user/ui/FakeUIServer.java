@@ -37,7 +37,7 @@ final class FakeUIServer implements UIServer, UIServerRuntime {
     }
 
     @Override
-    public Closeable startDisplayablesSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) {
+    public Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) {
         throw new UnsupportedOperationException();
     }
 }

@@ -201,7 +201,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
             UIRequestContext requestContext = requestContext(request);
             var streamClosed = new AtomicBoolean();
             var invalidationSubscriptionRef = new AtomicReference<Closeable>();
-            Closeable sseStream = runtime.startDisplayablesSse(request, response, () -> {
+            Closeable sseStream = runtime.startSse(request, response, () -> {
                 streamClosed.set(true);
                 closeSubscription(invalidationSubscriptionRef);
             });

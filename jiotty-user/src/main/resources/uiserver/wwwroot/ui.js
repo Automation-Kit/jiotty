@@ -174,9 +174,22 @@ $(function () {
         Object.keys(groups).forEach(function (what) {
             const entries = groups[what] || [];
             const inner = entries.map(function (en) {
-                const textFmt = (en && en.format) ? String(en.format).toLowerCase() : 'plain';
-                const textCell = textFmt === 'html' ? (en.text || '') : escapeHtml(en.text || '');
-                return '<tr><td>' + escapeHtml(en.time || '') + '</td><td>' + textCell + '</td></tr>';
+                const format = (en && en.format) ? String(en.format) : 'PLAIN_TEXT';
+                let textCell;
+                if (format === 'HTML') {
+                    textCell = en.value || '';
+                } else if (format === 'OBJECT') {
+                    textCell = '<pre>' + escapeHtml(JSON.stringify(en.value, null, 2)) + '</pre>';
+                } else {
+                    textCell = escapeHtml(en.value || '');
+                }
+                const timeStr = en.time != null
+                    ? new Date(en.time * 1000).toLocaleString(undefined, {
+                        year: 'numeric', month: 'short', day: 'numeric',
+                        hour: '2-digit', minute: '2-digit', second: '2-digit'
+                    })
+                    : '';
+                return '<tr><td>' + escapeHtml(timeStr) + '</td><td>' + textCell + '</td></tr>';
             }).join('');
             html += '<tr><td style="vertical-align: top">' + escapeHtml(what || '') + '</td><td><table class="pure-table">' + inner + '</table></td></tr>';
         });

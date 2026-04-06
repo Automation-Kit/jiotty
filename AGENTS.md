@@ -24,6 +24,8 @@
   adjacent business fields.
 - When asserting a fixed collection of emitted values in tests, prefer concise AssertJ collection forms such as `satisfiesExactly(...)` instead of separate size
   checks plus extraction boilerplate.
+- When asserting map entries in tests, use `hasEntrySatisfying(key, valueConsumer)` instead of separately asserting keys and then calling `.get(key)`. This
+  avoids duplicating the key literal. Chain `.hasSize(N)` **after** `hasEntrySatisfying(...)` so that AssertJ reports the entry-level mismatch first.
 - When a lambda parameter is intentionally unused and the language level allows it, use Java 25 unnamed parameter syntax `_`.
 - Always use `@Mock` (fields or method parameters) instead of `Mockito.mock(...)`. This preserves generic type information (e.g. `@Mock Option<?>`)
   and avoids raw-type unchecked warnings that `mock(Option.class)` would produce. Use method parameters when only some tests need the mock.

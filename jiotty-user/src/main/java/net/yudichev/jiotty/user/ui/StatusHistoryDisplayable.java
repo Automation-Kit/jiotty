@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.ui;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -9,7 +10,6 @@ import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import org.immutables.value.Value;
 
 import java.time.Instant;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
@@ -24,37 +24,36 @@ import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
 public final class StatusHistoryDisplayable<K, T> implements Displayable {
     private final Map<K, DeviceStats> statsByKey = new HashMap<>();
     private final String title;
     private final Function<K, String> keyToKeyTitle;
-    private final Function<DeviceStatus<T>, String> statusToEventTime;
+    private final Function<DeviceStatus<T>, Instant> statusToEventTime;
     private final BiConsumer<DeviceStatus<T>, Appender> statusRenderer;
     private final BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler;
     private final int windowSize;
-    private final TextFormat textFormat;
+    private final HistoryDisplayableDto.Format entryFormat;
     private final Listeners<Void> listeners = new Listeners<>();
 
     public StatusHistoryDisplayable(String title, int windowSize, Function<K, String> keyToKeyTitle) {
         this(title,
              windowSize,
              keyToKeyTitle,
-             status -> status.lastChanged().atZone(ZoneId.systemDefault()).format(RFC_1123_DATE_TIME),
+             DeviceStatus::lastChanged,
              (status, appender) -> appender.append(status.status()),
              (_, _) -> CompletableFutures.completedFuture(),
-             TextFormat.PLAIN);
+             HistoryDisplayableDto.Format.PLAIN_TEXT);
     }
 
     public StatusHistoryDisplayable(String title,
                                     int windowSize,
                                     Function<K, String> keyToKeyTitle,
-                                    Function<DeviceStatus<T>, String> statusToEventTime,
+                                    Function<DeviceStatus<T>, Instant> statusToEventTime,
                                     BiConsumer<DeviceStatus<T>, Appender> statusRenderer,
                                     BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler,
-                                    TextFormat textFormat) {
+                                    HistoryDisplayableDto.Format entryFormat) {
         this.title = checkNotNull(title);
         this.keyToKeyTitle = checkNotNull(keyToKeyTitle);
         this.statusToEventTime = checkNotNull(statusToEventTime);
@@ -62,7 +61,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
         this.downloadHandler = checkNotNull(downloadHandler);
         checkArgument(windowSize > 0);
         this.windowSize = windowSize;
-        this.textFormat = checkNotNull(textFormat);
+        this.entryFormat = checkNotNull(entryFormat);
     }
 
     @Override
@@ -99,29 +98,40 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
     }
 
     @Override
-    public CompletableFuture<DisplayableDtos.DisplayableDto> toDto() {
-        var groups = new LinkedHashMap<String, List<DisplayableDtos.HistoryEntry>>();
+    public CompletableFuture<DisplayableDto> toDto() {
+        var groups = new LinkedHashMap<String, List<HistoryDisplayableDto.Entry>>();
         synchronized (statsByKey) {
             statsByKey.forEach((key, stats) -> {
-                String what = key == null ? "" : keyToKeyTitle.apply(key);
-                var entries = new ArrayList<DisplayableDtos.HistoryEntry>();
-                var sb = new StringBuilder(64);
-                var appender = Appender.wrap(sb);
-                // newest first
-                stats.statusHistory().descendingIterator().forEachRemaining(status -> {
-                    String time = statusToEventTime.apply(status);
-                    statusRenderer.accept(status, appender);
-                    entries.add(new DisplayableDtos.HistoryEntry(time, sb.toString(), textFormat));
-                    sb.setLength(0);
-                });
-                groups.put(what, entries);
+                String keyTitle = key == null ? "" : keyToKeyTitle.apply(key);
+                var entries = new ArrayList<HistoryDisplayableDto.Entry>(stats.statusHistory().size());
+                switch (entryFormat) {
+                    case PLAIN_TEXT, HTML -> {
+                        var sb = new StringBuilder(64);
+                        var appender = Appender.wrap(sb);
+                        // newest first
+                        stats.statusHistory().descendingIterator().forEachRemaining(status -> {
+                            Instant time = statusToEventTime.apply(status);
+                            statusRenderer.accept(status, appender);
+                            entries.add(new HistoryDisplayableDto.Entry(time, entryFormat, sb.toString()));
+                            sb.setLength(0);
+                        });
+
+                    }
+                    case OBJECT -> // newest first
+                            stats.statusHistory().descendingIterator().forEachRemaining(status -> {
+                                Instant time = statusToEventTime.apply(status);
+                                entries.add(new HistoryDisplayableDto.Entry(time, entryFormat, status.status()));
+                            });
+                }
+                groups.put(keyTitle, entries);
             });
         }
-        return completedFuture(new DisplayableDtos.History(groups));
+        return completedFuture(new HistoryDisplayableDto(groups));
     }
 
     @Value.Immutable
     @PublicImmutablesStyle
+    @JsonSerialize
     interface BaseDeviceStatus<T> {
         @Value.Parameter
         T status();

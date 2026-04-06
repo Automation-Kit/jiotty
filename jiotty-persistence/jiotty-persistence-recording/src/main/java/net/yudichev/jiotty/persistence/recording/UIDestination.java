@@ -3,7 +3,7 @@ package net.yudichev.jiotty.persistence.recording;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.time.DateTimeUtils;
-import net.yudichev.jiotty.user.ui.TextFormat;
+import net.yudichev.jiotty.user.ui.HistoryDisplayableDto;
 import net.yudichev.jiotty.user.ui.UIServer;
 
 import java.time.ZoneId;
@@ -26,7 +26,7 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
                        ZoneId zoneId,
                        Class<R> recordType,
                        String title,
-                       TextFormat textFormat,
+                       HistoryDisplayableDto.Format format,
                        int windowSize,
                        Function<R, String> displayableEventKeyExtractor,
                        Supplier<HtmlRenderer<R>> renderer,
@@ -36,11 +36,11 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
                         ZoneId zoneId,
                         Class<R> recordType,
                         String title,
-                        TextFormat textFormat,
+                        HistoryDisplayableDto.Format format,
                         int windowSize,
                         Function<R, String> displayableEventKeyExtractor,
                         Supplier<HtmlRenderer<R>> renderer) {
-            this(uiServer, zoneId, recordType, title, textFormat, windowSize, displayableEventKeyExtractor, renderer, (_, _) -> completedFuture());
+            this(uiServer, zoneId, recordType, title, format, windowSize, displayableEventKeyExtractor, renderer, (_, _) -> completedFuture());
         }
 
         @Override

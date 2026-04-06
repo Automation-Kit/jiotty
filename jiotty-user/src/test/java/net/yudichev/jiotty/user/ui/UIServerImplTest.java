@@ -100,7 +100,7 @@ class UIServerImplTest {
         }).when(asyncContext).addListener(any(AsyncListener.class));
 
         try {
-            capture.closeHandle.set(server.startDisplayablesSse(request, response, capture.closedRunnable));
+            capture.closeHandle.set(server.startSse(request, response, capture.closedRunnable));
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -116,7 +116,7 @@ class UIServerImplTest {
     @Test
     void sseDeliversInitialDisplayableImageOnConnect() {
         var displayable = createDisplayable("d1", "Display 1",
-                                            completedFuture(new DisplayableDtos.History(Map.of("key", List.of()))));
+                                            completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
         server.registerDisplayable(displayable);
         clock.tick();
 
@@ -132,7 +132,7 @@ class UIServerImplTest {
     void displayableUpdateBroadcastsToAllSseClients() {
         var updateTrigger = new MutableReference<Runnable>();
         var displayable = createDisplayable("d1", "Display 1",
-                                            completedFuture(new DisplayableDtos.History(Map.of("key", List.of()))));
+                                            completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
         when(displayable.supportsData()).thenReturn(true);
         when(displayable.subscribeForUpdates(any())).thenAnswer(invocation -> {
             updateTrigger.set(invocation.getArgument(0));
@@ -170,7 +170,7 @@ class UIServerImplTest {
         });
         when(displayable.toDto()).thenAnswer(_ -> {
             callCount[0]++;
-            return completedFuture(new DisplayableDtos.History(Map.of("key", List.of())));
+            return completedFuture(new HistoryDisplayableDto(Map.of("key", List.of())));
         });
 
         server.registerDisplayable(displayable);
@@ -201,7 +201,7 @@ class UIServerImplTest {
     @Test
     void displayableUnregistrationStopsUpdates() {
         var displayable = createDisplayable("d1", "Display 1",
-                                            completedFuture(new DisplayableDtos.History(Map.of("key", List.of()))));
+                                            completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
         when(displayable.supportsData()).thenReturn(true);
         when(displayable.subscribeForUpdates(any())).thenReturn(() -> {});
 
@@ -430,7 +430,7 @@ class UIServerImplTest {
     @Test
     void newClientConnectionDoesNotRebroadcastDisplayablesToExistingClients() {
         var displayable = createDisplayable("d1", "Display 1",
-                                            completedFuture(new DisplayableDtos.History(Map.of("key", List.of()))));
+                                            completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
         server.registerDisplayable(displayable);
         clock.tick();
 
@@ -519,7 +519,7 @@ class UIServerImplTest {
     @Test
     void sseConnectDeliversBothDisplayablesAndOptions() {
         var displayable = createDisplayable("d1", "Display 1",
-                                            completedFuture(new DisplayableDtos.History(Map.of("key", List.of()))));
+                                            completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
         server.registerDisplayable(displayable);
         clock.tick();
 
@@ -670,7 +670,7 @@ class UIServerImplTest {
     }
 
     private static Displayable createDisplayable(String id, String displayName,
-                                                 CompletableFuture<DisplayableDtos.DisplayableDto> dto) {
+                                                 CompletableFuture<DisplayableDto> dto) {
         var displayable = mock(Displayable.class);
         when(displayable.getId()).thenReturn(id);
         lenient().when(displayable.getDisplayName()).thenReturn(displayName);

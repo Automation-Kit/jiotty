@@ -30,7 +30,7 @@ public interface Displayable {
         return () -> {};
     }
 
-    default CompletableFuture<DisplayableDtos.DisplayableDto> toDto() {
+    default CompletableFuture<DisplayableDto> toDto() {
         return null;
     }
 

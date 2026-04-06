@@ -2,6 +2,7 @@ package net.yudichev.jiotty.persistence.recording;
 
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.DateTimeUtils;
+import net.yudichev.jiotty.user.ui.DeviceStatus;
 import net.yudichev.jiotty.user.ui.StatusHistoryDisplayable;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -23,10 +24,10 @@ final class UIDestinationImpl implements UIDestination {
                 config.title(),
                 config.windowSize(),
                 Function.identity(),
-                status -> dateTimeFormatter.toFullDateAndTimeMins(status.lastChanged()),
+                DeviceStatus::lastChanged,
                 (status, appender) -> renderer.render(status.status(), appender),
                 config.downloadHandler(),
-                config.textFormat());
+                config.format());
         var displayableRegistration = config.uiServer().registerDisplayable(displayable);
         return new Recorder<>() {
             private R lastRecorded;
