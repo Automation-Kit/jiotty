@@ -14,8 +14,6 @@ import java.util.stream.Collector;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Collections.emptyList;
-import static java.util.Collections.unmodifiableList;
-import static java.util.stream.Collectors.toList;
 import static net.yudichev.jiotty.common.lang.DelayedExecutors.delayedExecutor;
 
 @SuppressWarnings("WeakerAccess") // it's a library
@@ -63,6 +61,14 @@ public final class CompletableFutures {
     }
 
     public static <T> Collector<CompletableFuture<T>, ?, CompletableFuture<List<T>>> toFutureOfList() {
+        return toFutureOfList(CompletableFuture::join);
+    }
+
+    public static <T> Collector<CompletableFuture<T>, ?, CompletableFuture<List<Either<T, Throwable>>>> toFutureOfListWithErrors() {
+        return toFutureOfList(future -> future.isCompletedExceptionally() ? Either.right(future.exceptionNow()) : Either.left(future.join()));
+    }
+
+    public static <T, R> Collector<CompletableFuture<T>, ?, CompletableFuture<List<R>>> toFutureOfList(Function<CompletableFuture<T>, R> futureToResult) {
         return Collector.of(
                 ImmutableList::<CompletableFuture<T>>builder,
                 ImmutableList.Builder::add,
@@ -74,10 +80,12 @@ public final class CompletableFutures {
                     ImmutableList<CompletableFuture<T>> listOfFutures = builder.build();
                     //noinspection ZeroLengthArrayAllocation
                     return CompletableFuture.allOf(listOfFutures.toArray(new CompletableFuture[0]))
-                                            .thenApply(ignored -> unmodifiableList(listOfFutures.stream()
-                                                                                                .map(CompletableFuture::join)
-                                                                                                // cannot use ImmutableList here, void futures typically return nulls
-                                                                                                .collect(toList())));
+                                            .handle((_, _) -> listOfFutures.stream()
+                                                                           .map(future -> {
+                                                                               assert future.isDone();
+                                                                               return futureToResult.apply(future);
+                                                                           })
+                                                                           .toList());
                 }
         );
     }
@@ -93,7 +101,7 @@ public final class CompletableFutures {
     }
 
     public static <T> BiConsumer<T, Throwable> logErrorOnFailure(Logger logger, String errorMessageTemplate, Object... params) {
-        return (aVoid, e) -> {
+        return (_, e) -> {
             if (e != null) {
                 logger.error(String.format(errorMessageTemplate, params), e);
             }

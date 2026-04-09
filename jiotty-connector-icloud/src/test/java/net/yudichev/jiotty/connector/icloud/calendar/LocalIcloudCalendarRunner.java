@@ -6,6 +6,9 @@ import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
+import net.yudichev.jiotty.common.time.calendar.Calendar;
+import net.yudichev.jiotty.common.time.calendar.CalendarService;
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -47,21 +50,22 @@ final class LocalIcloudCalendarRunner {
         @Override
         protected void doStart() {
             service.retrieveCalendars().thenAccept(calendars -> {
-                logger.info("Calendars: {}", calendars.stream().map(Calendar::name).toList());
-                calendars.stream()
-                         .map(calendar -> calendar.fetchEvents(Instant.now(), Instant.now().plus(1, ChronoUnit.DAYS))
-                                                  .thenAccept(calendarEvents -> {
-                                                      logger.info("*** CALENDAR: {}, events: {}", calendar, calendarEvents.size());
-                                                      calendarEvents.forEach(event -> logger.info("****** EVENT: {}", event));
-                                                  }))
-                         .collect(CompletableFutures.toFutureOfList())
-                         .whenComplete((r, e) -> {
-                             logger.info("Completed: {}", r, e);
-                             var thread = new Thread(() -> System.exit(0));
-                             thread.setDaemon(true);
-                             thread.start();
-                         });
-            });
+                       logger.info("Calendars: {}", calendars.stream().map(Calendar::name).toList());
+                       calendars.stream()
+                                .map(calendar -> calendar.fetchEvents(Instant.now(), Instant.now().plus(1, ChronoUnit.DAYS))
+                                                         .thenAccept(calendarEvents -> {
+                                                             logger.info("*** CALENDAR: {}, events: {}", calendar, calendarEvents.size());
+                                                             calendarEvents.forEach(event -> logger.info("****** EVENT: {}", event));
+                                                         }))
+                                .collect(CompletableFutures.toFutureOfList())
+                                .whenComplete((r, e) -> {
+                                    logger.info("Completed: {}", r, e);
+                                    var thread = new Thread(() -> System.exit(0));
+                                    thread.setDaemon(true);
+                                    thread.start();
+                                });
+                   })
+                   .whenComplete((_, throwable) -> logger.log(throwable == null ? Level.INFO : Level.ERROR, "Result", throwable));
         }
     }
 }

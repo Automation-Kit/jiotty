@@ -10,6 +10,7 @@ import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import okhttp3.Callback;
@@ -133,7 +134,8 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     public Closeable subscribeToAccessTokenState(Consumer<? super AuthState> handler) {
         return whenStartedAndNotLifecycling(() -> listeners.addListener(executor,
                                                                         () -> Optional.ofNullable(currentToken)
-                                                                                      .map(token -> new AuthState.Success(token.accessToken())),
+                                                                                      .map(token -> new AuthState.Success(
+                                                                                              token.accessToken())),
                                                                         handler));
     }
 
@@ -208,7 +210,8 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                executor)
               .exceptionallyAsync(exception -> {
                   logger.info("[{}] failed to obtain token", apiName, exception);
-                  listeners.notify(new AuthState.TransientFailure(HumanReadableExceptionMessage.humanReadableMessage(exception)));
+                  listeners.notify(new AuthState.TransientFailure(HumanReadableExceptionMessage.humanReadableMessage(
+                          exception)));
                   return null;
               }, executor)
               .whenComplete(logErrorOnFailure(logger, "[%s] Unhandled exception", apiName));

@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.security;
+package net.yudichev.jiotty.common.security;
 
 /// Represents a state of authentication.
 public sealed interface AuthState {

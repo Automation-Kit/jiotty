@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.connector.icloud.calendar;
+package net.yudichev.jiotty.common.time.calendar;
 
 import java.time.Instant;
 import java.util.List;

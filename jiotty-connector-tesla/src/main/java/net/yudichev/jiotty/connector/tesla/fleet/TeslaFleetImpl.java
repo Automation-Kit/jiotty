@@ -11,7 +11,7 @@ import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 import net.yudichev.jiotty.common.rest.ContentTypes;
-import net.yudichev.jiotty.security.AuthState;
+import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import okhttp3.Call;
 import okhttp3.Callback;

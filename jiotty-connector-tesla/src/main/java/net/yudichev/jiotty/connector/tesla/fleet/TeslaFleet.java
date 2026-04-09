@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.security.AuthState;
+import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 
 import java.util.List;

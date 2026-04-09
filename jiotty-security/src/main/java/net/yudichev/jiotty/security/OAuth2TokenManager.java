@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.security;
 
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.security.AuthState;
 
 import java.util.function.Consumer;
 

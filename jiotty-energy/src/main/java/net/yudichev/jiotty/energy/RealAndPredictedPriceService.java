@@ -4,7 +4,7 @@ import com.google.common.base.Verify;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.security.AuthState;
+import net.yudichev.jiotty.common.security.AuthState;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 

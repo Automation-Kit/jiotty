@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.connector.octopusenergy;
 
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.security.AuthState;
+import net.yudichev.jiotty.common.security.AuthState;
 
 import java.time.Instant;
 import java.util.List;

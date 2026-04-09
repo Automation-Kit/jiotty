@@ -4,6 +4,7 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.time.calendar.CalendarService;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 

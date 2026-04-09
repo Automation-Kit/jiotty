@@ -3,6 +3,7 @@ package net.yudichev.jiotty.security;
 import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.rest.JavalinRestServer;
+import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import org.junit.jupiter.api.AfterEach;
@@ -91,7 +92,8 @@ class OAuth2TokenManagerImplTest {
                           .containsEntry("client_secret", CLIENT_SECRET)
                           .doesNotContainKey("refresh_token");
 
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class, success -> assertThat(success.authInfo()).isEqualTo("test-access-token"));
+        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                             success -> assertThat(success.authInfo()).isEqualTo("test-access-token"));
     }
 
     @Test
@@ -115,7 +117,8 @@ class OAuth2TokenManagerImplTest {
 
         createAndStartTokenManager();
 
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class, success -> assertThat(success.authInfo()).isEqualTo("stored-at"));
+        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                             success -> assertThat(success.authInfo()).isEqualTo("stored-at"));
         assertThat(capturedRequests).isEmpty();
     }
 
@@ -135,7 +138,8 @@ class OAuth2TokenManagerImplTest {
                           .doesNotContainKey("code")
                           .doesNotContainKey("redirect_uri");
 
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class, success -> assertThat(success.authInfo()).isEqualTo("new-at"));
+        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                             success -> assertThat(success.authInfo()).isEqualTo("new-at"));
     }
 
     @Test
@@ -175,7 +179,8 @@ class OAuth2TokenManagerImplTest {
 
         tokenManager.onNewAuthCode("code", "http://r");
 
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class, success -> assertThat(success.authInfo()).isEqualTo("at"));
+        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                             success -> assertThat(success.authInfo()).isEqualTo("at"));
     }
 
     @Test

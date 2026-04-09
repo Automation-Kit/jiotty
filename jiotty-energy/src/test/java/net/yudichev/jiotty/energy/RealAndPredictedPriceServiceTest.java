@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.energy;
 
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.security.AuthState;
+import net.yudichev.jiotty.common.security.AuthState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

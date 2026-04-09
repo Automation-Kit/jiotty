@@ -11,6 +11,11 @@ import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
+import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.security.AuthState;
+import net.yudichev.jiotty.common.time.calendar.Calendar;
+import net.yudichev.jiotty.common.time.calendar.CalendarService;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.HttpClient;
@@ -36,6 +41,7 @@ import java.lang.annotation.Target;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -55,6 +61,7 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
 
     private final ExecutorFactory executorFactory;
     private final Supplier<CloseableHttpClient> httpClientFactory;
+    private final ObservableValue<AuthState> apiKeyState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"));
     private SchedulingExecutor executor;
 
     @Inject
@@ -87,6 +94,11 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
     @Override
     protected void doStop() {
         closeSafelyIfNotNull(logger, executor);
+    }
+
+    @Override
+    public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
+        return apiKeyState.subscribe(consumer);
     }
 
     @Override
@@ -134,12 +146,23 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
                && collection.stream().anyMatch(node -> "calendar".equals(((Node) node).getNodeName()));
     }
 
-    private static String getCalendarSetHomeUrl(CalDAV4JMethodFactory methodFactory, HttpClient httpClient) throws IOException, DavException {
+    private String getCalendarSetHomeUrl(CalDAV4JMethodFactory methodFactory, HttpClient httpClient) throws IOException, DavException {
         var davPropertyNames = new DavPropertyNameSet();
         davPropertyNames.add(DavPropertyName.create("calendar-home-set", CalDAVConstants.NAMESPACE_CALDAV));
         HttpPropFindMethod pf = methodFactory.createPropFindMethod(URI_WELL_KNONWN_CALDAV, davPropertyNames, 0);
         logger.debug("Executing {}", pf);
         var response = httpClient.execute(pf);
+        int statusCode = response.getStatusLine().getStatusCode();
+        String reasonPhrase = response.getStatusLine().getReasonPhrase();
+        if (statusCode >= 200 && statusCode < 300) {
+            apiKeyState.accept(new AuthState.Success(reasonPhrase));
+        } else if (statusCode == 401) {
+            apiKeyState.accept(new AuthState.PermanentFailure("Authorisation failed: " + reasonPhrase));
+            throw new RuntimeException("Authorisation failed: " + reasonPhrase);
+        } else {
+            apiKeyState.accept(new AuthState.TransientFailure("HTTP " + statusCode + ": " + reasonPhrase));
+            throw new RuntimeException("Request failed: " + statusCode + " " + reasonPhrase);
+        }
         MultiStatus responseBodyAsMultiStatus = pf.getResponseBodyAsMultiStatus(response);
         MultiStatusResponse[] homeResponses = responseBodyAsMultiStatus.getResponses();
         checkArgument(homeResponses.length >= 1, "Response does not have any WebDav Multi-Status responses: %s", responseBodyAsMultiStatus);
