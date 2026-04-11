@@ -3,6 +3,9 @@ package net.yudichev.jiotty.user.ui;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectWriter;
+import com.fasterxml.jackson.datatype.guava.GuavaModule;
+import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.LinkedListMultimap;
@@ -26,6 +29,7 @@ import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
 import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionDto;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
+import net.yudichev.jiotty.user.ui.options.Views;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.util.StringBuilderFormattable;
@@ -64,9 +68,12 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 public final class UIServerImpl extends BaseLifecycleComponent implements UIServer, UIServerRuntime {
     private static final Logger logger = LogManager.getLogger(UIServerImpl.class);
     private static final Pattern TAB_NAME_TO_ID_CONVERSION_PATTERN = Pattern.compile("[^A-Za-z0-9_-]");
-    private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory())
+    private static final ObjectWriter UI_WRITER = new ObjectMapper(new JsonFactory())
+            .registerModule(new Jdk8Module())
             .registerModule(new JavaTimeModule())
-            .disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
+            .registerModule(new GuavaModule())
+            .disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET)
+            .writerWithView(Views.UI.class);
 
     private final Map<String, Displayable> displayablesById = new LinkedHashMap<>();
     private final Map<String, Option<?>> optionsByKey = new LinkedHashMap<>();
@@ -181,7 +188,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                                           writeOptionFormPostFailure(response, throwable);
                                       } else {
                                           response.setContentType("application/json");
-                                          MAPPER.writeValue(response.getWriter(), responseData);
+                                          UI_WRITER.writeValue(response.getWriter(), responseData);
                                       }
                                   } catch (IOException e) {
                                       logger.warn("Value rendering failed for option {}", option, e);
@@ -239,7 +246,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                 items.add(Map.of("id", id, "name", displayable.getDisplayName(), "safeId", toDomId(id)));
             }
         });
-        MAPPER.writeValue(response.getWriter(), Map.of("items", items));
+        UI_WRITER.writeValue(response.getWriter(), Map.of("items", items));
     }
 
     @Override
@@ -265,7 +272,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                            if (throwable != null) {
                                logger.warn("Displayable {} failed to generate DTO", id, throwable);
                            } else {
-                               MAPPER.writeValue(response.getWriter(), Map.of("id", id, "dto", dto));
+                               UI_WRITER.writeValue(response.getWriter(), Map.of("id", id, "dto", dto));
                            }
                        } catch (IOException e) {
                            logger.info("Failed to write response for displayable DTO {}", id, e);
@@ -470,10 +477,11 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                 out.print(eventName);
                 out.print('\n');
                 out.print("data: ");
-                MAPPER.writeValue(out, data);
+                UI_WRITER.writeValue(out, data);
                 out.print("\n\n");
                 out.flush();
             } catch (IOException e) {
+                logger.debug("[SSE {}] failed to send event {}", clientId, eventName, e);
                 close();
             }
         }
@@ -499,5 +507,4 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     @Retention(RUNTIME)
     @interface OptionsStabilisationDelay {
     }
-
 }
