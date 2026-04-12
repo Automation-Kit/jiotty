@@ -50,7 +50,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class UIServerImplTest {
     private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory()).registerModule(new JavaTimeModule());
-    private static final Duration STABILISATION_DELAY = Duration.ofMillis(100);
+    private static final Duration THROTTLING_PERIOD = Duration.ofMillis(100);
 
     private ProgrammableClock clock;
     private UIServerImpl server;
@@ -60,7 +60,7 @@ class UIServerImplTest {
     @BeforeEach
     void setUp() {
         clock = new ProgrammableClock();
-        server = new UIServerImpl(persistence, clock, "test", STABILISATION_DELAY);
+        server = new UIServerImpl(persistence, clock, "test", THROTTLING_PERIOD);
         server.start();
         clock.tick();
     }
@@ -224,42 +224,47 @@ class UIServerImplTest {
     // region options SSE tests
 
     @Test
-    void optionRegistrationBroadcastsOptionsUpdateAfterStabilisation() {
-        var capture = connectSseClient();
+    void optionRegistrationBroadcastsOptionsUpdateWithThrottling() {
+        SseCapture capture = connectSseClient();
         capture.reset();
 
         registerTestOption("tab1", "opt1", "Option 1");
-
-        // before stabilisation delay — no options-update yet
         clock.tick();
+        registerTestOption("tab1", "opt2", "Option 2");
+        clock.tick();
+
+        // before stabilisation delay — only 1st option
+        String output = capture.output();
+        assertThat(output).contains("event: options-update").contains("\"tabs\"").contains("\"opt1\"").doesNotContain("\"opt2\"");
+        capture.reset();
+
         assertThat(capture.output()).doesNotContain("event: options-update");
 
-        // after stabilisation delay
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        // just before throttling delay end
+        clock.advanceTimeAndTick(THROTTLING_PERIOD.dividedBy(2));
+        assertThat(capture.output()).doesNotContain("event: options-update");
 
-        String output = capture.output();
-        assertThat(output).contains("event: options-update");
-        assertThat(output).contains("\"tabs\"");
-        assertThat(output).contains("\"opt1\"");
+        clock.advanceTimeAndTick(THROTTLING_PERIOD.dividedBy(2));
+        output = capture.output();
+        assertThat(output).contains("event: options-update").contains("\"tabs\"").contains("\"opt1\"").contains("\"opt2\"");
     }
 
     @Test
-    void burstOptionRegistrationsProduceSingleSseEvent() {
-        var capture = connectSseClient();
+    void burstOptionRegistrationsProduceTwoSseEvents() {
+        SseCapture capture = connectSseClient();
         capture.reset();
 
         registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(STABILISATION_DELAY.dividedBy(10));
+        clock.advanceTimeAndTick(THROTTLING_PERIOD.dividedBy(10));
+        assertThat(countOccurrences(capture.output(), "event: options-update")).isEqualTo(1);
+        capture.reset();
         registerTestOption("tab1", "opt2", "Option 2");
-        clock.advanceTimeAndTick(STABILISATION_DELAY.dividedBy(10));
+        clock.advanceTimeAndTick(THROTTLING_PERIOD.dividedBy(10));
         registerTestOption("tab2", "opt3", "Option 3");
-
-        // all three registered within stabilisation window — single broadcast
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         String output = capture.output();
-        long eventCount = countOccurrences(output, "event: options-update");
-        assertThat(eventCount).isEqualTo(1);
+        assertThat(countOccurrences(output, "event: options-update")).isEqualTo(1);
 
         // verify all options present in the single event
         assertThat(output).contains("\"opt1\"");
@@ -271,13 +276,13 @@ class UIServerImplTest {
     void optionUnregistrationBroadcastsUpdatedList() {
         Closeable reg1 = registerTestOption("tab1", "opt1", "Option 1");
         registerTestOption("tab1", "opt2", "Option 2");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
         capture.reset();
 
         reg1.close();
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         String output = capture.output();
         assertThat(output).contains("event: options-update");
@@ -290,7 +295,7 @@ class UIServerImplTest {
     @Test
     void sseConnectDeliversInitialOptionsImage() {
         registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
 
@@ -302,7 +307,7 @@ class UIServerImplTest {
     @Test
     void optionsUpdateJsonStructure() {
         registerTestOption("MyTab", "my.key", "My Label");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
         String eventData = extractSseEventData(capture.output(), "options-update");
@@ -326,13 +331,13 @@ class UIServerImplTest {
     void optionFormPostBroadcastsOptionUpdateViaSse() {
         var option = createTestOption("tab1", "opt1", "Option 1");
         server.registerOption(option);
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
         capture.reset();
 
         submitOptionsPost("opt1", "new value", new StringWriter());
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         String output = capture.output();
         assertThat(output).contains("event: options-update");
@@ -345,13 +350,13 @@ class UIServerImplTest {
     void programmaticSetValueBroadcastsOptionUpdateViaSse() {
         var option = createTestOption("tab1", "opt1", "Option 1");
         server.registerOption(option);
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
         capture.reset();
 
         option.setValue("programmatic value");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         String output = capture.output();
         assertThat(output).contains("event: options-update");
@@ -389,7 +394,7 @@ class UIServerImplTest {
 
         // register an option; the disconnected client should not receive the event
         registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         // if the client was properly removed, writing to it won't happen
         // and we won't get any new events (the stream is disconnected)
@@ -406,7 +411,7 @@ class UIServerImplTest {
 
         // after closing, the stream should no longer receive events
         registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
     }
 
     // endregion
@@ -421,7 +426,7 @@ class UIServerImplTest {
         capture2.reset();
 
         registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         assertThat(capture1.output()).contains("event: options-update");
         assertThat(capture2.output()).contains("event: options-update");
@@ -448,7 +453,7 @@ class UIServerImplTest {
     @Test
     void newClientConnectionDoesNotRebroadcastOptionsToExistingClients() {
         registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture1 = connectSseClient("host1", 1111);
         // capture1 receives initial options — clear it
@@ -524,7 +529,7 @@ class UIServerImplTest {
         clock.tick();
 
         registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
         String output = capture.output();
@@ -622,7 +627,7 @@ class UIServerImplTest {
     @Test
     void optionTabIdSanitisesSpecialCharacters() {
         registerTestOption("My Tab!", "opt1", "Label");
-        clock.advanceTimeAndTick(STABILISATION_DELAY);
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
         String eventData = extractSseEventData(capture.output(), "options-update");

@@ -53,6 +53,7 @@ public final class ThrottlingConsumer<T> extends BaseIdempotentCloseable impleme
 
     private void deliverValue() {
         assert pendingValue != NONE;
+        //noinspection unchecked it's either T or NONE
         delegate.accept((T) pendingValue);
         pendingValue = NONE;
 

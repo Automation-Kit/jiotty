@@ -23,7 +23,6 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.StabilisingConsumer;
 import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
 import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionDto;
@@ -80,23 +79,23 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     private final List<Closeable> optionsPersistenceRegistrations = new ArrayList<>();
     private final ExecutorFactory executorFactory;
     private final String threadNameSuffix;
-    private final Duration optionsStabilisationDelay;
+    private final Duration optionsThrottlingPeriod;
     private final Set<SseClient> sseClients = new HashSet<>();
     private final AtomicInteger sseClientIdGenerator = new AtomicInteger();
 
     private SchedulingExecutor executor;
     private Closeable sseHeartbeat = Closeable.noop();
-    private StabilisingConsumer<Void> optionSnapshotStabiliser;
+    private ThrottlingConsumer<Object> optionSnapshotThrottle;
 
     @Inject
     public UIServerImpl(OptionPersistence persistence,
                         ExecutorFactory executorFactory,
                         @ThreadSuffix String threadNameSuffix,
-                        @OptionsStabilisationDelay Duration optionsStabilisationDelay) {
+                        @OptionsThrottlingPeriod Duration optionsThrottlingPeriod) {
         this.persistence = checkNotNull(persistence);
         this.executorFactory = checkNotNull(executorFactory);
         this.threadNameSuffix = checkNotNull(threadNameSuffix);
-        this.optionsStabilisationDelay = checkNotNull(optionsStabilisationDelay);
+        this.optionsThrottlingPeriod = checkNotNull(optionsThrottlingPeriod);
     }
 
     @Override
@@ -152,7 +151,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     @Override
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor("UI" + (threadNameSuffix.isBlank() ? "" : '-' + threadNameSuffix));
-        optionSnapshotStabiliser = new StabilisingConsumer<>(executor, optionsStabilisationDelay, _ -> broadcastOptionSnapshot());
+        optionSnapshotThrottle = new ThrottlingConsumer<>(executor, optionsThrottlingPeriod, _ -> broadcastOptionSnapshot());
         sseHeartbeat = executor.scheduleAtFixedRate(Duration.ofSeconds(15), this::sendSseHeartbeat);
     }
 
@@ -420,7 +419,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     }
 
     private void notifyOptionSnapshotChanged() {
-        optionSnapshotStabiliser.accept(null);
+        optionSnapshotThrottle.accept(null);
     }
 
     private void broadcastOptionSnapshot() {
@@ -504,6 +503,6 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
-    @interface OptionsStabilisationDelay {
+    @interface OptionsThrottlingPeriod {
     }
 }
