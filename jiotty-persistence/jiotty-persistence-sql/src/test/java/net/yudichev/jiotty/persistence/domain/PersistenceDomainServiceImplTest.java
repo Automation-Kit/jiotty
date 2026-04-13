@@ -59,12 +59,12 @@ class PersistenceDomainServiceImplTest {
                                                  List.of(CREATE_SAMPLE_TABLE_SQL),
                                                  PersistenceDomainMigrator.FAIL_ON_MIGRATION);
 
-        service.ensureDomainReady(config).get(5, TimeUnit.SECONDS);
+        assertThat(service.ensureDomainReady(config).get(5, TimeUnit.SECONDS)).isTrue();
         assertDomainState(dataSource, domain);
 
         service.stop();
         service.start();
-        service.ensureDomainReady(config).get(5, TimeUnit.SECONDS);
+        assertThat(service.ensureDomainReady(config).get(5, TimeUnit.SECONDS)).isFalse();
         assertDomainState(dataSource, domain);
     }
 
@@ -80,10 +80,10 @@ class PersistenceDomainServiceImplTest {
                                                    List.of(CREATE_SAMPLE_TABLE_SQL),
                                                    toVersion -> toVersion == 2 ? List.of(ADD_SAMPLE_NAME_COLUMN_SQL) : List.of());
 
-        service.ensureDomainReady(v1Config).get(5, TimeUnit.SECONDS);
+        assertThat(service.ensureDomainReady(v1Config).get(5, TimeUnit.SECONDS)).isTrue();
         assertDomainState(dataSource, domain);
 
-        service.ensureDomainReady(v2Config).get(5, TimeUnit.SECONDS);
+        assertThat(service.ensureDomainReady(v2Config).get(5, TimeUnit.SECONDS)).isFalse();
         assertThat(readSchemaVersion(dataSource, domain.name())).isEqualTo(2);
         assertThat(columnExists(dataSource, domain.prefix() + "sample", "name")).isTrue();
 

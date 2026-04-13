@@ -53,7 +53,7 @@ public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent i
     }
 
     @Override
-    public CompletableFuture<Void> ensureDomainReady(PersistenceDomainConfig config) {
+    public CompletableFuture<Boolean> ensureDomainReady(PersistenceDomainConfig config) {
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> whenStartedAndNotLifecycling(() -> ensureDomainReadySync(config))));
     }
 
@@ -62,9 +62,10 @@ public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent i
         Closeable.closeSafelyIfNotNull(logger, dataSource);
     }
 
-    private void ensureDomainReadySync(PersistenceDomainConfig config) {
+    private boolean ensureDomainReadySync(PersistenceDomainConfig config) {
         String domainName = config.domain().name();
         ensureConnected();
+        boolean freshlyInitialised = false;
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
@@ -77,6 +78,7 @@ public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent i
                     logger.info("[{}] Initialising persistence domain", domainName);
                     executeAll(connection, config, config.initStatements());
                     insertVersion(connection, domainName, targetVersion);
+                    freshlyInitialised = true;
                 } else if (storageVersion < targetVersion) {
                     migrate(connection, config, storageVersion, targetVersion);
                 } else if (storageVersion > targetVersion) {
@@ -100,6 +102,7 @@ public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent i
         } catch (SQLException e) {
             throw new RuntimeException("Failed to initialise domain " + domainName, e);
         }
+        return freshlyInitialised;
     }
 
     private static void migrate(Connection connection, PersistenceDomainConfig config, int storageVersion, int targetVersion) throws SQLException {

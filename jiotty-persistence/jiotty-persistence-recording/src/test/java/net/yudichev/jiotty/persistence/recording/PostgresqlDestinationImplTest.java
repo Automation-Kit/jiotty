@@ -41,6 +41,8 @@ class PostgresqlDestinationImplTest {
             "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name=?";
     private static final String SELECT_COLUMN_EXISTS_SQL =
             "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=? AND column_name=?";
+    private static final String SELECT_INDEX_EXISTS_SQL =
+            "SELECT indexname FROM pg_indexes WHERE schemaname='public' AND indexname=?";
     private static final String SAMPLE_TABLE_NAME = "recorder_data_sample";
     private static final String SAMPLE_AUX_TABLE_NAME = "recorder_data_sample_init";
     @RegisterExtension
@@ -131,6 +133,33 @@ class PostgresqlDestinationImplTest {
     }
 
     @Test
+    void runsPostInitStatementsOnFreshInstallOnly() throws Exception {
+        initDestination(Optional.of("userId"));
+        var postInit = "CREATE INDEX " + SAMPLE_TABLE_NAME + "_label_idx ON %TABLE_NAME% (label);";
+        var configV1 = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
+                                                              "sample",
+                                                              1,
+                                                              List.of(),
+                                                              List.of(postInit),
+                                                              PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                              sampleColumns());
+        destination.createRecorder(configV1);
+        flushExecutor(recordingExecutor);
+        flushExecutor(domainExecutor);
+        flushExecutor(recordingExecutor);
+
+        assertThat(indexExists(dataSource, SAMPLE_TABLE_NAME + "_label_idx")).isTrue();
+
+        // Recreating the recorder against an already-initialised domain must NOT re-run post-init (which would fail on duplicate index).
+        destination.createRecorder(configV1);
+        flushExecutor(recordingExecutor);
+        flushExecutor(domainExecutor);
+        flushExecutor(recordingExecutor);
+
+        assertThat(indexExists(dataSource, SAMPLE_TABLE_NAME + "_label_idx")).isTrue();
+    }
+
+    @Test
     void appliesMigrationStatements() throws Exception {
         initDestination(Optional.of("userId"));
         var configV1 = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
@@ -172,6 +201,16 @@ class PostgresqlDestinationImplTest {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(SELECT_TABLE_EXISTS_SQL)) {
             statement.setString(1, tableName);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private static boolean indexExists(DataSource dataSource, String indexName) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(SELECT_INDEX_EXISTS_SQL)) {
+            statement.setString(1, indexName);
             try (ResultSet rs = statement.executeQuery()) {
                 return rs.next();
             }

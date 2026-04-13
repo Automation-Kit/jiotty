@@ -152,15 +152,34 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
         public void initialise() {
             // Must only schedule a single task as the recorder can be used by users immediately after creation
             var domainConfig = withTableNamePlaceholders(config.domainConfig());
+            var postInitStatements = replaceTableNamePlaceholders(config.postInitStatements());
             // persistenceDomainService is configured to use the same executor as this component
             persistenceDomainService.ensureDomainReady(domainConfig)
-                                    .thenRun(this::ensureRecorderTableExists)
+                                    .thenAccept(freshlyInitialised -> {
+                                        ensureRecorderTableExists();
+                                        if (freshlyInitialised) {
+                                            executePostInitStatements(postInitStatements);
+                                        }
+                                    })
                                     .exceptionally(e -> {
                                         logger.warn("Initialisation of record for type {} with config {} failed, recording will be disabled",
                                                     typeName, config, e);
                                         disabled = true;
                                         return null;
                                     });
+        }
+
+        private void executePostInitStatements(List<String> postInitStatements) {
+            if (postInitStatements.isEmpty()) {
+                return;
+            }
+            asUnchecked(() -> {
+                try (var connection = dataSource.getConnection()) {
+                    for (String sql : postInitStatements) {
+                        execute(connection, sql);
+                    }
+                }
+            });
         }
 
         private PersistenceDomainConfig withTableNamePlaceholders(PersistenceDomainConfig base) {

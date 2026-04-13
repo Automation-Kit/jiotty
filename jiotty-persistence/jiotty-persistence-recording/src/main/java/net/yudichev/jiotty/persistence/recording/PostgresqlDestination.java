@@ -72,13 +72,21 @@ public interface PostgresqlDestination extends Destination {
         }
     }
 
-    record PsqlConfig<R>(Class<R> recordType, String typeId, PersistenceDomainConfig domainConfig, List<Column<R, ?>> columns)
+    /// @param postInitStatements SQL statements executed after the recorder table is created, on a freshly-initialised domain only. These can reference
+    /// These can reference `%TABLE_NAME%`, `%DOMAIN%`, `%DOMAIN_PREFIX%`. Intended for DDL that references the recorder table, e.g. `CREATE INDEX ... ON
+    /// %TABLE_NAME%`. Not re-executed on migrations — evolving post-table state for existing installations is the migrator's responsibility.
+    record PsqlConfig<R>(Class<R> recordType,
+                         String typeId,
+                         PersistenceDomainConfig domainConfig,
+                         List<String> postInitStatements,
+                         List<Column<R, ?>> columns)
             implements Destination.Config<R> {
         public PsqlConfig {
             checkNotNull(recordType, "recordType");
             checkNotNull(typeId, "typeId");
             checkArgument(!typeId.isBlank(), "typeId must not be blank");
             checkNotNull(domainConfig, "domainConfig");
+            postInitStatements = ImmutableList.copyOf(checkNotNull(postInitStatements, "postInitStatements"));
             columns = ImmutableList.copyOf(checkNotNull(columns, "columns"));
         }
 
@@ -88,12 +96,23 @@ public interface PostgresqlDestination extends Destination {
                           List<String> initStatements,
                           PersistenceDomainMigrator migrator,
                           List<Column<R, ?>> columns) {
+            this(recordType, typeId, schemaVersion, initStatements, List.of(), migrator, columns);
+        }
+
+        public PsqlConfig(Class<R> recordType,
+                          String typeId,
+                          int schemaVersion,
+                          List<String> initStatements,
+                          List<String> postInitStatements,
+                          PersistenceDomainMigrator migrator,
+                          List<Column<R, ?>> columns) {
             this(recordType,
                  typeId,
                  new PersistenceDomainConfig(new PersistenceDomain(typeId),
                                              schemaVersion,
                                              checkNotNull(initStatements, "initStatements"),
                                              checkNotNull(migrator, "migrator")),
+                 postInitStatements,
                  columns);
         }
 
