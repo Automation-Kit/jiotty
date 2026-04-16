@@ -5,6 +5,8 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import net.yudichev.jiotty.user.push.PushDeviceModule;
+import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import net.yudichev.jiotty.user.ui.options.OptionPersistenceImpl;
 
@@ -30,6 +32,11 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
     protected void configure() {
         varStoreSpec.bind(new TypeLiteral<>() {}).annotatedWith(OptionPersistenceImpl.Dependency.class).installedBy(this::installLifecycleComponentModule);
         bind(OptionPersistence.class).to(OptionPersistenceImpl.class);
+
+        installLifecycleComponentModule(PushDeviceModule.builder()
+                                                        .withVarStore(varStoreSpec)
+                                                        .build());
+        expose(PushDeviceStore.class);
 
         threadNameSuffixSpec.bind(String.class).annotatedWith(UIServerImpl.ThreadSuffix.class).installedBy(this::installLifecycleComponentModule);
         optionsThrottlingPeriodSpec.bind(Duration.class)

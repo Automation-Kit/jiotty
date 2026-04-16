@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.ui;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.datatype.guava.GuavaModule;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
@@ -24,6 +25,10 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
+import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import net.yudichev.jiotty.user.push.PushDeviceRecord;
+import net.yudichev.jiotty.user.push.PushDeviceRegisterRequest;
+import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionDto;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
@@ -66,16 +71,19 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 public final class UIServerImpl extends BaseLifecycleComponent implements UIServer, UIServerRuntime {
     private static final Logger logger = LogManager.getLogger(UIServerImpl.class);
     private static final Pattern TAB_NAME_TO_ID_CONVERSION_PATTERN = Pattern.compile("[^A-Za-z0-9_-]");
-    private static final ObjectWriter UI_WRITER = new ObjectMapper(new JsonFactory())
+    private static final ObjectMapper UI_MAPPER = new ObjectMapper(new JsonFactory())
             .registerModule(new Jdk8Module())
             .registerModule(new JavaTimeModule())
             .registerModule(new GuavaModule())
-            .disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET)
-            .writerWithView(Views.UI.class);
+            .disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
+    private static final ObjectWriter UI_WRITER = UI_MAPPER.writerWithView(Views.UI.class);
+    private static final ObjectReader PUSH_DEVICE_REGISTER_REQUEST_READER = UI_MAPPER.readerFor(PushDeviceRegisterRequest.class);
 
     private final Map<String, Displayable> displayablesById = new LinkedHashMap<>();
     private final Map<String, Option<?>> optionsByKey = new LinkedHashMap<>();
     private final OptionPersistence persistence;
+    private final PushDeviceStore pushDeviceStore;
+    private final CurrentDateTimeProvider currentDateTimeProvider;
     private final List<Closeable> optionsPersistenceRegistrations = new ArrayList<>();
     private final ExecutorFactory executorFactory;
     private final String threadNameSuffix;
@@ -89,10 +97,14 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
     @Inject
     public UIServerImpl(OptionPersistence persistence,
+                        PushDeviceStore pushDeviceStore,
+                        CurrentDateTimeProvider currentDateTimeProvider,
                         ExecutorFactory executorFactory,
                         @ThreadSuffix String threadNameSuffix,
                         @OptionsThrottlingPeriod Duration optionsThrottlingPeriod) {
         this.persistence = checkNotNull(persistence);
+        this.pushDeviceStore = checkNotNull(pushDeviceStore);
+        this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider);
         this.executorFactory = checkNotNull(executorFactory);
         this.threadNameSuffix = checkNotNull(threadNameSuffix);
         this.optionsThrottlingPeriod = checkNotNull(optionsThrottlingPeriod);
@@ -158,6 +170,11 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     @Override
     protected void doStop() {
         closeSafelyIfNotNull(logger, sseHeartbeat);
+        executor.execute(() -> {
+            for (var client : List.copyOf(sseClients)) {
+                closeAndRemoveClient(client);
+            }
+        });
         closeSafelyIfNotNull(logger, forCloseables(optionsPersistenceRegistrations), executor);
     }
 
@@ -209,6 +226,58 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         }));
     }
 
+    @Override
+    public void handlePushDeviceRegister(HttpServletRequest request, HttpServletResponse response) {
+        whenStartedAndNotLifecycling(() -> asUnchecked(() -> {
+            AsyncContext asyncContext = request.startAsync();
+            PushDeviceRegisterRequest body;
+            try {
+                body = PUSH_DEVICE_REGISTER_REQUEST_READER.readValue(request.getReader());
+            } catch (IOException e) {
+                writeJsonError(response, 400, "Invalid JSON body: " + humanReadableMessage(e));
+                asyncContext.complete();
+                return;
+            }
+            var builder = PushDeviceRecord.builder()
+                                          .setDeviceId(body.deviceId())
+                                          .setToken(body.token())
+                                          .setRegisteredAt(currentDateTimeProvider.currentInstant());
+            body.platform().ifPresent(builder::setPlatform);
+            body.appVersion().ifPresent(builder::setAppVersion);
+            pushDeviceStore.upsert(builder.build())
+                           .whenCompleteAsync((ignored, throwable) -> completePushDeviceResponse(asyncContext, response, throwable), executor);
+        }));
+    }
+
+    @Override
+    public void handlePushDeviceUnregister(String deviceId, HttpServletRequest request, HttpServletResponse response) {
+        whenStartedAndNotLifecycling(() -> asUnchecked(() -> {
+            AsyncContext asyncContext = request.startAsync();
+            pushDeviceStore.remove(deviceId)
+                           .whenCompleteAsync((ignored, throwable) -> completePushDeviceResponse(asyncContext, response, throwable), executor);
+        }));
+    }
+
+    private static void completePushDeviceResponse(AsyncContext asyncContext, HttpServletResponse response, @Nullable Throwable throwable) {
+        try {
+            if (throwable != null) {
+                logger.info("Push device request processing failed", throwable);
+                asUnchecked(() -> writeJsonError(response, 500, humanReadableMessage(throwable)));
+            } else {
+                response.setStatus(204);
+            }
+        } finally {
+            asyncContext.complete();
+        }
+    }
+
+    private static void writeJsonError(HttpServletResponse response, int status, String message) throws IOException {
+        response.setStatus(status);
+        response.setCharacterEncoding("utf-8");
+        response.setContentType("application/json");
+        UI_WRITER.writeValue(response.getWriter(), Map.of("error", message));
+    }
+
     private static void writeOptionFormPostFailure(HttpServletResponse response, Throwable throwable) throws IOException {
         response.setContentType("text/plain");
         logger.info("Option form submission failed", throwable);
@@ -234,7 +303,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     }
 
     @Override
-    public void writeDisplayablesListJson(HttpServletResponse response) throws IOException {
+    public void handleGetDisplayablesList(HttpServletResponse response) throws IOException {
         response.setCharacterEncoding("utf-8");
         response.setContentType("application/json");
         Map<String, Displayable> displayablesByIdCopy = whenStartedAndNotLifecycling(() -> new HashMap<>(displayablesById));
@@ -248,19 +317,15 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     }
 
     @Override
-    public void writeDisplayableItemJson(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        response.setCharacterEncoding("utf-8");
-        response.setContentType("application/json");
+    public void handleGetDisplayableItem(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String id = request.getParameter("id");
         if (id == null || id.isBlank()) {
-            response.getWriter().write("{\"error\":\"missing id\"}");
-            response.setStatus(400);
+            writeJsonError(response, 400, "missing id");
             return;
         }
         Displayable displayable = whenStartedAndNotLifecycling(() -> displayablesById.get(id));
         if (displayable == null) {
-            response.getWriter().write("{\"error\":\"unknown id\"}");
-            response.setStatus(404);
+            writeJsonError(response, 404, "unknown id");
             return;
         }
         AsyncContext asyncContext = request.startAsync();
@@ -269,7 +334,10 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                        try {
                            if (throwable != null) {
                                logger.warn("Displayable {} failed to generate DTO", id, throwable);
+                               writeJsonError(response, 500, humanReadableMessage(throwable));
                            } else {
+                               response.setCharacterEncoding("utf-8");
+                               response.setContentType("application/json");
                                UI_WRITER.writeValue(response.getWriter(), Map.of("id", id, "dto", dto));
                            }
                        } catch (IOException e) {
@@ -339,9 +407,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         response.setHeader("X-Client-Id-Seq-Num", String.valueOf(clientIdSeqNum));
         response.flushBuffer();
 
-        Closeable streamCloseCallback = idempotent(onStreamClosed::run);
-        @SuppressWarnings("resource")
-        var client = new SseClient(asyncContext, clientId, clientIdSeqNum);
+        var client = new SseClient(asyncContext, clientId, clientIdSeqNum, idempotent(onStreamClosed::run));
         logger.debug("[SSE {}] created", clientId);
         executor.execute(() -> {
             sseClients.add(client);
@@ -378,25 +444,21 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
                     private void removeClient() {
                         if (isStarted()) {
-                            executor.execute(() -> {
-                                sseClients.remove(client);
-                                Closeable.closeIfNotNull(streamCloseCallback);
-                            });
+                            executor.execute(() -> closeAndRemoveClient(client));
                         }
                     }
                 });
             } catch (RuntimeException e) {
                 logger.debug("[SSE {}] asyncContext.addListener failed", clientId, e);
-                closeStreamAndClient(client, streamCloseCallback);
+                closeAndRemoveClient(client);
             }
         });
-        return idempotent(() -> executor.execute(() -> closeStreamAndClient(client, streamCloseCallback)));
+        return idempotent(() -> executor.execute(() -> closeAndRemoveClient(client)));
     }
 
-    private void closeStreamAndClient(SseClient client, Closeable streamClosed) {
-        client.close();
+    private void closeAndRemoveClient(SseClient client) {
+        closeSafelyIfNotNull(logger, client);
         sseClients.remove(client);
-        Closeable.closeIfNotNull(streamClosed);
     }
 
     private void sendDisplayablesSnapshotTo(List<SseClient> targetClients) {
@@ -431,7 +493,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     }
 
     private static void broadcastSse(String eventName, Object data, Iterable<SseClient> clients) {
-        for (SseClient client : ImmutableList.copyOf(clients)) {
+        for (SseClient client : clients) {
             client.sendEvent(eventName, data);
         }
     }
@@ -448,12 +510,14 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         private final ServletOutputStream out;
         private final int clientIdSeqNum;
         private final String clientId;
+        private final Closeable onStreamClosed;
 
-        SseClient(AsyncContext asyncContext, String clientId, int clientIdSeqNum) throws IOException {
+        SseClient(AsyncContext asyncContext, String clientId, int clientIdSeqNum, Closeable onStreamClosed) throws IOException {
             this.asyncContext = checkNotNull(asyncContext);
             this.clientId = checkNotNull(clientId);
             out = asyncContext.getResponse().getOutputStream();
             this.clientIdSeqNum = clientIdSeqNum;
+            this.onStreamClosed = checkNotNull(onStreamClosed);
         }
 
         private void init() {
@@ -491,6 +555,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                 asyncContext.complete();
             } catch (RuntimeException ignored) {
             }
+            onStreamClosed.close();
         }
     }
 

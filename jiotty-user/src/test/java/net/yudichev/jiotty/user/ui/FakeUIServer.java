@@ -22,12 +22,12 @@ final class FakeUIServer implements UIServer, UIServerRuntime {
     }
 
     @Override
-    public void writeDisplayablesListJson(HttpServletResponse response) {
+    public void handleGetDisplayablesList(HttpServletResponse response) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void writeDisplayableItemJson(HttpServletRequest request, HttpServletResponse response) {
+    public void handleGetDisplayableItem(HttpServletRequest request, HttpServletResponse response) {
         throw new UnsupportedOperationException();
     }
 
@@ -38,6 +38,16 @@ final class FakeUIServer implements UIServer, UIServerRuntime {
 
     @Override
     public Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void handlePushDeviceRegister(HttpServletRequest request, HttpServletResponse response) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void handlePushDeviceUnregister(String deviceId, HttpServletRequest request, HttpServletResponse response) {
         throw new UnsupportedOperationException();
     }
 }

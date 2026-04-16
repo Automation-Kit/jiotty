@@ -184,16 +184,40 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
             UIServerRuntime runtime = runtime(request);
             switch (request.getPathInfo()) {
-                case "/displayables" -> runtime.writeDisplayablesListJson(response);
-                case "/displayables/item" -> runtime.writeDisplayableItemJson(request, response);
+                case "/displayables" -> runtime.handleGetDisplayablesList(response);
+                case "/displayables/item" -> runtime.handleGetDisplayableItem(request, response);
                 case "/displayables/stream" -> startDisplayablesSse(request, response, runtime);
-                case null, default -> {
-                    response.setCharacterEncoding("utf-8");
-                    response.setContentType("application/json");
-                    response.setStatus(404);
-                    response.getWriter().print("{\"error\":\"Unknown path\"}");
-                }
+                case null, default -> writeUnknownPath(response);
             }
+        }
+
+        @Override
+        protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            UIServerRuntime runtime = runtime(request);
+            if ("/push/devices".equals(request.getPathInfo())) {
+                runtime.handlePushDeviceRegister(request, response);
+            } else {
+                writeUnknownPath(response);
+            }
+        }
+
+        @Override
+        protected void doDelete(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            UIServerRuntime runtime = runtime(request);
+            String pathInfo = request.getPathInfo();
+            String prefix = "/push/devices/";
+            if (pathInfo != null && pathInfo.startsWith(prefix) && pathInfo.length() > prefix.length()) {
+                runtime.handlePushDeviceUnregister(pathInfo.substring(prefix.length()), request, response);
+            } else {
+                writeUnknownPath(response);
+            }
+        }
+
+        private static void writeUnknownPath(HttpServletResponse response) throws IOException {
+            response.setCharacterEncoding("utf-8");
+            response.setContentType("application/json");
+            response.setStatus(404);
+            response.getWriter().print("{\"error\":\"Unknown path\"}");
         }
 
         /// @implNote there are 3 threads acting on the state in this method; it looks hard to reason about, however, I was not able to fault it - looks solid

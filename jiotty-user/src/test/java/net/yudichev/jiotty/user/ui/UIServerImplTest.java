@@ -16,6 +16,8 @@ import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
+import net.yudichev.jiotty.user.push.PushDeviceRecord;
+import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionMeta;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
@@ -24,12 +26,18 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.StringReader;
 import java.io.StringWriter;
 import java.time.Duration;
 import java.util.List;
@@ -56,11 +64,13 @@ class UIServerImplTest {
     private UIServerImpl server;
     @Mock
     private OptionPersistence persistence;
+    @Mock
+    private PushDeviceStore pushDeviceStore;
 
     @BeforeEach
     void setUp() {
         clock = new ProgrammableClock();
-        server = new UIServerImpl(persistence, clock, "test", THROTTLING_PERIOD);
+        server = new UIServerImpl(persistence, pushDeviceStore, clock, clock, "test", THROTTLING_PERIOD);
         server.start();
         clock.tick();
     }
@@ -414,6 +424,29 @@ class UIServerImplTest {
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
     }
 
+    @Test
+    void doStopClosesSseClients() {
+        var onStreamClosed = mock(Runnable.class);
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        var capture = new SseCapture();
+
+        when(request.getRemoteHost()).thenReturn("localhost");
+        when(request.getRemotePort()).thenReturn(12345);
+        when(request.startAsync()).thenReturn(asyncContext);
+        lenient().when(asyncContext.getResponse()).thenReturn(response);
+        asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
+
+        asUnchecked(() -> server.startSse(request, response, onStreamClosed));
+        clock.tick();
+
+        server.stop();
+        clock.tick();
+
+        verify(onStreamClosed).run();
+    }
+
     // endregion
 
     // region multiple SSE clients
@@ -536,6 +569,293 @@ class UIServerImplTest {
 
         assertThat(output).contains("event: displayable-update");
         assertThat(output).contains("event: options-update");
+    }
+
+    // endregion
+
+    // region REST displayables list
+
+    @Test
+    void getDisplayablesListReturnsVisibleDisplayables() throws IOException {
+        var displayable1 = createDisplayable("d1", "Display 1",
+                                             completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
+        var displayable2 = createDisplayable("d2", "Display 2",
+                                             completedFuture(new HistoryDisplayableDto(Map.of("key2", List.of()))));
+        server.registerDisplayable(displayable1);
+        server.registerDisplayable(displayable2);
+        clock.tick();
+
+        var response = mock(HttpServletResponse.class);
+        var writer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+
+        server.handleGetDisplayablesList(response);
+
+        Map<String, Object> parsed = parseJson(writer.toString());
+        @SuppressWarnings("unchecked")
+        var items = (List<Map<String, Object>>) parsed.get("items");
+        assertThat(items).hasSize(2);
+        assertThat(items).extracting(m -> m.get("id")).containsExactly("d1", "d2");
+        assertThat(items).extracting(m -> m.get("name")).containsExactly("Display 1", "Display 2");
+    }
+
+    @Test
+    void getDisplayablesListExcludesNonVisibleDisplayables() throws IOException {
+        var visible = createDisplayable("d1", "Visible",
+                                        completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
+        var hidden = createDisplayable("d2", "Hidden",
+                                       completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
+        when(hidden.visible()).thenReturn(false);
+        server.registerDisplayable(visible);
+        server.registerDisplayable(hidden);
+        clock.tick();
+
+        var response = mock(HttpServletResponse.class);
+        var writer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+
+        server.handleGetDisplayablesList(response);
+
+        Map<String, Object> parsed = parseJson(writer.toString());
+        @SuppressWarnings("unchecked")
+        var items = (List<Map<String, Object>>) parsed.get("items");
+        assertThat(items).hasSize(1);
+        assertThat(items.getFirst().get("id")).isEqualTo("d1");
+    }
+
+    @Test
+    void getDisplayablesListReturnsEmptyItemsWhenNoDisplayables() throws IOException {
+        var response = mock(HttpServletResponse.class);
+        var writer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+
+        server.handleGetDisplayablesList(response);
+
+        Map<String, Object> parsed = parseJson(writer.toString());
+        @SuppressWarnings("unchecked")
+        var items = (List<Map<String, Object>>) parsed.get("items");
+        assertThat(items).isEmpty();
+    }
+
+    @Test
+    void getDisplayablesListSanitizesIdToSafeId() throws IOException {
+        var displayable = createDisplayable("my display!", "Display",
+                                            completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
+        server.registerDisplayable(displayable);
+        clock.tick();
+
+        var response = mock(HttpServletResponse.class);
+        var writer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+
+        server.handleGetDisplayablesList(response);
+
+        Map<String, Object> parsed = parseJson(writer.toString());
+        @SuppressWarnings("unchecked")
+        var items = (List<Map<String, Object>>) parsed.get("items");
+        assertThat(items.getFirst().get("safeId")).isEqualTo("my-display-");
+    }
+
+    // endregion
+
+    // region REST displayable item
+
+    @Test
+    void getDisplayableItemReturnsDto() throws IOException {
+        var dto = new HistoryDisplayableDto(Map.of("key", List.of()));
+        var displayable = createDisplayable("d1", "Display 1", completedFuture(dto));
+        server.registerDisplayable(displayable);
+        clock.tick();
+
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        var writer = new StringWriter();
+        when(request.getParameter("id")).thenReturn("d1");
+        when(request.startAsync()).thenReturn(asyncContext);
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+
+        server.handleGetDisplayableItem(request, response);
+        clock.tick();
+
+        verify(asyncContext).complete();
+        Map<String, Object> parsed = parseJson(writer.toString());
+        assertThat(parsed.get("id")).isEqualTo("d1");
+        assertThat(parsed).containsKey("dto");
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {
+            "null, 400, missing id",
+            "'   ', 400, missing id",
+            "nonexistent, 404, unknown id"
+    }, nullValues = "null")
+    void getDisplayableItemReturnsErrorForInvalidId(String id, int expectedStatus, String expectedError) throws IOException {
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var writer = new StringWriter();
+        when(request.getParameter("id")).thenReturn(id);
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+
+        server.handleGetDisplayableItem(request, response);
+
+        verify(response).setStatus(expectedStatus);
+        assertThat(writer.toString()).contains(expectedError);
+    }
+
+    @Test
+    void getDisplayableItemReturns500WhenDtoFails() throws IOException {
+        var displayable = createDisplayable("d1", "Display 1",
+                                            CompletableFuture.failedFuture(new RuntimeException("DTO generation failed")));
+        server.registerDisplayable(displayable);
+        clock.tick();
+
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        var writer = new StringWriter();
+        when(request.getParameter("id")).thenReturn("d1");
+        when(request.startAsync()).thenReturn(asyncContext);
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+
+        server.handleGetDisplayableItem(request, response);
+        clock.tick();
+
+        verify(asyncContext).complete();
+        verify(response).setStatus(500);
+        Map<String, Object> parsed = parseJson(writer.toString());
+        assertThat((String) parsed.get("error")).contains("DTO generation failed");
+    }
+
+    // endregion
+
+    // region REST push device register
+
+    @Test
+    void pushDeviceRegisterUpsertsDeviceAndReturns204(@Captor ArgumentCaptor<PushDeviceRecord> captor) {
+        when(pushDeviceStore.upsert(any())).thenReturn(completedFuture(null));
+
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        when(request.startAsync()).thenReturn(asyncContext);
+        asUnchecked(() -> when(request.getReader()).thenReturn(
+                new BufferedReader(new StringReader("{\"deviceId\":\"dev1\",\"token\":\"tok1\"}"))));
+
+        server.handlePushDeviceRegister(request, response);
+        clock.tick();
+
+        verify(pushDeviceStore).upsert(captor.capture());
+        var record = captor.getValue();
+        assertThat(record.deviceId()).isEqualTo("dev1");
+        assertThat(record.token()).isEqualTo("tok1");
+        assertThat(record.registeredAt()).isEqualTo(clock.currentInstant());
+        assertThat(record.platform()).isEmpty();
+        assertThat(record.appVersion()).isEmpty();
+        verify(response).setStatus(204);
+        verify(asyncContext).complete();
+    }
+
+    @Test
+    void pushDeviceRegisterIncludesOptionalFields(@Captor ArgumentCaptor<PushDeviceRecord> captor) {
+        when(pushDeviceStore.upsert(any())).thenReturn(completedFuture(null));
+
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        when(request.startAsync()).thenReturn(asyncContext);
+        asUnchecked(() -> when(request.getReader()).thenReturn(
+                new BufferedReader(new StringReader(
+                        "{\"deviceId\":\"dev1\",\"token\":\"tok1\",\"platform\":\"ios\",\"appVersion\":\"2.1.0\"}"))));
+
+        server.handlePushDeviceRegister(request, response);
+        clock.tick();
+
+        verify(pushDeviceStore).upsert(captor.capture());
+        var record = captor.getValue();
+        assertThat(record.platform()).hasValue("ios");
+        assertThat(record.appVersion()).hasValue("2.1.0");
+    }
+
+    @Test
+    void pushDeviceRegisterReturns400ForInvalidJson() {
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        var writer = new StringWriter();
+        when(request.startAsync()).thenReturn(asyncContext);
+        asUnchecked(() -> when(request.getReader()).thenReturn(new BufferedReader(new StringReader("not json"))));
+        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
+
+        server.handlePushDeviceRegister(request, response);
+
+        verify(response).setStatus(400);
+        verify(asyncContext).complete();
+        Map<String, Object> parsed = parseJson(writer.toString());
+        assertThat((String) parsed.get("error")).contains("Invalid JSON body");
+    }
+
+    @Test
+    void pushDeviceRegisterReturns500WhenUpsertFails() {
+        when(pushDeviceStore.upsert(any())).thenReturn(CompletableFuture.failedFuture(new RuntimeException("store down")));
+
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        var writer = new StringWriter();
+        when(request.startAsync()).thenReturn(asyncContext);
+        asUnchecked(() -> when(request.getReader()).thenReturn(
+                new BufferedReader(new StringReader("{\"deviceId\":\"dev1\",\"token\":\"tok1\"}"))));
+        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
+
+        server.handlePushDeviceRegister(request, response);
+        clock.tick();
+
+        verify(response).setStatus(500);
+        verify(asyncContext).complete();
+        Map<String, Object> parsed = parseJson(writer.toString());
+        assertThat((String) parsed.get("error")).contains("store down");
+    }
+
+    // endregion
+
+    // region REST push device unregister
+
+    @Test
+    void pushDeviceUnregisterRemovesDeviceAndReturns204() {
+        when(pushDeviceStore.remove("dev1")).thenReturn(completedFuture(null));
+
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        when(request.startAsync()).thenReturn(asyncContext);
+
+        server.handlePushDeviceUnregister("dev1", request, response);
+        clock.tick();
+
+        verify(pushDeviceStore).remove("dev1");
+        verify(response).setStatus(204);
+        verify(asyncContext).complete();
+    }
+
+    @Test
+    void pushDeviceUnregisterReturns500WhenRemoveFails() {
+        when(pushDeviceStore.remove("dev1")).thenReturn(CompletableFuture.failedFuture(new RuntimeException("store down")));
+
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        var writer = new StringWriter();
+        when(request.startAsync()).thenReturn(asyncContext);
+        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
+
+        server.handlePushDeviceUnregister("dev1", request, response);
+        clock.tick();
+
+        verify(response).setStatus(500);
+        verify(asyncContext).complete();
+        Map<String, Object> parsed = parseJson(writer.toString());
+        assertThat((String) parsed.get("error")).contains("store down");
     }
 
     // endregion

@@ -239,6 +239,7 @@
         <module>jiotty-bom</module>
         <module>jiotty-common</module>
         <module>jiotty-connector-aws</module>
+        <module>jiotty-connector-expo-push</module>
         <module>jiotty-connector-firebase</module>
         <module>jiotty-connector-icloud</module>
         <module>jiotty-connector-google</module>
