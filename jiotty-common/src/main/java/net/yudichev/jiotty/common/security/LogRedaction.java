@@ -1,5 +1,7 @@
 package net.yudichev.jiotty.common.security;
 
+import org.apache.logging.log4j.util.StringBuilderFormattable;
+
 /// Helpers for reducing secrets and PII to a short, non-reversible form before they reach a logger, MDC field, listener callback description, or exception
 /// message.
 public final class LogRedaction {
@@ -14,4 +16,10 @@ public final class LogRedaction {
         }
         return value.substring(0, 3) + "…";
     }
+
+    /// [#redact(String)] but with the action delegated to the logging thread
+    public static StringBuilderFormattable redacted(String value) {
+        return buffer -> buffer.append(redact(value));
+    }
+
 }
