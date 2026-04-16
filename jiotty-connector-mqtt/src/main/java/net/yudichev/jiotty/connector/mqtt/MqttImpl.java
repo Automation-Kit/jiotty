@@ -192,12 +192,13 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
             deliverImage(topicFilter, callback);
             subscriptionsByFilter.computeIfAbsent(topicFilter, filter -> {
                 doSubscribe(filter,
-                            2, (topic, message) -> {
-                            Set<Subscription> subscriptions = subscriptionsByFilter.get(filter);
-                            if (!subscriptions.isEmpty()) {
-                                runForAll(subscriptions, sub -> sub.accept(topic, message));
-                            }
-                        });
+                            2,
+                            (topic, message) -> {
+                                Set<Subscription> subscriptions = subscriptionsByFilter.get(filter);
+                                if (subscriptions != null && !subscriptions.isEmpty()) {
+                                    runForAll(subscriptions, sub -> sub.accept(topic, message));
+                                }
+                            });
                 return new HashSet<>();
             }).add(subscription);
         });
@@ -248,7 +249,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     private void doSubscribe(String topicFilter, int qos, BiConsumer<String, MqttMessage> callback) {
         asUnchecked(() -> client.subscribe(topicFilter, qos, (topic, message) -> {
             logger.debug("IN topic: {}, msg: {}", topic, message);
-            guarded(logger, "Notify client on MQTT message", () -> callback.accept(topic, message)).run();
+            executor.execute(() -> callback.accept(topic, message));
         }));
     }
 

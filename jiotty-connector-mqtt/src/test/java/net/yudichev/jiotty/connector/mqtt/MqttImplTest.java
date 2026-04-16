@@ -34,7 +34,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-class MqttImplTest {
+class
+MqttImplTest {
     private static final String TOPIC_FILTER = "/topic/+";
     private final List<Mqtt.ConnectionStatus> receivedConnectionStatuses = new ArrayList<>();
     @Mock
@@ -152,6 +153,46 @@ class MqttImplTest {
         sub2.close();
         clock.tick();
         verify(client).unsubscribe(TOPIC_FILTER);
+    }
+
+    @Test
+    void messageArrivingDuringSubscribeIsDelivered() throws Exception {
+        mqttCallback.connectComplete(false, "serverUrl");
+
+        // Simulate a message arriving synchronously during client.subscribe() —
+        // reproduces the race where the MQTT thread delivers a message before computeIfAbsent completes
+        when(client.subscribe(eq(TOPIC_FILTER), eq(2), any(IMqttMessageListener.class)))
+                .thenAnswer(invocation -> {
+                    IMqttMessageListener listener = invocation.getArgument(2);
+                    listener.messageArrived("/topic/a", mqttMessage("msg"));
+                    return null;
+                });
+
+        mqtt.subscribe(TOPIC_FILTER, dataCallback);
+        clock.tick();
+
+        verify(dataCallback).accept("/topic/a", "msg");
+    }
+
+    @Test
+    void messageArrivingDuringRestoreSubscribeIsDelivered() throws Exception {
+        doSubscribe();
+
+        mqttCallback.connectionLost(new RuntimeException("oops"));
+        clock.tick();
+
+        // Simulate a message arriving synchronously during the restore's client.subscribe()
+        when(client.subscribe(eq(TOPIC_FILTER), eq(2), any(IMqttMessageListener.class)))
+                .thenAnswer(invocation -> {
+                    IMqttMessageListener listener = invocation.getArgument(2);
+                    listener.messageArrived("/topic/a", mqttMessage("msg"));
+                    return null;
+                });
+
+        mqttCallback.connectComplete(true, "serverUri");
+        clock.tick();
+
+        verify(dataCallback).accept("/topic/a", "msg");
     }
 
     private IMqttMessageListener doSubscribe() throws MqttException {
