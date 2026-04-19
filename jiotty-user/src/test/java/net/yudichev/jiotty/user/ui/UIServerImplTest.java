@@ -40,6 +40,7 @@ import java.io.PrintWriter;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -389,6 +390,24 @@ class UIServerImplTest {
         assertThat(capture.output()).contains("event: ping");
     }
 
+    @Test
+    void heartbeatPingIncludesCurrentServerTimeOnEachTick() {
+        var capture = connectSseClient();
+        capture.reset();
+
+        clock.advanceTimeAndTick(Duration.ofSeconds(15));
+        var firstPingTime = clock.currentInstant();
+        var firstData = parseJson(extractSseEventData(capture.output(), "ping"));
+        assertThat(MAPPER.convertValue(firstData.get("serverTime"), Instant.class)).isEqualTo(firstPingTime);
+
+        capture.reset();
+        clock.advanceTimeAndTick(Duration.ofSeconds(15));
+        var secondPingTime = clock.currentInstant();
+        var secondData = parseJson(extractSseEventData(capture.output(), "ping"));
+        assertThat(MAPPER.convertValue(secondData.get("serverTime"), Instant.class)).isEqualTo(secondPingTime);
+        assertThat(secondPingTime).isNotEqualTo(firstPingTime);
+    }
+
     // endregion
 
     // region SSE client lifecycle
@@ -548,6 +567,15 @@ class UIServerImplTest {
         int seq1 = ((Number) data1.get("clientIdSeqNum")).intValue();
         int seq2 = ((Number) data2.get("clientIdSeqNum")).intValue();
         assertThat(seq2).isEqualTo(seq1 + 1);
+    }
+
+    @Test
+    void helloEventIncludesServerTime() {
+        var capture = connectSseClient();
+
+        var data = parseJson(extractSseEventData(capture.output(), "hello"));
+        assertThat(data).containsKey("clientIdSeqNum");
+        assertThat(MAPPER.convertValue(data.get("serverTime"), Instant.class)).isEqualTo(clock.currentInstant());
     }
 
     // endregion

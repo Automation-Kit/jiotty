@@ -338,7 +338,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                            } else {
                                response.setCharacterEncoding("utf-8");
                                response.setContentType("application/json");
-                               UI_WRITER.writeValue(response.getWriter(), Map.of("id", id, "dto", dto));
+                               UI_WRITER.writeValue(response.getWriter(), createDtoMap(dto, id));
                            }
                        } catch (IOException e) {
                            logger.info("Failed to write response for displayable DTO {}", id, e);
@@ -476,8 +476,12 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                 logger.warn("Displayable {} failed to generate DTO", displayable.getId(), throwable);
                 return;
             }
-            broadcastSse("displayable-update", Map.of("id", displayable.getId(), "dto", displayableDto), clients);
+            broadcastSse("displayable-update", createDtoMap(displayableDto, displayable.getId()), clients);
         }, executor);
+    }
+
+    private static Map<String, Object> createDtoMap(DisplayableDto dto, String id) {
+        return Map.of("id", id, "dto", dto);
     }
 
     private void notifyOptionSnapshotChanged() {
@@ -499,13 +503,14 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
     }
 
     private void sendSseHeartbeat() {
+        var ping = Map.of("serverTime", currentDateTimeProvider.currentInstant());
         for (SseClient client : sseClients) {
-            client.sendEvent("ping", null);
+            client.sendEvent("ping", ping);
         }
     }
 
     @SuppressWarnings("HardcodedLineSeparator")
-    private static final class SseClient implements Closeable {
+    private final class SseClient implements Closeable {
         private final AsyncContext asyncContext;
         private final ServletOutputStream out;
         private final int clientIdSeqNum;
@@ -525,7 +530,8 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
                 logger.debug("[SSE {}] init", clientId);
                 out.print("retry: 3000\n\n");
                 // immediately inform the client of the server-assigned sequence number
-                sendEvent("hello", Map.of("clientIdSeqNum", clientIdSeqNum));
+                sendEvent("hello", Map.of("clientIdSeqNum", clientIdSeqNum,
+                                          "serverTime", currentDateTimeProvider.currentInstant()));
                 out.flush();
             } catch (IOException e) {
                 close();
