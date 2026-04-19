@@ -516,6 +516,7 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         private final int clientIdSeqNum;
         private final String clientId;
         private final Closeable onStreamClosed;
+        private boolean closed;
 
         SseClient(AsyncContext asyncContext, String clientId, int clientIdSeqNum, Closeable onStreamClosed) throws IOException {
             this.asyncContext = checkNotNull(asyncContext);
@@ -556,6 +557,10 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
 
         @Override
         public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
             try {
                 logger.debug("[SSE {}] closed", clientId);
                 asyncContext.complete();

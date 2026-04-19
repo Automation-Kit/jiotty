@@ -47,12 +47,14 @@ import java.util.concurrent.CompletableFuture;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -464,6 +466,36 @@ class UIServerImplTest {
         clock.tick();
 
         verify(onStreamClosed).run();
+    }
+
+    @Test
+    void sseClientCloseIsIdempotentAcrossMultipleTriggers() {
+        var onStreamClosed = mock(Runnable.class);
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        var capture = new SseCapture();
+
+        when(request.getRemoteHost()).thenReturn("localhost");
+        when(request.getRemotePort()).thenReturn(12345);
+        when(request.startAsync()).thenReturn(asyncContext);
+        lenient().when(asyncContext.getResponse()).thenReturn(response);
+        asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
+        doAnswer(invocation -> {
+            capture.asyncListener.set(invocation.getArgument(0));
+            return null;
+        }).when(asyncContext).addListener(any(AsyncListener.class));
+
+        var handle = getAsUnchecked(() -> server.startSse(request, response, onStreamClosed));
+        clock.tick();
+
+        handle.close();
+        clock.tick();
+        asUnchecked(() -> capture.asyncListener.get().onComplete(null));
+        clock.tick();
+
+        verify(asyncContext, times(1)).complete();
+        verify(onStreamClosed, times(1)).run();
     }
 
     // endregion
