@@ -33,4 +33,10 @@ public interface BaseExpoPushMessage {
     /// Android notification channel id. Defaults to the app default channel if not set.
     @JsonProperty("channelId")
     Optional<String> channelId();
+
+    /// iOS-only. `"default"` plays the system sound; a filename such as `"my_sound.wav"` plays a custom sound previously bundled into the app via the
+    /// `expo-notifications` config plugin. Omit for a silent delivery. No effect on Android — Android sound is a property of the notification channel
+    /// referenced by [#channelId()].
+    @JsonProperty("sound")
+    Optional<String> sound();
 }
