@@ -5,12 +5,18 @@ import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -19,14 +25,24 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class SqlVarStoreTest {
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
 
+    @Mock
+    private VarStoreEncryption encryption;
+
     private SqlVarStore varStore;
     private Optional<Path> legacyPath = Optional.empty();
     private boolean singleUser;
+    private Optional<VarStoreEncryption> configuredEncryption = Optional.empty();
 
     @AfterEach
     void tearDown() {
@@ -244,9 +260,84 @@ class SqlVarStoreTest {
         startVarStore();
     }
 
+    @Test
+    void encryptedSaveInvokesEncryptAndStoresResult() {
+        configuredEncryption = Optional.of(encryption);
+        when(encryption.encrypt(eq(""), eq("token"), any())).thenReturn("ENC1$stubbed-ciphertext");
+        startVarStore();
+
+        varStore.saveValueEncrypted("token", "super-secret");
+        flushExecutor();
+
+        assertThat(readRawValue("", "token")).isEqualTo("ENC1$stubbed-ciphertext");
+        verify(encryption).encrypt("", "token", "\"super-secret\"");
+    }
+
+    @Test
+    void encryptedReadInvokesDecryptOnEnvelope() {
+        configuredEncryption = Optional.of(encryption);
+        when(encryption.decrypt("", "token", "ENC1$stored-envelope")).thenReturn("\"decrypted-value\"");
+        startVarStore();
+        seedRawRowAndReload("", "token", "ENC1$stored-envelope");
+
+        assertThat(varStore.readValueEncrypted(String.class, "token")).contains("decrypted-value");
+        verify(encryption).decrypt("", "token", "ENC1$stored-envelope");
+    }
+
+    @Test
+    void encryptedReadRewritesLegacyPlaintextRow() {
+        configuredEncryption = Optional.of(encryption);
+        when(encryption.encrypt(eq(""), eq("legacy"), any())).thenReturn("ENC1$re-encrypted");
+        startVarStore();
+        seedRawRowAndReload("", "legacy", "\"legacy-plaintext\"");
+
+        assertThat(varStore.readValueEncrypted(String.class, "legacy")).contains("legacy-plaintext");
+        flushExecutor();
+
+        assertThat(readRawValue("", "legacy")).isEqualTo("ENC1$re-encrypted");
+        verify(encryption).encrypt("", "legacy", "\"legacy-plaintext\"");
+    }
+
+    @Test
+    void encryptedMethodsThrowWhenEncryptionNotConfigured() {
+        startVarStore();
+
+        assertThatThrownBy(() -> varStore.saveValueEncrypted("k", "v"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not configured with encryption");
+        assertThatThrownBy(() -> varStore.readValueEncrypted(String.class, "k"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not configured with encryption");
+    }
+
+    @Test
+    void encryptedPerUserScopedStorePassesUserIdToEncryption() {
+        configuredEncryption = Optional.of(encryption);
+        when(encryption.encrypt(eq("alice"), eq("token"), any())).thenReturn("ENC1$alice");
+        when(encryption.encrypt(eq("bob"), eq("token"), any())).thenReturn("ENC1$bob");
+        startVarStore();
+
+        varStore.forUser("alice").saveValueEncrypted("token", "alice-secret");
+        varStore.forUser("bob").saveValueEncrypted("token", "bob-secret");
+        flushExecutor();
+
+        assertThat(readRawValue("alice", "token")).isEqualTo("ENC1$alice");
+        assertThat(readRawValue("bob", "token")).isEqualTo("ENC1$bob");
+        verify(encryption).encrypt("alice", "token", "\"alice-secret\"");
+        verify(encryption).encrypt("bob", "token", "\"bob-secret\"");
+    }
+
     private void startVarStore() {
-        varStore = new SqlVarStore(postgres.dataSourceFactory(), new ExecutorFactoryImpl(), "var_store", singleUser, legacyPath);
+        varStore = new SqlVarStore(postgres.dataSourceFactory(), new ExecutorFactoryImpl(), "var_store", singleUser, legacyPath, configuredEncryption);
         varStore.start();
+    }
+
+    /// Inserts a row directly via JDBC and restarts the var store so its cache picks up the seeded
+    /// value. Requires the var store to be running beforehand so the table already exists.
+    private void seedRawRowAndReload(String userId, String key, String rawValue) {
+        insertRawValue(userId, key, rawValue);
+        varStore.stop();
+        startVarStore();
     }
 
     private void flushExecutor() {
@@ -254,8 +345,40 @@ class SqlVarStoreTest {
     }
 
     private static void writeViaFileVarStore(Path filePath, Map<String, Object> data) {
-        var fileVarStore = new MultiUserFileVarStore(filePath);
+        var fileVarStore = new MultiUserFileVarStore(filePath, null);
         data.forEach(fileVarStore::saveValue);
+    }
+
+    private static String readRawValue(String userId, String key) {
+        return getAsUnchecked(() -> {
+            try (var connection = postgres.dataSource().getConnection();
+                 var statement = connection.prepareStatement("SELECT value FROM var_store WHERE user_id = ? AND key = ?")) {
+                statement.setString(1, userId);
+                statement.setString(2, key);
+                try (var rs = statement.executeQuery()) {
+                    assertThat(rs.next()).as("expected a row for user '%s' key '%s'", userId, key).isTrue();
+                    return rs.getString(1);
+                }
+            }
+        });
+    }
+
+    private static void insertRawValue(String userId, String key, String jsonValue) {
+        getAsUnchecked(() -> {
+            try (var connection = postgres.dataSource().getConnection();
+                 var statement = connection.prepareStatement(
+                         "INSERT INTO var_store (user_id, key, value, create_time, update_time) VALUES (?, ?, ?, ?, ?)"
+                         + " ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value")) {
+                var now = Timestamp.from(Instant.now());
+                statement.setString(1, userId);
+                statement.setString(2, key);
+                statement.setString(3, jsonValue);
+                statement.setTimestamp(4, now);
+                statement.setTimestamp(5, now);
+                statement.executeUpdate();
+            }
+            return null;
+        });
     }
 
     private static Timestamps readTimestamps() {

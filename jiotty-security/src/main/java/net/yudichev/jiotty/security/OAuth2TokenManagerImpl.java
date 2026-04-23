@@ -89,7 +89,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     protected void doStart() {
         httpClient = newClient();
         executor = executorFactory.createSingleThreadedSchedulingExecutor(apiName + "-oauth2");
-        varStore.readValue(OauthAccessToken.class, varStoreKey)
+        varStore.readValueEncrypted(OauthAccessToken.class, varStoreKey)
                 .ifPresentOrElse(accessToken -> {
                                      if (isExpired(accessToken)) {
                                          refreshAccessToken(accessToken.refreshToken());

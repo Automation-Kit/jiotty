@@ -21,6 +21,11 @@ final class UserScopedVarStore implements VarStore {
     }
 
     @Override
+    public void saveValueEncrypted(String key, Object value) {
+        delegate.saveValueEncrypted(keyPrefix + key, value);
+    }
+
+    @Override
     public void clearValue(String key) {
         delegate.clearValue(keyPrefix + key);
     }
@@ -28,6 +33,11 @@ final class UserScopedVarStore implements VarStore {
     @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return delegate.readValue(type, keyPrefix + key);
+    }
+
+    @Override
+    public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
+        return delegate.readValueEncrypted(type, keyPrefix + key);
     }
 
     @Override

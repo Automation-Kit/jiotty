@@ -39,6 +39,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     private final String deleteSql;
     private final String selectAllSql;
     private final Optional<Path> legacyPath;
+    private final Optional<VarStoreEncryption> encryption;
 
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
@@ -49,7 +50,8 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
                 ExecutorFactory executorFactory,
                 @TableName String tableName,
                 @SingleUser boolean singleUser,
-                @ThePath Optional<Path> legacyPath) {
+                @ThePath Optional<Path> legacyPath,
+                Optional<VarStoreEncryption> encryption) {
         this.tableName = checkNotNull(tableName, "tableName");
         // prevent SQL injection
         //noinspection DynamicRegexReplaceableByCompiledPattern
@@ -62,13 +64,14 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         this.executorFactory = checkNotNull(executorFactory);
         this.singleUser = singleUser;
         this.legacyPath = checkNotNull(legacyPath);
+        this.encryption = checkNotNull(encryption);
     }
 
     @Override
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor("varstore-sql-test");
         dataSource = dataSourceFactory.create();
-        operations = new SqlVarStoreOperations(dataSource, executor, "", upsertSql, deleteSql, selectAllSql);
+        operations = new SqlVarStoreOperations(dataSource, executor, "", upsertSql, deleteSql, selectAllSql, encryption.orElse(null));
         createTableIfNeeded();
         legacyPath.ifPresent(path -> FileToSqlVarStoreMigrator.migrate(path, this));
         operations.loadAll();
@@ -95,6 +98,11 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     }
 
     @Override
+    public void saveValueEncrypted(String key, Object value) {
+        whenStartedAndNotLifecycling(() -> operations.saveValueEncrypted(key, value));
+    }
+
+    @Override
     public void clearValue(String key) {
         whenStartedAndNotLifecycling(() -> operations.clearValue(key));
     }
@@ -102,6 +110,11 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return whenStartedAndNotLifecycling(() -> operations.readValue(type, key));
+    }
+
+    @Override
+    public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
+        return whenStartedAndNotLifecycling(() -> operations.readValueEncrypted(type, key));
     }
 
     @Override
@@ -168,7 +181,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
 
         public UserSqlVarStore(String userId) {
             Utils.validateUserId(userId);
-            userOperations = new SqlVarStoreOperations(dataSource, executor, userId, upsertSql, deleteSql, selectAllSql);
+            userOperations = new SqlVarStoreOperations(dataSource, executor, userId, upsertSql, deleteSql, selectAllSql, encryption.orElse(null));
             userOperations.loadAll();
         }
 
@@ -183,6 +196,11 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         }
 
         @Override
+        public void saveValueEncrypted(String key, Object value) {
+            whenStartedAndNotLifecycling(() -> userOperations.saveValueEncrypted(key, value));
+        }
+
+        @Override
         public void clearValue(String key) {
             whenStartedAndNotLifecycling(() -> userOperations.clearValue(key));
         }
@@ -190,6 +208,11 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         @Override
         public <T> Optional<T> readValue(TypeToken<T> type, String key) {
             return whenStartedAndNotLifecycling(() -> userOperations.readValue(type, key));
+        }
+
+        @Override
+        public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
+            return whenStartedAndNotLifecycling(() -> userOperations.readValueEncrypted(type, key));
         }
     }
 }

@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
+/// In-memory [VarStore] test double.
 public final class InMemoryVarStore implements VarStore {
     private static final ObjectMapper mapper = new ObjectMapper()
             .registerModule(new Jdk8Module())
@@ -31,6 +32,12 @@ public final class InMemoryVarStore implements VarStore {
     }
 
     @Override
+    public void saveValueEncrypted(String key, Object value) {
+        String plaintext = getAsUnchecked(() -> mapper.writeValueAsString(value));
+        serialisedValuesByKey.put(key, VarStoreEncryption.ENVELOPE_PREFIX + plaintext);
+    }
+
+    @Override
     public void clearValue(String key) {
         serialisedValuesByKey.remove(key);
     }
@@ -43,6 +50,23 @@ public final class InMemoryVarStore implements VarStore {
     }
 
     @Override
+    public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
+        JavaType javaType = mapper.constructType(type.getType());
+        String stored = serialisedValuesByKey.get(key);
+        if (stored == null) {
+            return Optional.empty();
+        }
+        String plaintext;
+        if (VarStoreEncryption.isEnvelope(stored)) {
+            plaintext = stored.substring(VarStoreEncryption.ENVELOPE_PREFIX.length());
+        } else {
+            plaintext = stored;
+            serialisedValuesByKey.put(key, VarStoreEncryption.ENVELOPE_PREFIX + plaintext);
+        }
+        return Optional.of(getAsUnchecked(() -> mapper.readerFor(javaType).readValue(plaintext)));
+    }
+
+    @Override
     public VarStore forUser(String userId) {
         Utils.validateUserId(userId);
         return new UserScopedVarStore(this, userId + '.');
@@ -50,5 +74,9 @@ public final class InMemoryVarStore implements VarStore {
 
     public Set<String> allKeys() {
         return Collections.unmodifiableSet(serialisedValuesByKey.keySet());
+    }
+
+    public Optional<String> rawStoredValue(String key) {
+        return Optional.ofNullable(serialisedValuesByKey.get(key));
     }
 }

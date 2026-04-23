@@ -82,7 +82,12 @@ final class HomeLocationServiceImpl extends BaseLifecycleComponent implements Ho
         private final DoubleConsumer valueConsumer;
 
         public NumberOption(String id, String label, DoubleConsumer valueConsumer) {
-            super(HomeLocationServiceImpl.this.executor, new OptionMeta<>("Misc", "homeLocation." + id, label, null));
+            super(HomeLocationServiceImpl.this.executor,
+                  OptionMeta.<String>builder()
+                            .setTabName("Misc")
+                            .setKey("homeLocation." + id)
+                            .setLabel(label)
+                            .build());
             this.valueConsumer = checkNotNull(valueConsumer);
         }
 

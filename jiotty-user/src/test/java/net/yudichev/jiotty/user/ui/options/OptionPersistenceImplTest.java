@@ -13,6 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OptionPersistenceImplTest {
     private static final String OPTION_KEY = "test.option";
     private static final String STORE_KEY = OptionPersistenceImpl.UI_OPTIONS_KEY_PREFIX + '.' + OPTION_KEY;
+    private static final String ENVELOPE_PREFIX = "ENC1$";
 
     private SchedulingExecutor executor;
     private InMemoryVarStore varStore;
@@ -69,8 +70,45 @@ class OptionPersistenceImplTest {
         assertThat(defaultedOption.getValue()).contains("default");
     }
 
+    @Test
+    void sensitiveOptionPersistsAsEncryptedEnvelope() {
+        TestTextOption sensitiveOption = createSensitiveOption();
+        sensitiveOption.setValueSync("super-secret");
+
+        persistence.save(sensitiveOption);
+
+        assertThat(varStore.rawStoredValue(STORE_KEY))
+                .hasValueSatisfying(stored -> assertThat(stored).startsWith(ENVELOPE_PREFIX));
+    }
+
+    @Test
+    void sensitiveOptionRoundTripsThroughEncryption() {
+        TestTextOption sensitiveOption = createSensitiveOption();
+        sensitiveOption.setValueSync("super-secret");
+        persistence.save(sensitiveOption);
+
+        TestTextOption loadTarget = createSensitiveOption();
+        persistence.load(loadTarget);
+
+        assertThat(loadTarget.getValue()).contains("super-secret");
+    }
+
     private TestTextOption createOption(String defaultValue) {
-        return new TestTextOption(executor, new OptionMeta<>("Tab", OPTION_KEY, "Label", defaultValue));
+        return new TestTextOption(executor, OptionMeta.<String>builder()
+                                                      .setTabName("Tab")
+                                                      .setKey(OPTION_KEY)
+                                                      .setLabel("Label")
+                                                      .setDefaultValue(defaultValue)
+                                                      .build());
+    }
+
+    private TestTextOption createSensitiveOption() {
+        return new TestTextOption(executor, OptionMeta.<String>builder()
+                                                      .setTabName("Tab")
+                                                      .setKey(OPTION_KEY)
+                                                      .setLabel("Label")
+                                                      .setSensitive(true)
+                                                      .build());
     }
 
     private static final class TestTextOption extends TextOption {

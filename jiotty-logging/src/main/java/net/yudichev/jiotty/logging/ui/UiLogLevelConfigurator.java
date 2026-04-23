@@ -44,10 +44,12 @@ public final class UiLogLevelConfigurator extends BaseLifecycleComponent {
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor("log-level-config");
         optionRegistration = uiServer.registerOption(new TextAreaOption(executor,
-                                                                        new OptionMeta<>("Misc",
-                                                                                         "customLogLevels",
-                                                                                         "Custom Logging Levels",
-                                                                                         readLevelsInTextAreaFormat())) {
+                                                                        OptionMeta.<String>builder()
+                                                                                  .setTabName("Misc")
+                                                                                  .setKey("customLogLevels")
+                                                                                  .setLabel("Custom Logging Levels")
+                                                                                  .setDefaultValue(readLevelsInTextAreaFormat())
+                                                                                  .build()) {
             {
                 rowCount = 10;
             }

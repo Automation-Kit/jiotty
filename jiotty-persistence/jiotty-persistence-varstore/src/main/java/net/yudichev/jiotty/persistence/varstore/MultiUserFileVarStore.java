@@ -1,11 +1,13 @@
 package net.yudichev.jiotty.persistence.varstore;
 
+import jakarta.annotation.Nullable;
+
 import java.nio.file.Path;
 
 final class MultiUserFileVarStore extends BaseFileVarStore {
 
-    public MultiUserFileVarStore(Path storeFile) {
-        super(storeFile);
+    public MultiUserFileVarStore(Path storeFile, @Nullable VarStoreEncryption encryption) {
+        super(storeFile, encryption);
     }
 
     @Override

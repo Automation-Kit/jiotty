@@ -6,6 +6,7 @@ import com.fasterxml.jackson.datatype.guava.GuavaModule;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.reflect.TypeToken;
+import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import org.apache.logging.log4j.LogManager;
@@ -17,8 +18,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
@@ -35,16 +38,19 @@ final class SqlVarStoreOperations {
     private final String deleteSql;
     private final String selectAllSql;
     private final SchedulingExecutor executor;
+    private final @Nullable VarStoreEncryption encryption;
     private final ConcurrentMap<String, Object> cache = new ConcurrentHashMap<>();
 
     public SqlVarStoreOperations(CloseableDataSource dataSource, SchedulingExecutor executor, String userId,
-                                 String upsertSql, String deleteSql, String selectAllSql) {
+                                 String upsertSql, String deleteSql, String selectAllSql,
+                                 @Nullable VarStoreEncryption encryption) {
         this.dataSource = checkNotNull(dataSource);
         this.executor = checkNotNull(executor);
         this.userId = checkNotNull(userId);
         this.upsertSql = checkNotNull(upsertSql);
         this.deleteSql = checkNotNull(deleteSql);
         this.selectAllSql = checkNotNull(selectAllSql);
+        this.encryption = encryption;
     }
 
     public void loadAll() {
@@ -64,26 +70,12 @@ final class SqlVarStoreOperations {
     }
 
     public void saveValue(String key, Object value) {
-        var oldValue = cache.put(key, value);
-        if (Objects.equals(oldValue, value)) {
-            logger.debug("[{}] Skip persisting {} as it's unchanged", userId, key);
-        } else {
-            executor.execute(() -> asUnchecked(() -> {
-                var now = Timestamp.from(Instant.now());
-                try (var connection = dataSource.getConnection();
-                     var statement = connection.prepareStatement(upsertSql)) {
-                    String jsonValue = getAsUnchecked(() -> OBJECT_MAPPER.writeValueAsString(value));
-                    statement.setString(1, userId);
-                    statement.setString(2, key);
-                    statement.setString(3, jsonValue);
-                    statement.setTimestamp(4, now);
-                    statement.setTimestamp(5, now);
-                    statement.setTimestamp(6, now);
-                    statement.executeUpdate();
-                }
-                logger.debug("[{}] Saved {}", userId, key);
-            }));
-        }
+        persist(key, value, Function.identity());
+    }
+
+    public void saveValueEncrypted(String key, Object value) {
+        VarStoreEncryption enc = requireEncryption();
+        persist(key, value, plaintextJson -> enc.encrypt(userId, key, plaintextJson));
     }
 
     public void clearValue(String key) {
@@ -107,13 +99,70 @@ final class SqlVarStoreOperations {
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return Optional.ofNullable((T) cache.computeIfPresent(key, (_, v) -> {
             if (v instanceof Json(var json)) {
-                return getAsUnchecked(() -> {
-                    JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
-                    return OBJECT_MAPPER.readerFor(javaType).readValue(json);
-                });
+                return deserialize(type, json);
             }
             return v;
         }));
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
+        VarStoreEncryption enc = requireEncryption();
+        boolean[] migrated = {false};
+        T result = (T) cache.computeIfPresent(key, (k, v) -> {
+            if (v instanceof Json(var json)) {
+                if (VarStoreEncryption.isEnvelope(json)) {
+                    return deserialize(type, enc.decrypt(userId, k, json));
+                }
+                logger.info("[{}] legacy plaintext value for '{}' — re-encrypting on read", userId, k);
+                migrated[0] = true;
+                return deserialize(type, json);
+            }
+            return v;
+        });
+        if (migrated[0]) {
+            scheduleWrite(key, result, plaintextJson -> enc.encrypt(userId, key, plaintextJson));
+        }
+        return Optional.ofNullable(result);
+    }
+
+    private void persist(String key, Object value, Function<String, String> serialisedEncoder) {
+        var oldValue = cache.put(key, value);
+        if (Objects.equals(oldValue, value)) {
+            logger.debug("[{}] Skip persisting {} as it's unchanged", userId, key);
+            return;
+        }
+        scheduleWrite(key, value, serialisedEncoder);
+    }
+
+    private void scheduleWrite(String key, Object value, Function<String, String> serialisedEncoder) {
+        executor.execute(() -> asUnchecked(() -> {
+            var now = Timestamp.from(Instant.now());
+            String storedValue = serialisedEncoder.apply(getAsUnchecked(() -> OBJECT_MAPPER.writeValueAsString(value)));
+            try (var connection = dataSource.getConnection();
+                 var statement = connection.prepareStatement(upsertSql)) {
+                statement.setString(1, userId);
+                statement.setString(2, key);
+                statement.setString(3, storedValue);
+                statement.setTimestamp(4, now);
+                statement.setTimestamp(5, now);
+                statement.setTimestamp(6, now);
+                statement.executeUpdate();
+            }
+            logger.debug("[{}] Saved {}", userId, key);
+        }));
+    }
+
+    private static Object deserialize(TypeToken<?> type, String json) {
+        return getAsUnchecked(() -> {
+            JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
+            return OBJECT_MAPPER.readerFor(javaType).readValue(json);
+        });
+    }
+
+    private VarStoreEncryption requireEncryption() {
+        checkState(encryption != null, "VarStore not configured with encryption");
+        return encryption;
     }
 
     private record Json(String json) {}

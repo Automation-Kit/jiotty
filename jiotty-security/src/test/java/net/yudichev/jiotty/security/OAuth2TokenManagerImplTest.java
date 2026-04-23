@@ -106,14 +106,14 @@ class OAuth2TokenManagerImplTest {
 
         // expires_in=3600, refreshTime = NOW + 3600 * 8 / 10 = NOW + 2880
         Instant expectedRefreshTime = NOW.plusSeconds(2880);
-        assertThat(varStore.readValue(OauthAccessToken.class, VAR_STORE_KEY))
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY))
                 .hasValue(OauthAccessToken.of("at-1", "rt-1", expectedRefreshTime));
     }
 
     @Test
     void startupWithValidStoredToken_doesNotHitServer() {
         Instant futureRefreshTime = NOW.plusSeconds(1800);
-        varStore.saveValue(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", futureRefreshTime));
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", futureRefreshTime));
 
         createAndStartTokenManager();
 
@@ -125,7 +125,7 @@ class OAuth2TokenManagerImplTest {
     @Test
     void startupWithExpiredStoredToken_triggersRefresh() {
         Instant pastRefreshTime = NOW.minusSeconds(60);
-        varStore.saveValue(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", pastRefreshTime));
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", pastRefreshTime));
 
         enqueueSuccessResponse("new-at", "new-rt", 7200);
         createAndStartTokenManager();
@@ -152,14 +152,14 @@ class OAuth2TokenManagerImplTest {
 
         // expires_in=1000, refreshTime = NOW + 1000 * 8 / 10 = NOW + 800
         Instant expectedRefreshTime = NOW.plusSeconds(800);
-        assertThat(varStore.readValue(OauthAccessToken.class, VAR_STORE_KEY))
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY))
                 .hasValue(OauthAccessToken.of("at", "rt", expectedRefreshTime));
     }
 
     @Test
     void refreshResponse_withoutRefreshToken_keepsPreviousRefreshToken() {
         Instant pastRefreshTime = NOW.minusSeconds(60);
-        varStore.saveValue(VAR_STORE_KEY, OauthAccessToken.of("old-at", "original-rt", pastRefreshTime));
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "original-rt", pastRefreshTime));
 
         responseQueue.add(new FakeResponse(200, """
                                                 {"access_token": "new-at", "expires_in": 3600, "token_type": "Bearer"}"""));
@@ -167,7 +167,7 @@ class OAuth2TokenManagerImplTest {
         pollTokenResult();
 
         Instant expectedRefreshTime = NOW.plusSeconds(2880);
-        assertThat(varStore.readValue(OauthAccessToken.class, VAR_STORE_KEY))
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY))
                 .hasValue(OauthAccessToken.of("new-at", "original-rt", expectedRefreshTime));
     }
 

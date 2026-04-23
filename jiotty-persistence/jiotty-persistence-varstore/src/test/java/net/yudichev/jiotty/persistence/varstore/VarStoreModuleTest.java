@@ -2,6 +2,7 @@ package net.yudichev.jiotty.persistence.varstore;
 
 import com.google.inject.Guice;
 import net.yudichev.jiotty.common.async.ExecutorModule;
+import net.yudichev.jiotty.common.keystore.KeyStoreAccess;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import org.junit.jupiter.api.Test;
@@ -47,5 +48,29 @@ class VarStoreModuleTest {
                                                       new ExecutorModule(),
                                                       VarStoreModule.builder().build()))
                 .hasMessageContaining("At least one of 'path', 'dataSourceFactory' is required");
+    }
+
+    @Test
+    void configureWithEncryption() {
+        var injector = Guice.createInjector(new TimeModule(),
+                                            new ExecutorModule(),
+                                            VarStoreModule.builder()
+                                                          .withDataSourceFactory(literally(mock(DataSourceFactory.class)))
+                                                          .withEncryptionKeyAlias(literally("master-key-alias"))
+                                                          .withKeyStoreAccess(literally(mock(KeyStoreAccess.class)))
+                                                          .build());
+
+        assertThat(injector.getBinding(VarStore.class)).isNotNull();
+    }
+
+    @Test
+    void failsWhenEncryptionAliasSetWithoutKeyStoreAccess() {
+        assertThatThrownBy(() -> Guice.createInjector(new TimeModule(),
+                                                      new ExecutorModule(),
+                                                      VarStoreModule.builder()
+                                                                    .withDataSourceFactory(literally(mock(DataSourceFactory.class)))
+                                                                    .withEncryptionKeyAlias(literally("some-alias"))
+                                                                    .build()))
+                .hasMessageContaining("withKeyStoreAccess is required");
     }
 }

@@ -1,13 +1,15 @@
 package net.yudichev.jiotty.persistence.varstore;
 
+import jakarta.annotation.Nullable;
+
 import java.nio.file.Path;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
 final class SingleUserFileVarStore extends BaseFileVarStore {
 
-    public SingleUserFileVarStore(Path storeFile) {
-        super(storeFile);
+    public SingleUserFileVarStore(Path storeFile, @Nullable VarStoreEncryption encryption) {
+        super(storeFile, encryption);
     }
 
     @Override

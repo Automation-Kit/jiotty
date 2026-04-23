@@ -35,6 +35,7 @@ public final class InitModule extends AbstractModule {
     private final Function<Injector, Module> appModuleFactory;
     private final @Nullable SpecifiedAnnotation varStoreAnnotation;
     private final BindingSpec<String> varStoreTableNameSpec;
+    private final @Nullable BindingSpec<String> varStoreEncryptionKeyAliasSpec;
 
     private InitModule(DbConnectionConfig dbConnectionConfig,
                        @Nullable BindingSpec<Path> varStorePathSpec,
@@ -43,7 +44,8 @@ public final class InitModule extends AbstractModule {
                        BindingSpec<Boolean> singeUserSpec,
                        Function<Injector, Module> appModuleFactory,
                        @Nullable SpecifiedAnnotation varStoreAnnotation,
-                       BindingSpec<String> varStoreTableNameSpec) {
+                       BindingSpec<String> varStoreTableNameSpec,
+                       @Nullable BindingSpec<String> varStoreEncryptionKeyAliasSpec) {
         this.dbConnectionConfig = checkNotNull(dbConnectionConfig);
         this.varStorePathSpec = varStorePathSpec;
         this.pathToKeystoreSpec = checkNotNull(pathToKeystoreSpec);
@@ -52,16 +54,18 @@ public final class InitModule extends AbstractModule {
         this.appModuleFactory = checkNotNull(appModuleFactory);
         this.varStoreAnnotation = varStoreAnnotation;
         this.varStoreTableNameSpec = checkNotNull(varStoreTableNameSpec);
+        this.varStoreEncryptionKeyAliasSpec = varStoreEncryptionKeyAliasSpec;
     }
 
     @Override
     protected void configure() {
         install(new ExecutorModule());
         install(new TimeModule());
-        install(KeyStoreAccessModule.builder()
-                                    .setPathToKeystore(pathToKeystoreSpec)
-                                    .setKeystorePass(keystorePassSpec)
-                                    .build());
+        var keyStoreAccessModule = KeyStoreAccessModule.builder()
+                                                       .setPathToKeystore(pathToKeystoreSpec)
+                                                       .setKeystorePass(keystorePassSpec)
+                                                       .build();
+        install(keyStoreAccessModule);
         var dataSourceFactoryModule = PsqlDataSourceFactoryModule.builder()
                                                                  .setConnectionConfig(dbConnectionConfig)
                                                                  .withAnnotation(forAnnotation(uniqueAnnotation()))
@@ -73,6 +77,11 @@ public final class InitModule extends AbstractModule {
         }
         if (varStorePathSpec != null) {
             varStoreModuleBuilder.withPath(varStorePathSpec);
+        }
+        if (varStoreEncryptionKeyAliasSpec != null) {
+            varStoreModuleBuilder
+                    .withEncryptionKeyAlias(varStoreEncryptionKeyAliasSpec)
+                    .withKeyStoreAccess(boundTo(keyStoreAccessModule.getExposedKey()));
         }
         var varStoreModule = varStoreModuleBuilder
                 .withDataSourceFactory(boundTo(dataSourceFactoryModule.getExposedKey()))
@@ -97,6 +106,7 @@ public final class InitModule extends AbstractModule {
         private Function<Injector, Module> appModuleFactory;
         private BindingSpec<String> varStoreTableNameSpec = literally("var_store");
         private SpecifiedAnnotation varStoreAnnotation;
+        private BindingSpec<String> varStoreEncryptionKeyAliasSpec;
 
         public Builder setDbConnectionConfig(DbConnectionConfig dbConnectionConfig) {
             this.dbConnectionConfig = checkNotNull(dbConnectionConfig);
@@ -138,6 +148,11 @@ public final class InitModule extends AbstractModule {
             return this;
         }
 
+        public Builder withVarStoreEncryptionKeyAlias(BindingSpec<String> varStoreEncryptionKeyAliasSpec) {
+            this.varStoreEncryptionKeyAliasSpec = checkNotNull(varStoreEncryptionKeyAliasSpec);
+            return this;
+        }
+
         @Override
         public InitModule build() {
             return new InitModule(dbConnectionConfig,
@@ -147,7 +162,8 @@ public final class InitModule extends AbstractModule {
                                   singleUserSpec,
                                   appModuleFactory,
                                   varStoreAnnotation,
-                                  varStoreTableNameSpec);
+                                  varStoreTableNameSpec,
+                                  varStoreEncryptionKeyAliasSpec);
         }
     }
 }

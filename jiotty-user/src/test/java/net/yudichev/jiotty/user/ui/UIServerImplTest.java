@@ -972,7 +972,13 @@ class UIServerImplTest {
 
     @Test
     void optionsPostWhenOnFormSubmitThrowsSynchronouslyReturns400(@Mock Option<?> option) {
-        lenient().when(option.meta()).thenReturn(new OptionMeta<>(0, "tab", "throwing-opt", "Throwing", null));
+        lenient().doReturn(OptionMeta.builder()
+                                     .setFormOrder(0)
+                                     .setTabName("tab")
+                                     .setKey("throwing-opt")
+                                     .setLabel("Throwing")
+                                     .build())
+                 .when(option).meta();
         lenient().when(option.toDto()).thenReturn(completedFuture(null));
         when(option.onFormSubmit(any())).thenThrow(new RuntimeException("boom"));
         server.registerOption(option);
@@ -989,7 +995,13 @@ class UIServerImplTest {
 
     @Test
     void optionsPostAsyncFailureReturns400(@Mock Option<?> option) {
-        lenient().when(option.meta()).thenReturn(new OptionMeta<>(0, "tab", "async-fail", "AsyncFail", null));
+        lenient().doReturn(OptionMeta.builder()
+                                     .setFormOrder(0)
+                                     .setTabName("tab")
+                                     .setKey("async-fail")
+                                     .setLabel("AsyncFail")
+                                     .build())
+                 .when(option).meta();
         lenient().when(option.toDto()).thenReturn(completedFuture(null));
         when(option.onFormSubmit(any())).thenReturn(CompletableFuture.failedFuture(new RuntimeException("async boom")));
         server.registerOption(option);
@@ -1033,7 +1045,12 @@ class UIServerImplTest {
 
     private TestTextOption createTestOption(String tabName, String key, String label, int formOrder) {
         return new TestTextOption(clock.createSingleThreadedSchedulingExecutor("opt-" + key),
-                                  new OptionMeta<>(formOrder, tabName, key, label, null));
+                                  OptionMeta.<String>builder()
+                                            .setFormOrder(formOrder)
+                                            .setTabName(tabName)
+                                            .setKey(key)
+                                            .setLabel(label)
+                                            .build());
     }
 
     private HttpServletResponse submitOptionsPost(@Nullable String name, @Nullable String value, StringWriter responseBody) {
