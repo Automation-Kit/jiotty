@@ -186,9 +186,6 @@ body { display: flex; flex-direction: column; }
 .tab-content > .tab-pane.active.show { display: flex !important; flex: 1 1 auto; flex-direction: column; }
 .displayable-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 
-/* Charging pane */
-#charging-pane { display: flex; flex-direction: column; overflow: auto; }
-
 /* Options pane */
 #options-pane { overflow: auto; }
 #options-pane .options-container { width: 100%; max-width: 900px; padding: 0 12px; }
@@ -302,22 +299,4 @@ td table tbody tr:nth-child(even) { background-color: #ffffff; }
 
     td table thead th { font-size: 12px; }
     td table tbody td { font-size: 10px; }
-}
-
-/* Charging chart layout */
-@supports (height: 100dvh) {
-  #charging-pane { height: 100dvh; }
-}
-@supports (height: 100svh) {
-  #charging-pane { height: 100svh; }
-}
-#chargeChartContainer {
-  flex: 1 1 auto;
-  min-height: 0; /* allow canvas to compute height within flex parent */
-}
-#chargeChartContainer > canvas,
-#combinedChart {
-  width: 100% !important;
-  height: 100% !important;
-  display: block;
 }

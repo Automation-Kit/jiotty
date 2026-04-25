@@ -29,12 +29,6 @@
                 Options
             </button>
         </li>
-        <li class="nav-item">
-            <button aria-controls="charging-pane" aria-selected="false" class="nav-link" data-bs-target="#charging-pane" data-bs-toggle="tab" id="charging-tab"
-                    role="tab" type="button">
-                Charging
-            </button>
-        </li>
     </ul>
     <div class="tab-content mt-3">
         <!-- State pane -->
@@ -52,13 +46,6 @@
                 </form>
             </div>
         </div>
-
-        <!-- Charging pane -->
-        <div aria-labelledby="charging-tab" class="tab-pane fade" id="charging-pane" role="tabpanel">
-            <div class="border rounded p-2" id="chargeChartContainer">
-                <canvas id="combinedChart"></canvas>
-            </div>
-        </div>
     </div>
 </div>
 
@@ -73,21 +60,12 @@
             <i class="bi bi-gear"></i>
             <div class="small">Options</div>
         </button>
-        <button aria-label="Charging" class="btn nav-switch" data-target="#charging-pane">
-            <i class="bi bi-lightning-charge"></i>
-            <div class="small">Charging</div>
-        </button>
     </div>
 </nav>
 
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
-<!-- Chart libraries for Charging tab -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.js"></script>
 <script src="displayable-sse.js"></script>
-<script src="long-term-charge-chart.js"></script>
 <script src="ui.js"></script>
 </body>
 </html>

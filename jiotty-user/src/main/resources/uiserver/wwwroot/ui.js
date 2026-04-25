@@ -1,8 +1,7 @@
 $(function () {
     const MAIN_TAB_TARGETS = {
         state: '#state-pane',
-        options: '#options-pane',
-        charge: '#charging-pane'
+        options: '#options-pane'
     };
 
     // ----- Responsive navigation -----
@@ -38,10 +37,9 @@ $(function () {
     // ----- URL hash with sub-tabs -----
     function parseHash() {
         const h = window.location.hash || '';
-        const m = h.match(/^#(state|options|charge|charging|charging-pane)(?:\/(.*))?$/i);
+        const m = h.match(/^#(state|options)(?:\/(.*))?$/i);
         if (!m) return {main: null, sub: null};
-        let main = m[1].toLowerCase();
-        if (main === 'charging-pane' || main === 'charging') main = 'charge';
+        const main = m[1].toLowerCase();
         const sub = m[2] ? decodeURIComponent(m[2]) : null;
         return {main, sub};
     }
@@ -52,8 +50,6 @@ $(function () {
             h = '#state' + (obj.sub ? '/' + encodeURIComponent(obj.sub) : '');
         } else if (obj.main === 'options') {
             h = '#options' + (obj.sub ? '/' + encodeURIComponent(obj.sub) : '');
-        } else if (obj.main === 'charge') {
-            h = '#charge';
         }
         history.replaceState(null, '', window.location.pathname + window.location.search + (h || ''));
     }
@@ -109,18 +105,6 @@ $(function () {
     function activeStateOriginalId() {
         const el = document.querySelector('#stateTabContent .tab-pane.active .displayable-body');
         return el ? el.getAttribute('data-original-id') : null;
-    }
-
-    // ----- Charging chart control -----
-    function sendChargeControl(action) {
-        if (!window.ChargeChart) return;
-        if (action === 'start') {
-            if (!document.getElementById('combinedChart')) return;
-            window.ChargeChart.init('combinedChart');
-            if (window.ChargeChart.start) window.ChargeChart.start();
-        } else if (action === 'stop') {
-            if (window.ChargeChart.stop) window.ChargeChart.stop();
-        }
     }
 
     // ----- State SSE subscriptions -----
@@ -583,17 +567,12 @@ $(function () {
             if (target === '#state-pane') {
                 updateHash({main: 'state', sub: activeStateOriginalId()});
                 ensureStateStreaming();
-                sendChargeControl('stop');
                 setupMobileSubtabsFor('#stateTab');
             } else if (target === '#options-pane') {
                 const h = parseHash();
                 if (!document.querySelector('#options-pane .tab-pane.active')) activateFirstOptionsTab();
                 if (!(h && h.main === 'options' && h.sub)) updateHash({main: 'options', sub: activeOptionsTabId()});
                 setupMobileSubtabsFor('#optionsTab');
-                sendChargeControl('stop');
-            } else if (target === '#charging-pane') {
-                updateHash({main: 'charge'});
-                sendChargeControl('start');
             }
         });
 
