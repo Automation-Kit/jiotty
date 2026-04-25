@@ -9,16 +9,14 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.user.ui.UIServer;
+import net.yudichev.jiotty.user.ui.options.LocationOption;
 import net.yudichev.jiotty.user.ui.options.OptionMeta;
-import net.yudichev.jiotty.user.ui.options.TextOption;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
-import java.util.function.DoubleConsumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
@@ -31,8 +29,6 @@ final class HomeLocationServiceImpl extends BaseLifecycleComponent implements Ho
     private final Listeners<LatLon> listeners = new Listeners<>();
     private SchedulingExecutor executor;
     private List<Closeable> resources;
-    private @Nullable Double lat;
-    private @Nullable Double lon;
     private @Nullable LatLon location;
 
     @Inject
@@ -48,61 +44,28 @@ final class HomeLocationServiceImpl extends BaseLifecycleComponent implements Ho
 
     @Override
     protected void doStart() {
-        resources = List.of(executor = executorFactory.createSingleThreadedSchedulingExecutor("HomeLocation"),
-                            uiServer.registerOption(new NumberOption("lat", "Home Latitude", this::onLatUpdate)),
-                            uiServer.registerOption(new NumberOption("lon", "Home Longitude", this::onLonUpdate)))
+        executor = executorFactory.createSingleThreadedSchedulingExecutor("HomeLocation");
+        resources = List.of(executor,
+                            uiServer.registerOption(new LocationOption(executor,
+                                                                       OptionMeta.<LatLon>builder()
+                                                                                 .setTabName("Misc")
+                                                                                 .setKey("homeLocation")
+                                                                                 .setLabel("Home Location")
+                                                                                 .setSensitive(true)
+                                                                                 .build()) {
+                                @Override
+                                public LatLon onChanged() {
+                                    LatLon v = value();
+                                    location = v;
+                                    listeners.notify(v);
+                                    return v;
+                                }
+                            }))
                         .reversed();
     }
 
     @Override
     protected void doStop() {
         closeSafelyIfNotNull(logger, resources);
-    }
-
-    private void onLatUpdate(double lat) {
-        this.lat = lat;
-        updateListeners();
-    }
-
-    private void onLonUpdate(double lon) {
-        this.lon = lon;
-        updateListeners();
-    }
-
-    private void updateListeners() {
-        if (lat != null && lon != null) {
-            location = new LatLon(lat, lon);
-        } else {
-            location = null;
-        }
-        listeners.notify(location);
-    }
-
-    private class NumberOption extends TextOption {
-        private final DoubleConsumer valueConsumer;
-
-        public NumberOption(String id, String label, DoubleConsumer valueConsumer) {
-            super(HomeLocationServiceImpl.this.executor,
-                  OptionMeta.<String>builder()
-                            .setTabName("Misc")
-                            .setKey("homeLocation." + id)
-                            .setLabel(label)
-                            .build());
-            this.valueConsumer = checkNotNull(valueConsumer);
-        }
-
-        @Override
-        public String onChanged() {
-            Optional<Double> newValue;
-            try {
-                Optional<String> valueStr = getValue();
-                newValue = valueStr.map(Double::parseDouble);
-            } catch (NumberFormatException e) {
-                //noinspection ThrowInsideCatchBlockWhichIgnoresCaughtException
-                throw new RuntimeException("Invalid number");
-            }
-            newValue.ifPresent(valueConsumer::accept);
-            return newValue.map(Objects::toString).orElse(null);
-        }
     }
 }
