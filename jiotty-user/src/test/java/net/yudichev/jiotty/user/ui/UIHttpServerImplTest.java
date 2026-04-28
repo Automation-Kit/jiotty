@@ -1,12 +1,15 @@
 package net.yudichev.jiotty.user.ui;
 
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.StreamInvalidationSubscription;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
+import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee10.servlet.ServletHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,10 +19,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.Optional;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
@@ -46,7 +51,7 @@ class UIHttpServerImplTest {
 
     @BeforeEach
     void setUp() {
-        server = new UIHttpServerImpl(requestAuthoriser, 0);
+        server = new UIHttpServerImpl(requestAuthoriser, 0, Optional.empty());
         server.start();
         httpClient = HttpClient.newBuilder()
                                .followRedirects(HttpClient.Redirect.NEVER)
@@ -75,7 +80,7 @@ class UIHttpServerImplTest {
     @ParameterizedTest
     @ValueSource(ints = {-1, 65_536})
     void invalidPort_throwsException(int port) {
-        assertThatThrownBy(() -> new UIHttpServerImpl(requestAuthoriser, port))
+        assertThatThrownBy(() -> new UIHttpServerImpl(requestAuthoriser, port, Optional.empty()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -205,6 +210,34 @@ class UIHttpServerImplTest {
         sendGet("/ui/api/displayables/stream");
 
         verify(invalidationCloseable).close();
+    }
+
+    @Test
+    void servletMount_handlesRequestAtMountedPath() {
+        server.stop();
+
+        ServletMount mount = () -> {
+            var contextHandler = new ServletContextHandler();
+            contextHandler.setContextPath("/mounted");
+            var servlet = new HttpServlet() {
+                @Override
+                protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+                    resp.setStatus(200);
+                    resp.setContentType("text/plain");
+                    resp.getWriter().print("mounted-response");
+                }
+            };
+            contextHandler.addServlet(new ServletHolder(servlet), "/hello");
+            return contextHandler;
+        };
+        server = new UIHttpServerImpl(requestAuthoriser, 0, Optional.of(mount));
+        server.start();
+
+        HttpResponse<String> response = sendGet("/mounted/hello");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo("mounted-response");
+        verifyNoInteractions(requestAuthoriser);
     }
 
     private String baseUrl() {

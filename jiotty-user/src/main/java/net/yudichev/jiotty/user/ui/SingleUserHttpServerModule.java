@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.ui;
 
+import com.google.inject.multibindings.OptionalBinder;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -26,6 +27,7 @@ public final class SingleUserHttpServerModule extends BaseLifecycleComponentModu
     protected void configure() {
         listenPortSpec.bind(int.class).annotatedWith(UIHttpServerImpl.ListenPort.class).installedBy(this::installLifecycleComponentModule);
         bind(UIRequestAuthoriser.class).annotatedWith(UIHttpServerImpl.Dependency.class).to(SingleUserUIRequestAuthoriser.class);
+        OptionalBinder.newOptionalBinder(binder(), ServletMount.class);
         registerLifecycleComponent(UIHttpServerImpl.class);
     }
 

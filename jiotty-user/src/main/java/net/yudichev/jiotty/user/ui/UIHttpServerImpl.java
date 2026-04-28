@@ -29,7 +29,9 @@ import org.eclipse.jetty.server.handler.DefaultHandler;
 import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -49,13 +51,17 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     private static final String REQUEST_CONTEXT = UIHttpServerImpl.class.getName() + ".requestContext";
 
     private final UIRequestAuthoriser requestAuthoriser;
+    private final Optional<ServletMount> servletMount;
     private final Server server;
     private final ServerConnector connector;
+    private final ServletContextHandler servletContextHandler;
 
     @Inject
     UIHttpServerImpl(@Dependency UIRequestAuthoriser requestAuthoriser,
-                     @ListenPort int listenPort) {
+                     @ListenPort int listenPort,
+                     Optional<ServletMount> servletMount) {
         this.requestAuthoriser = checkNotNull(requestAuthoriser, "requestAuthoriser");
+        this.servletMount = checkNotNull(servletMount, "servletMount");
         checkArgument(listenPort >= 0 && listenPort <= 65_535, "listenPort: %s", listenPort);
         server = new Server();
         HttpConfiguration httpConfig = new HttpConfiguration();
@@ -65,7 +71,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         connector.setPort(listenPort);
         server.addConnector(connector);
 
-        var servletContextHandler = new ServletContextHandler();
+        servletContextHandler = new ServletContextHandler();
         servletContextHandler.setContextPath(AuthenticatedHttpServerModule.PATH_ROOT);
         String styleCssPath = requireNonNull(getClass().getResource("/uiserver/wwwroot/style.css")).toString();
         servletContextHandler.setBaseResourceAsString(styleCssPath.substring(0, styleCssPath.lastIndexOf('/')));
@@ -81,8 +87,6 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         var resourceServletHolder = new ServletHolder("default", DefaultServlet.class);
         resourceServletHolder.setInitParameter("dirAllowed", "false");
         servletContextHandler.addServlet(resourceServletHolder, "/");
-
-        server.setHandler(new Handler.Sequence(servletContextHandler, new DefaultHandler()));
     }
 
     @Override
@@ -92,6 +96,11 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
 
     @Override
     protected void doStart() {
+        var handlers = new ArrayList<Handler>(3);
+        handlers.add(servletContextHandler);
+        servletMount.ifPresent(mount -> handlers.add(mount.buildHandler()));
+        handlers.add(new DefaultHandler());
+        server.setHandler(new Handler.Sequence(handlers));
         asUnchecked(server::start);
     }
 

@@ -235,6 +235,7 @@
         </profile>
     </profiles>
     <modules>
+        <module>jiotty-admin-alerts</module>
         <module>jiotty-appliance</module>
         <module>jiotty-bom</module>
         <module>jiotty-common</module>

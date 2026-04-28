@@ -1,0 +1,150 @@
+package net.yudichev.jiotty.adminalerts.http;
+
+import com.google.inject.BindingAnnotation;
+import jakarta.annotation.Nullable;
+import jakarta.inject.Inject;
+import jakarta.servlet.AsyncContext;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
+import net.yudichev.jiotty.adminalerts.AdminAlertService.ResolveByIdOutcome;
+import net.yudichev.jiotty.common.lang.Json;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.IOException;
+import java.io.NotSerializableException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serial;
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
+import java.nio.charset.StandardCharsets;
+import java.util.Optional;
+
+import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.PARAMETER;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
+
+/// Handles `POST /admin/api/alerts/{id}/resolve`. Authorisation is performed by [AdminBearerAuthFilter] earlier in the chain; the audit identity is read from
+/// the request attribute the filter set.
+///
+/// Implemented as an async servlet ([HttpServletRequest#startAsync]) so the Jetty request thread is released while the alert service does its database work.
+public final class AdminResolveServlet extends HttpServlet {
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    private static final Logger logger = LogManager.getLogger(AdminResolveServlet.class);
+
+    private static final String RESOLVE_SUFFIX = "/resolve";
+    private static final long ASYNC_TIMEOUT_MS = 30_000;
+
+    private final AdminAlertService alertService;
+
+    @Inject
+    public AdminResolveServlet(@Dependency AdminAlertService alertService) {
+        this.alertService = checkNotNull(alertService, "alertService");
+    }
+
+    /// HttpServlet inherits Serializable from the Servlet API; this servlet is wired by Guice and is never persisted across JVM boundaries. Reject any attempt
+    /// to deserialize so an attacker cannot reconstruct one with a substituted [AdminAlertService].
+    @Serial
+    private void readObject(ObjectInputStream in) throws NotSerializableException {
+        throw new NotSerializableException(getClass().getName());
+    }
+
+    @Serial
+    private void writeObject(ObjectOutputStream out) throws NotSerializableException {
+        throw new NotSerializableException(getClass().getName());
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String pathInfo = request.getPathInfo();
+        if (pathInfo == null || !pathInfo.startsWith("/") || !pathInfo.endsWith(RESOLVE_SUFFIX)) {
+            writeJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Unknown path");
+            return;
+        }
+        String alertId = pathInfo.substring(1, pathInfo.length() - RESOLVE_SUFFIX.length());
+        if (alertId.isBlank() || alertId.contains("/")) {
+            writeJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Unknown path");
+            return;
+        }
+        String resolvedByHeader = (String) request.getAttribute(AdminBearerAuthFilter.GRAFANA_USER_REQUEST_ATTRIBUTE);
+        String resolvedBy = resolvedByHeader == null ? AdminBearerAuthFilter.DEFAULT_GRAFANA_USER : resolvedByHeader;
+        Optional<String> note = readOptionalNote(request);
+
+        AsyncContext asyncContext = request.startAsync();
+        asyncContext.setTimeout(ASYNC_TIMEOUT_MS);
+
+        alertService.resolveById(alertId, resolvedBy, note)
+                    .whenComplete((outcome, error) -> {
+                        if (error != null) {
+                            writeError(asyncContext, alertId, error);
+                        } else {
+                            writeOutcome(asyncContext, alertId, outcome);
+                        }
+                    });
+    }
+
+    private static void writeError(AsyncContext asyncContext, String alertId, Throwable error) {
+        logger.info("Resolve failed for alert {}", alertId, error);
+        var response = (HttpServletResponse) asyncContext.getResponse();
+        try {
+            writeJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Resolve failed");
+        } catch (IOException e) {
+            logger.info("Failed to write error response for alert {}", alertId, e);
+        } finally {
+            asyncContext.complete();
+        }
+    }
+
+    private static void writeOutcome(AsyncContext asyncContext, String alertId, ResolveByIdOutcome outcome) {
+        var response = (HttpServletResponse) asyncContext.getResponse();
+        try {
+            switch (outcome) {
+                case RESOLVED -> response.setStatus(HttpServletResponse.SC_NO_CONTENT);
+                case ALREADY_RESOLVED -> writeJsonError(response, HttpServletResponse.SC_CONFLICT, "Already resolved");
+                case UNKNOWN -> writeJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Unknown alert");
+            }
+        } catch (IOException e) {
+            logger.info("Failed to write response for alert {}", alertId, e);
+        } finally {
+            asyncContext.complete();
+        }
+    }
+
+    private static Optional<String> readOptionalNote(HttpServletRequest request) throws IOException {
+        if (request.getContentLength() <= 0) {
+            return Optional.empty();
+        }
+        var body = new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        var parsed = Json.parse(body, ResolveBody.class);
+        if (parsed.note() == null || parsed.note().isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(parsed.note());
+    }
+
+    private static void writeJsonError(HttpServletResponse response, int status, String message) throws IOException {
+        response.setStatus(status);
+        response.setCharacterEncoding("utf-8");
+        response.setContentType("application/json");
+        response.getWriter().print(Json.stringify(new ErrorBody(message)));
+    }
+
+    private record ResolveBody(@Nullable String note) {
+    }
+
+    private record ErrorBody(String error) {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    public @interface Dependency {
+    }
+}
