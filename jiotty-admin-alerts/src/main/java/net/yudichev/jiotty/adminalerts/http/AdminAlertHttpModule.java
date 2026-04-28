@@ -1,11 +1,13 @@
 package net.yudichev.jiotty.adminalerts.http;
 
+import com.google.inject.Key;
 import com.google.inject.Singleton;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.user.ui.AuthenticatedHttpServerModule;
 import net.yudichev.jiotty.user.ui.ServletMount;
 
@@ -15,14 +17,23 @@ import static com.google.common.base.Preconditions.checkNotNull;
 public final class AdminAlertHttpModule extends BaseLifecycleComponentModule implements ExposedKeyModule<ServletMount> {
     private final BindingSpec<String> resolveTokenSpec;
     private final BindingSpec<AdminAlertService> alertServiceSpec;
+    private final Key<ServletMount> exposedKey;
 
-    private AdminAlertHttpModule(BindingSpec<String> resolveTokenSpec, BindingSpec<AdminAlertService> alertServiceSpec) {
+    private AdminAlertHttpModule(SpecifiedAnnotation specifiedAnnotation,
+                                 BindingSpec<String> resolveTokenSpec,
+                                 BindingSpec<AdminAlertService> alertServiceSpec) {
+        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.resolveTokenSpec = checkNotNull(resolveTokenSpec, "resolveTokenSpec");
         this.alertServiceSpec = checkNotNull(alertServiceSpec, "alertServiceSpec");
     }
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    @Override
+    public Key<ServletMount> getExposedKey() {
+        return exposedKey;
     }
 
     @Override
@@ -35,11 +46,11 @@ public final class AdminAlertHttpModule extends BaseLifecycleComponentModule imp
                         .installedBy(this::installLifecycleComponentModule);
         bind(AdminBearerAuthFilter.class).in(Singleton.class);
         bind(AdminResolveServlet.class).in(Singleton.class);
-        bind(getExposedKey()).to(AdminAlertServletMount.class).in(Singleton.class);
-        expose(getExposedKey());
+        bind(exposedKey).to(AdminAlertServletMount.class).in(Singleton.class);
+        expose(exposedKey);
     }
 
-    public static final class Builder implements TypedBuilder<AdminAlertHttpModule> {
+    public static final class Builder extends BaseModuleBuilder<ServletMount, Builder> {
         private BindingSpec<String> resolveTokenSpec;
         private BindingSpec<AdminAlertService> alertServiceSpec;
 
@@ -54,8 +65,8 @@ public final class AdminAlertHttpModule extends BaseLifecycleComponentModule imp
         }
 
         @Override
-        public AdminAlertHttpModule build() {
-            return new AdminAlertHttpModule(resolveTokenSpec, alertServiceSpec);
+        public ExposedKeyModule<ServletMount> build() {
+            return new AdminAlertHttpModule(specifiedAnnotation(), resolveTokenSpec, alertServiceSpec);
         }
     }
 }

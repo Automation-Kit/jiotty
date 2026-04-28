@@ -1,12 +1,14 @@
 package net.yudichev.jiotty.adminalerts;
 
 import com.google.inject.BindingAnnotation;
+import com.google.inject.Key;
 import net.yudichev.jiotty.adminalerts.cleanup.AlertHistoryCleanupJob;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainModule;
@@ -32,13 +34,16 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
     private final BindingSpec<String> domainNameSpec;
     private final BindingSpec<Duration> cleanupIntervalSpec;
     private final BindingSpec<Duration> cleanupRetentionSpec;
+    private final Key<AdminAlertService> exposedKey;
 
-    private AdminAlertServiceModule(BindingSpec<DataSourceFactory> dataSourceFactorySpec,
+    private AdminAlertServiceModule(SpecifiedAnnotation specifiedAnnotation,
+                                    BindingSpec<DataSourceFactory> dataSourceFactorySpec,
                                     BindingSpec<VarStore> varStoreSpec,
                                     BindingSpec<Integer> schemaVersionSpec,
                                     BindingSpec<String> domainNameSpec,
                                     BindingSpec<Duration> cleanupIntervalSpec,
                                     BindingSpec<Duration> cleanupRetentionSpec) {
+        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
         this.varStoreSpec = checkNotNull(varStoreSpec, "varStoreSpec");
         this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
@@ -49,6 +54,11 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    @Override
+    public Key<AdminAlertService> getExposedKey() {
+        return exposedKey;
     }
 
     @Override
@@ -84,9 +94,9 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
                                                                .setExecutor(annotatedWith(Executor.class))
                                                                .build());
 
-        bind(getExposedKey()).to(registerLifecycleComponent(AdminAlertServiceImpl.class));
+        bind(exposedKey).to(registerLifecycleComponent(AdminAlertServiceImpl.class));
         registerLifecycleComponent(AlertHistoryCleanupJob.class);
-        expose(getExposedKey());
+        expose(exposedKey);
     }
 
     @BindingAnnotation
@@ -119,7 +129,7 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
     @interface Executor {
     }
 
-    public static final class Builder implements TypedBuilder<AdminAlertServiceModule> {
+    public static final class Builder extends BaseModuleBuilder<AdminAlertService, Builder> {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec;
         private BindingSpec<VarStore> varStoreSpec;
         private BindingSpec<Integer> schemaVersionSpec = literally(1);
@@ -158,8 +168,9 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
         }
 
         @Override
-        public AdminAlertServiceModule build() {
-            return new AdminAlertServiceModule(dataSourceFactorySpec,
+        public ExposedKeyModule<AdminAlertService> build() {
+            return new AdminAlertServiceModule(specifiedAnnotation(),
+                                               dataSourceFactorySpec,
                                                varStoreSpec,
                                                schemaVersionSpec,
                                                domainNameSpec,
