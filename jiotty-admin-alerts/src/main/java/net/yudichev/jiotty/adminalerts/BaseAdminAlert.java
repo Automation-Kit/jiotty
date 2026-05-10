@@ -7,17 +7,19 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 
-/// A persisted admin alert row. [#resolvedAt], [#resolvedBy], [#resolutionNote] are absent for active alerts and present for resolved ones.
+/// A persisted admin alert bundle. [#resolvedAt()], [#resolvedBy()], [#resolutionNote()] are absent for active bundles and present for resolved ones.
+///
+/// [#eventCount()] is the cumulative count of [AdminAlertService#raise(AdminAlertData)] calls that landed on this bundle. The bundle's retained event history
+/// is bounded by the [AdminAlertServiceModule.MaxEventsPerBundle] cap (sliding window — oldest evicted), so [#eventCount()] can exceed the number of events
+/// actually retained for this bundle.
 @Value.Immutable
 @PublicImmutablesStyle
 public interface BaseAdminAlert {
     String id();
 
-    String dedupKey();
+    String key();
 
     String title();
-
-    String description();
 
     AdminAlertSeverity severity();
 
@@ -27,7 +29,7 @@ public interface BaseAdminAlert {
 
     Instant lastSeenAt();
 
-    int updateCount();
+    int eventCount();
 
     Optional<Instant> resolvedAt();
 

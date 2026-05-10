@@ -34,6 +34,8 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
     private final BindingSpec<String> domainNameSpec;
     private final BindingSpec<Duration> cleanupIntervalSpec;
     private final BindingSpec<Duration> cleanupRetentionSpec;
+    private final BindingSpec<Integer> maxBundlesSpec;
+    private final BindingSpec<Integer> maxEventsPerBundleSpec;
     private final Key<AdminAlertService> exposedKey;
 
     private AdminAlertServiceModule(SpecifiedAnnotation specifiedAnnotation,
@@ -42,7 +44,9 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
                                     BindingSpec<Integer> schemaVersionSpec,
                                     BindingSpec<String> domainNameSpec,
                                     BindingSpec<Duration> cleanupIntervalSpec,
-                                    BindingSpec<Duration> cleanupRetentionSpec) {
+                                    BindingSpec<Duration> cleanupRetentionSpec,
+                                    BindingSpec<Integer> maxBundlesSpec,
+                                    BindingSpec<Integer> maxEventsPerBundleSpec) {
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
         this.varStoreSpec = checkNotNull(varStoreSpec, "varStoreSpec");
@@ -50,6 +54,8 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
         this.domainNameSpec = checkNotNull(domainNameSpec, "domainNameSpec");
         this.cleanupIntervalSpec = checkNotNull(cleanupIntervalSpec, "cleanupIntervalSpec");
         this.cleanupRetentionSpec = checkNotNull(cleanupRetentionSpec, "cleanupRetentionSpec");
+        this.maxBundlesSpec = checkNotNull(maxBundlesSpec, "maxBundlesSpec");
+        this.maxEventsPerBundleSpec = checkNotNull(maxEventsPerBundleSpec, "maxEventsPerBundleSpec");
     }
 
     public static Builder builder() {
@@ -84,6 +90,12 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
         cleanupRetentionSpec.bind(Duration.class)
                             .annotatedWith(AlertHistoryCleanupJob.HistoryRetention.class)
                             .installedBy(this::installLifecycleComponentModule);
+        maxBundlesSpec.bind(Integer.class)
+                      .annotatedWith(MaxBundles.class)
+                      .installedBy(this::installLifecycleComponentModule);
+        maxEventsPerBundleSpec.bind(Integer.class)
+                              .annotatedWith(MaxEventsPerBundle.class)
+                              .installedBy(this::installLifecycleComponentModule);
 
         installLifecycleComponentModule(ExecutorProviderModule.builder()
                                                               .setThreadName(literally("AdminAlertService"))
@@ -129,13 +141,27 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
     @interface Executor {
     }
 
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface MaxBundles {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface MaxEventsPerBundle {
+    }
+
     public static final class Builder extends BaseModuleBuilder<AdminAlertService, Builder> {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec;
         private BindingSpec<VarStore> varStoreSpec;
-        private BindingSpec<Integer> schemaVersionSpec = literally(1);
+        private BindingSpec<Integer> schemaVersionSpec = literally(2);
         private BindingSpec<String> domainNameSpec = literally(AdminAlertSchema.DEFAULT_DOMAIN_NAME);
         private BindingSpec<Duration> cleanupIntervalSpec = literally(Duration.ofHours(24));
         private BindingSpec<Duration> cleanupRetentionSpec = literally(Duration.ofDays(180));
+        private BindingSpec<Integer> maxBundlesSpec = literally(100);
+        private BindingSpec<Integer> maxEventsPerBundleSpec = literally(100);
 
         public Builder setDataSourceFactory(BindingSpec<DataSourceFactory> dataSourceFactorySpec) {
             this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
@@ -167,6 +193,16 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
             return this;
         }
 
+        public Builder withMaxBundles(BindingSpec<Integer> maxBundlesSpec) {
+            this.maxBundlesSpec = checkNotNull(maxBundlesSpec, "maxBundlesSpec");
+            return this;
+        }
+
+        public Builder withMaxEventsPerBundle(BindingSpec<Integer> maxEventsPerBundleSpec) {
+            this.maxEventsPerBundleSpec = checkNotNull(maxEventsPerBundleSpec, "maxEventsPerBundleSpec");
+            return this;
+        }
+
         @Override
         public ExposedKeyModule<AdminAlertService> build() {
             return new AdminAlertServiceModule(specifiedAnnotation(),
@@ -175,7 +211,9 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
                                                schemaVersionSpec,
                                                domainNameSpec,
                                                cleanupIntervalSpec,
-                                               cleanupRetentionSpec);
+                                               cleanupRetentionSpec,
+                                               maxBundlesSpec,
+                                               maxEventsPerBundleSpec);
         }
     }
 }

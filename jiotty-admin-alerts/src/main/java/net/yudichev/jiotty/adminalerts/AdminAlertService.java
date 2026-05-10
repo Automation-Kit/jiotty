@@ -1,40 +1,66 @@
 package net.yudichev.jiotty.adminalerts;
 
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.Logger;
+
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-/// Application-side admin alert API. Backed by Postgres; safe to call from any thread.
+import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+
+/// Application-side admin alert API. Safe to call from any thread.
 ///
 /// Operational model:
-/// - [#raise] is the main call. The first call inserts a row; repeated calls with the same `dedupKey` while the alert is still active only bump `lastSeenAt`
-/// and `updateCount` and do **not** overwrite description or labels.
-/// - [#update] is the way to change description or labels on an active alert. Title and severity are immutable post-raise — to change them, resolve and
-/// re-raise.
-/// - [#resolve] is the application-driven resolution.
-/// - [#resolveById] is the operator-driven resolution from the alerting UI.
+/// - [#raise(AdminAlertData)] is the only mutating verb. Each call appends an event (occurrence + description) to the bundle identified by
+/// [AdminAlertData#key()] (derived from [AdminAlertData#title()], [AdminAlertData#severity()], [AdminAlertData#labels()]). The first call creates the bundle;
+/// subsequent calls with the same key bump [AdminAlert#lastSeenAt()] / [AdminAlert#eventCount()] on the bundle and add a fresh event with the supplied
+/// description — descriptions are *not* overwritten, they accumulate. To change [AdminAlertData#title()], [AdminAlertData#severity()], or
+/// [AdminAlertData#labels()], resolve and re-raise — those fields participate in the key, so changing them produces a new bundle by construction.
+/// - [#resolve(String, String)] is the application-driven resolution.
+/// - [#resolveById(String,String,Optional)] is the operator-driven resolution from the alerting UI.
 public interface AdminAlertService {
-    /// Raises a new alert or, if an active alert with the same `dedupKey` already exists, marks it as still firing.
+    /// Convenience overload of [#raise(AdminAlertSeverity, String, String)] for an exception-based alert. Also logs the failure.
+    default String raise(AdminAlertSeverity severity, String title, Logger logger, Throwable e) {
+        logger.log(switch (severity) {
+                       case WARNING -> Level.WARN;
+                       case ERROR -> Level.ERROR;
+                   },
+                   "{}", title, e);
+        return raise(severity, title, humanReadableMessage(e));
+    }
+
+    /// Simplest convenience overload of [#raise(AdminAlertData)].
+    default String raise(AdminAlertSeverity severity, String title) {
+        return raise(severity, title, "");
+    }
+
+    /// Convenience overload of [#raise(AdminAlertData)] for the common "no labels, no fuss" call shape.
+    default String raise(AdminAlertSeverity severity, String title, String description) {
+        return raise(AdminAlertData.builder()
+                                   .setSeverity(severity)
+                                   .setTitle(title)
+                                   .setDescription(description)
+                                   .build());
+    }
+
+    /// Raises a new alert or, if an active alert with the same [AdminAlertData#key()] already exists, appends a new event to it (and bumps the heartbeat).
     ///
-    /// @return a future of the alert id (the existing id when re-firing, a fresh id when new)
-    CompletableFuture<String> raise(AdminAlertData data);
+    /// @return the alert key
+    String raise(AdminAlertData data);
 
-    /// Updates an active alert with the given `dedupKey`. Returns the id of the affected row, or empty if no active alert matches.
-    CompletableFuture<Optional<String>> update(String dedupKey, AdminAlertUpdate update);
+    /// Server-driven resolution. Resolved-by is recorded as `"system"`.
+    ///
+    /// @return a future of the id of the resolved alert, or empty if no active alert matches the given key
+    CompletableFuture<Optional<String>> resolve(String key, String note);
 
-    /// Server-driven resolution. `resolvedBy` is conventionally `"system"`. Returns the id of the resolved row, or empty if no active alert matches.
-    CompletableFuture<Optional<String>> resolve(String dedupKey, Optional<String> note);
-
-    /// Operator-driven resolution by row id (used by the HTTP resolve endpoint).
+    /// Operator-driven resolution by alert id (used by the HTTP resolve endpoint).
     CompletableFuture<ResolveByIdOutcome> resolveById(String alertId, String resolvedBy, Optional<String> note);
 
-    /// Looks up a single alert by id. Useful for follow-up actions and tooling.
-    CompletableFuture<Optional<AdminAlert>> getById(String alertId);
-
-    /// Deletes resolved alerts whose `resolvedAt` is older than `retention`. Used by the periodic cleanup job, but exposed publicly so manual maintenance
-    /// tooling can run a one-shot purge.
+    /// Deletes resolved alerts whose [AdminAlert#resolvedAt()] is older than the given retention. Used by the periodic cleanup job, but exposed publicly so
+    /// manual maintenance tooling can run a one-shot purge.
     ///
-    /// @return the number of rows deleted
+    /// @return the number of alerts deleted
     CompletableFuture<Integer> deleteResolvedOlderThan(Duration retention);
 
     enum ResolveByIdOutcome {

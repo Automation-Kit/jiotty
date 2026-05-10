@@ -32,7 +32,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 /// Handles `POST /admin/api/alerts/{id}/resolve`. Authorisation is performed by [AdminBearerAuthFilter] earlier in the chain; the audit identity is read from
 /// the request attribute the filter set.
 ///
-/// Implemented as an async servlet ([HttpServletRequest#startAsync]) so the Jetty request thread is released while the alert service does its database work.
+/// Implemented as an async servlet ([HttpServletRequest#startAsync()]) so the Jetty request thread is released while the alert service does its database work.
 public final class AdminResolveServlet extends HttpServlet {
     @Serial
     private static final long serialVersionUID = 1L;

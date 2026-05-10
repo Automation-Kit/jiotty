@@ -16,8 +16,14 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -30,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AdminAlertServiceImplTest {
     private static final Instant T0 = Instant.parse("2026-04-15T10:00:00Z");
     private static final Duration ONE_MINUTE = Duration.ofMinutes(1);
+    private static final String CURRENT_PID = String.valueOf(ProcessHandle.current().pid());
 
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
@@ -37,25 +44,12 @@ class AdminAlertServiceImplTest {
     private ProgrammableClock clock;
     private SingleThreadedSchedulingExecutor executor;
     private PersistenceDomainServiceImpl domainService;
+    private DataSourceFactory dataSourceFactory;
     private AdminAlertServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        clock = new ProgrammableClock();
-        clock.setTime(T0);
-        executor = new SingleThreadedSchedulingExecutor("admin-alerts-test");
-        Provider<SchedulingExecutor> executorProvider = () -> executor;
-        DataSourceFactory dataSourceFactory = postgres.dataSourceFactory();
-        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
-        domainService.start();
-        service = new AdminAlertServiceImpl(dataSourceFactory,
-                                            executorProvider,
-                                            domainService,
-                                            clock,
-                                            1,
-                                            AdminAlertSchema.DEFAULT_DOMAIN_NAME,
-                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION);
-        service.start();
+        setUpService(100, 100);
     }
 
     @AfterEach
@@ -63,105 +57,183 @@ class AdminAlertServiceImplTest {
         Closeable.closeIfNotNull(service == null ? null : service::stop, domainService == null ? null : domainService::stop, executor);
     }
 
-    @Test
-    void raise_newDedupKey_insertsRowWithReturnedId() {
-        String id = await(service.raise(data("k-new", "Tesla auth failed", "first failure")));
+    private void setUpService(int maxBundles, int maxEventsPerBundle) {
+        Closeable.closeIfNotNull(service == null ? null : service::stop, domainService == null ? null : domainService::stop, executor);
+        clock = new ProgrammableClock();
+        clock.setTime(T0);
+        executor = new SingleThreadedSchedulingExecutor("admin-alerts-test");
+        Provider<SchedulingExecutor> executorProvider = () -> executor;
+        dataSourceFactory = postgres.dataSourceFactory();
+        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
+        domainService.start();
+        service = new AdminAlertServiceImpl(dataSourceFactory,
+                                            executorProvider,
+                                            domainService,
+                                            clock,
+                                            2,
+                                            AdminAlertSchema.DEFAULT_DOMAIN_NAME,
+                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                            maxBundles,
+                                            maxEventsPerBundle);
+        service.start();
+    }
 
-        assertThat(id).startsWith("a");
-        Optional<AdminAlert> alert = await(service.getById(id));
-        assertThat(alert).hasValueSatisfying(a -> {
-            assertThat(a.dedupKey()).isEqualTo("k-new");
-            assertThat(a.title()).isEqualTo("Tesla auth failed");
-            assertThat(a.description()).isEqualTo("first failure");
-            assertThat(a.severity()).isEqualTo(AdminAlertSeverity.ERROR);
-            assertThat(a.labels()).containsEntry("category", "my-category");
-            assertThat(a.firstSeenAt()).isEqualTo(T0);
-            assertThat(a.lastSeenAt()).isEqualTo(T0);
-            assertThat(a.updateCount()).isEqualTo(1);
-            assertThat(a.resolvedAt()).isEmpty();
+    @Test
+    void raise_newAlert_insertsBundleWithOneEventAndPidLabel() {
+        String key = service.raise(AdminAlertSeverity.ERROR, "Tesla auth failed", "first failure");
+        flush();
+
+        AdminAlert alert = service.findByKey(key).orElseThrow();
+        assertThat(alert.id()).startsWith("a");
+        assertThat(alert.title()).isEqualTo("Tesla auth failed");
+        assertThat(alert.severity()).isEqualTo(AdminAlertSeverity.ERROR);
+        assertThat(alert.labels()).containsEntry("pid", CURRENT_PID);
+        assertThat(alert.firstSeenAt()).isEqualTo(T0);
+        assertThat(alert.lastSeenAt()).isEqualTo(T0);
+        assertThat(alert.eventCount()).isEqualTo(1);
+        assertThat(alert.resolvedAt()).isEmpty();
+        assertThat(alert.key()).startsWith("auto:");
+        assertThat(selectEvents(alert.id())).satisfiesExactly(event -> {
+            assertThat(event.occurredAt()).isEqualTo(T0);
+            assertThat(event.description()).isEqualTo("first failure");
         });
     }
 
     @Test
-    void raise_sameDedupKeyWhileActive_bumpsHeartbeatLeavesContentUntouched() {
-        String firstId = await(service.raise(data("k1", "Tesla auth failed", "first failure")));
+    void raise_sameKey_appendsEventAndBumpsCounter() {
+        AdminAlertData data1 = data("Tesla auth failed", "first failure", AdminAlertSeverity.ERROR, Map.of("category", "Tesla"));
+        String firstKey = service.raise(data1);
+        flush();
+        String firstId = service.findByKey(firstKey).orElseThrow().id();
 
         clock.setTime(T0.plus(ONE_MINUTE));
-        String secondId = await(service.raise(data("k1", "ignored title", "ignored description")));
+        AdminAlertData data2 = data("Tesla auth failed", "second failure", AdminAlertSeverity.ERROR, Map.of("category", "Tesla"));
+        String secondKey = service.raise(data2);
+        flush();
 
-        assertThat(secondId).isEqualTo(firstId);
-        Optional<AdminAlert> alert = await(service.getById(firstId));
-        assertThat(alert).hasValueSatisfying(a -> {
-            assertThat(a.title()).isEqualTo("Tesla auth failed");
-            assertThat(a.description()).isEqualTo("first failure");
-            assertThat(a.firstSeenAt()).isEqualTo(T0);
-            assertThat(a.lastSeenAt()).isEqualTo(T0.plus(ONE_MINUTE));
-            assertThat(a.updateCount()).isEqualTo(2);
-        });
+        assertThat(secondKey).isEqualTo(firstKey);
+        AdminAlert alert = service.findByKey(secondKey).orElseThrow();
+        assertThat(alert.id()).isEqualTo(firstId);
+        assertThat(alert.firstSeenAt()).isEqualTo(T0);
+        assertThat(alert.lastSeenAt()).isEqualTo(T0.plus(ONE_MINUTE));
+        assertThat(alert.eventCount()).isEqualTo(2);
+        assertThat(selectEvents(firstId)).satisfiesExactly(
+                event -> {
+                    assertThat(event.occurredAt()).isEqualTo(T0);
+                    assertThat(event.description()).isEqualTo("first failure");
+                },
+                event -> {
+                    assertThat(event.occurredAt()).isEqualTo(T0.plus(ONE_MINUTE));
+                    assertThat(event.description()).isEqualTo("second failure");
+                });
     }
 
     @Test
-    void update_descriptionOnly_replacesDescriptionAndBumpsHeartbeat() {
-        String id = await(service.raise(data("k1", "title", "old description")));
+    void raise_differentLabels_producesDistinctBundles() {
+        String key1 = service.raise(data("MQTT down", "d", AdminAlertSeverity.ERROR, Map.of("category", "Tesla")));
+        String key2 = service.raise(data("MQTT down", "d", AdminAlertSeverity.ERROR, Map.of("category", "mqtt")));
+        flush();
+
+        assertThat(key2).isNotEqualTo(key1);
+        AdminAlert a1 = service.findByKey(key1).orElseThrow();
+        AdminAlert a2 = service.findByKey(key2).orElseThrow();
+        assertThat(a1.id()).isNotEqualTo(a2.id());
+    }
+
+    @Test
+    void raise_callerSuppliesPidLabel_frameworkValueWins() {
+        String key = service.raise(data("title", "d", AdminAlertSeverity.ERROR, Map.of("pid", "999999")));
+        flush();
+
+        AdminAlert alert = service.findByKey(key).orElseThrow();
+        assertThat(alert.labels()).containsEntry("pid", CURRENT_PID);
+    }
+
+    @Test
+    void raise_overMaxEventsPerBundle_dropsOldestEvent() {
+        setUpService(100, 3);
+        AdminAlertData data = data("title", "ignored", AdminAlertSeverity.ERROR, Map.of());
+
+        clock.setTime(T0);
+        String key = service.raise(data.withDescription("e1"));
+        clock.setTime(T0.plus(ONE_MINUTE));
+        service.raise(data.withDescription("e2"));
+        clock.setTime(T0.plus(ONE_MINUTE.multipliedBy(2)));
+        service.raise(data.withDescription("e3"));
+        clock.setTime(T0.plus(ONE_MINUTE.multipliedBy(3)));
+        service.raise(data.withDescription("e4"));
+        flush();
+
+        AdminAlert alert = service.findByKey(key).orElseThrow();
+        assertThat(alert.eventCount()).isEqualTo(4);
+        assertThat(selectEvents(alert.id()))
+                .extracting(EventRow::description)
+                .containsExactly("e2", "e3", "e4");
+    }
+
+    @Test
+    void raise_overMaxBundles_dropsOldestBundleAndCascadesEvents() {
+        setUpService(2, 100);
+        clock.setTime(T0);
+        String oldestKey = service.raise(data("title-1", "d1", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+        String oldestId = service.findByKey(oldestKey).orElseThrow().id();
+        clock.setTime(T0.plus(ONE_MINUTE));
+        String middleKey = service.raise(data("title-2", "d2", AdminAlertSeverity.ERROR, Map.of()));
+        clock.setTime(T0.plus(ONE_MINUTE.multipliedBy(2)));
+        String newestKey = service.raise(data("title-3", "d3", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+
+        assertThat(service.findByKey(oldestKey)).isEmpty();
+        assertThat(service.findByKey(middleKey)).isPresent();
+        assertThat(service.findByKey(newestKey)).isPresent();
+        // FK CASCADE: events for the evicted bundle are gone too.
+        assertThat(selectEvents(oldestId)).isEmpty();
+    }
+
+    @Test
+    void resolve_setsResolvedFieldsAndAllowsReRaiseAsFreshBundle() {
+        String firstKey = service.raise(data("title", "first", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+        String firstId = service.findByKey(firstKey).orElseThrow().id();
 
         clock.setTime(T0.plus(ONE_MINUTE));
-        Optional<String> updated = await(service.update("k1", AdminAlertUpdate.builder().setDescription("new description").build()));
-
-        assertThat(updated).contains(id);
-        Optional<AdminAlert> alert = await(service.getById(id));
-        assertThat(alert).hasValueSatisfying(a -> {
-            assertThat(a.description()).isEqualTo("new description");
-            assertThat(a.labels()).containsEntry("category", "my-category");
-            assertThat(a.lastSeenAt()).isEqualTo(T0.plus(ONE_MINUTE));
-            assertThat(a.updateCount()).isEqualTo(2);
-        });
-    }
-
-    @Test
-    void update_labelsOnly_replacesLabelsAndKeepsDescription() {
-        String id = await(service.raise(data("k1", "title", "desc")));
-
-        Optional<String> updated = await(service.update("k1",
-                                                        AdminAlertUpdate.builder()
-                                                                        .setLabels(Map.of("category", "mqtt", "vehicle", "v1"))
-                                                                        .build()));
-
-        assertThat(updated).contains(id);
-        AdminAlert alert = await(service.getById(id)).orElseThrow();
-        assertThat(alert.description()).isEqualTo("desc");
-        assertThat(alert.labels()).isEqualTo(Map.of("category", "mqtt", "vehicle", "v1"));
-    }
-
-    @Test
-    void update_unknownActiveAlert_returnsEmpty() {
-        Optional<String> result = await(service.update("missing", AdminAlertUpdate.builder().setDescription("x").build()));
-
-        assertThat(result).isEmpty();
-    }
-
-    @Test
-    void resolve_setsResolvedFieldsAndAllowsReRaiseAsFreshRow() {
-        String firstId = await(service.raise(data("k1", "title", "desc")));
-
-        clock.setTime(T0.plus(ONE_MINUTE));
-        Optional<String> resolved = await(service.resolve("k1", Optional.of("no longer firing")));
+        Optional<String> resolved = await(service.resolve(firstKey, "no longer firing"));
         assertThat(resolved).contains(firstId);
-        AdminAlert resolvedAlert = await(service.getById(firstId)).orElseThrow();
+        AdminAlert resolvedAlert = service.findByKey(firstKey).orElseThrow();
         assertThat(resolvedAlert.resolvedAt()).contains(T0.plus(ONE_MINUTE));
         assertThat(resolvedAlert.resolvedBy()).contains("system");
         assertThat(resolvedAlert.resolutionNote()).contains("no longer firing");
 
-        clock.setTime(T0.plus(ONE_MINUTE).plus(ONE_MINUTE));
-        String secondId = await(service.raise(data("k1", "title", "desc")));
+        clock.setTime(T0.plus(ONE_MINUTE.multipliedBy(2)));
+        String secondKey = service.raise(data("title", "first", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+        assertThat(secondKey).isEqualTo(firstKey);
+        String secondId = service.findByKey(secondKey).orElseThrow().id();
         assertThat(secondId).isNotEqualTo(firstId);
     }
 
     @Test
-    void resolve_alreadyResolved_returnsEmpty() {
-        await(service.raise(data("k1", "title", "desc")));
-        await(service.resolve("k1", Optional.empty()));
+    void resolve_keepsEventsVisible() {
+        String key = service.raise(data("title", "e1", AdminAlertSeverity.ERROR, Map.of()));
+        clock.setTime(T0.plus(ONE_MINUTE));
+        service.raise(data("title", "e2", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+        String id = service.findByKey(key).orElseThrow().id();
 
-        Optional<String> second = await(service.resolve("k1", Optional.empty()));
+        clock.setTime(T0.plus(ONE_MINUTE.multipliedBy(2)));
+        await(service.resolve(key, "note"));
+
+        assertThat(selectEvents(id)).extracting(EventRow::description).containsExactly("e1", "e2");
+    }
+
+    @Test
+    void resolve_alreadyResolved_returnsEmpty() {
+        String key = service.raise(data("title", "desc", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+        await(service.resolve(key, "note"));
+
+        Optional<String> second = await(service.resolve(key, "note"));
 
         assertThat(second).isEmpty();
     }
@@ -174,8 +246,10 @@ class AdminAlertServiceImplTest {
 
     @Test
     void resolveById_alreadyResolved_returnsAlreadyResolvedOutcome() {
-        String id = await(service.raise(data("k1", "title", "desc")));
-        await(service.resolve("k1", Optional.empty()));
+        String key = service.raise(data("title", "desc", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+        String id = service.findByKey(key).orElseThrow().id();
+        await(service.resolve(key, "note"));
 
         assertThat(await(service.resolveById(id, "alice@example.com", Optional.empty())))
                 .isEqualTo(AdminAlertService.ResolveByIdOutcome.ALREADY_RESOLVED);
@@ -183,36 +257,41 @@ class AdminAlertServiceImplTest {
 
     @Test
     void resolveById_active_marksResolvedWithProvidedFields() {
-        String id = await(service.raise(data("k1", "title", "desc")));
+        String key = service.raise(data("title", "desc", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+        String id = service.findByKey(key).orElseThrow().id();
 
         clock.setTime(T0.plus(ONE_MINUTE));
         assertThat(await(service.resolveById(id, "alice@example.com", Optional.of("manual"))))
                 .isEqualTo(AdminAlertService.ResolveByIdOutcome.RESOLVED);
 
-        AdminAlert alert = await(service.getById(id)).orElseThrow();
+        AdminAlert alert = service.findByKey(key).orElseThrow();
         assertThat(alert.resolvedAt()).contains(T0.plus(ONE_MINUTE));
         assertThat(alert.resolvedBy()).contains("alice@example.com");
         assertThat(alert.resolutionNote()).contains("manual");
     }
 
     @Test
-    void deleteResolvedOlderThan_deletesOnlyOldResolvedRows() {
-        String activeId = await(service.raise(data("k-active", "active title", "desc")));
-        String resolvedRecentId = await(service.raise(data("k-recent", "recent", "desc")));
-        String resolvedOldId = await(service.raise(data("k-old", "old", "desc")));
+    void deleteResolvedOlderThan_deletesOnlyOldResolvedRowsAndCascadesEvents() {
+        String activeKey = service.raise(data("active", "d", AdminAlertSeverity.ERROR, Map.of("category", "active")));
+        String recentKey = service.raise(data("recent", "d", AdminAlertSeverity.ERROR, Map.of("category", "recent")));
+        String oldKey = service.raise(data("old", "d", AdminAlertSeverity.ERROR, Map.of("category", "old")));
+        flush();
+        String resolvedOldId = service.findByKey(oldKey).orElseThrow().id();
 
         clock.setTime(T0.plus(Duration.ofDays(10)));
-        await(service.resolve("k-old", Optional.empty()));
+        await(service.resolve(oldKey, "note"));
         clock.setTime(T0.plus(Duration.ofDays(200)));
-        await(service.resolve("k-recent", Optional.empty()));
+        await(service.resolve(recentKey, "note"));
 
         clock.setTime(T0.plus(Duration.ofDays(201)));
         Integer deleted = await(service.deleteResolvedOlderThan(Duration.ofDays(180)));
 
         assertThat(deleted).isEqualTo(1);
-        assertThat(await(service.getById(resolvedOldId))).isEmpty();
-        assertThat(await(service.getById(resolvedRecentId))).isPresent();
-        assertThat(await(service.getById(activeId))).isPresent();
+        assertThat(service.findByKey(oldKey)).isEmpty();
+        assertThat(service.findByKey(recentKey)).isPresent();
+        assertThat(service.findByKey(activeKey)).isPresent();
+        assertThat(selectEvents(resolvedOldId)).isEmpty();
     }
 
     @Test
@@ -224,10 +303,11 @@ class AdminAlertServiceImplTest {
     @ParameterizedTest
     @EnumSource(AdminAlertSeverity.class)
     void severityRoundTripsThroughEnumColumn(AdminAlertSeverity severity) {
-        var data = new AdminAlertData("k-" + severity.name(), "t", "d", severity, Map.of("category", "test"));
-        String id = await(service.raise(data));
+        AdminAlertData data = data("title-" + severity.name(), "d", severity, Map.of("category", "test"));
+        String key = service.raise(data);
+        flush();
 
-        AdminAlert alert = await(service.getById(id)).orElseThrow();
+        AdminAlert alert = service.findByKey(key).orElseThrow();
         assertThat(alert.severity()).isEqualTo(severity);
     }
 
@@ -239,15 +319,69 @@ class AdminAlertServiceImplTest {
                                                            clock,
                                                            0,
                                                            AdminAlertSchema.DEFAULT_DOMAIN_NAME,
-                                                           PersistenceDomainMigrator.FAIL_ON_MIGRATION))
+                                                           PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                           100,
+                                                           100))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsInvalidCaps() {
+        assertThatThrownBy(() -> new AdminAlertServiceImpl(postgres.dataSourceFactory(),
+                                                           () -> executor,
+                                                           domainService,
+                                                           clock,
+                                                           2,
+                                                           AdminAlertSchema.DEFAULT_DOMAIN_NAME,
+                                                           PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                           0,
+                                                           100))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminAlertServiceImpl(postgres.dataSourceFactory(),
+                                                           () -> executor,
+                                                           domainService,
+                                                           clock,
+                                                           2,
+                                                           AdminAlertSchema.DEFAULT_DOMAIN_NAME,
+                                                           PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                           100,
+                                                           0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private void flush() {
+        getAsUnchecked(() -> executor.submit(() -> {}).get(10, SECONDS));
+    }
+
+    private List<EventRow> selectEvents(String alertId) {
+        var rows = new ArrayList<EventRow>();
+        try (Connection connection = dataSourceFactory.create().getConnection();
+             PreparedStatement stmt = connection.prepareStatement(
+                     "SELECT occurred_at, description FROM admin_alerts_alert_event WHERE alert_id = ? ORDER BY occurred_at ASC, id ASC")) {
+            stmt.setString(1, alertId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new EventRow(rs.getTimestamp(1).toInstant(), rs.getString(2)));
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return rows;
     }
 
     private static <T> T await(CompletableFuture<T> future) {
         return getAsUnchecked(() -> future.get(10, SECONDS));
     }
 
-    private static AdminAlertData data(String dedupKey, String title, String description) {
-        return new AdminAlertData(dedupKey, title, description, AdminAlertSeverity.ERROR, Map.of("category", "my-category"));
+    private static AdminAlertData data(String title, String description, AdminAlertSeverity severity, Map<String, String> labels) {
+        return AdminAlertData.builder()
+                             .setTitle(title)
+                             .setDescription(description)
+                             .setSeverity(severity)
+                             .setLabels(labels)
+                             .build();
     }
+
+    private record EventRow(Instant occurredAt, String description) {}
 }

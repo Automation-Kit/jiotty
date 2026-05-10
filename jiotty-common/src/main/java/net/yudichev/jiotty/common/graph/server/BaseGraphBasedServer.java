@@ -173,7 +173,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
 
     private void panic(String reason) {
         if (panicReason != null) {
-            logger.info("Additional panic ({}) while in panic state, ignoring new panic: {}", panicReason, reason);
+            logger.info("Additional panic  while in panic state [{}], ignoring new panic [{}]", panicReason, reason);
         } else {
             try {
                 logger.info("Panic: {}, resetting", reason);

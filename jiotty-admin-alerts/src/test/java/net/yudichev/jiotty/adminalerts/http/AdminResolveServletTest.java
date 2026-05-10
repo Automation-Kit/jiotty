@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.adminalerts.http;
 
 import jakarta.inject.Provider;
-import net.yudichev.jiotty.adminalerts.AdminAlert;
 import net.yudichev.jiotty.adminalerts.AdminAlertData;
 import net.yudichev.jiotty.adminalerts.AdminAlertServiceImpl;
 import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
@@ -25,6 +24,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.Map;
 import java.util.Optional;
 
@@ -43,6 +46,7 @@ class AdminResolveServletTest {
 
     private SchedulingExecutor executor;
     private PersistenceDomainServiceImpl domainService;
+    private DataSourceFactory dataSourceFactory;
     private AdminAlertServiceImpl alertService;
     private Server server;
     private HttpClient httpClient;
@@ -52,16 +56,18 @@ class AdminResolveServletTest {
     void setUp() {
         executor = new SingleThreadedSchedulingExecutor("admin-alerts-it");
         Provider<SchedulingExecutor> executorProvider = () -> executor;
-        DataSourceFactory dataSourceFactory = postgres.dataSourceFactory();
+        dataSourceFactory = postgres.dataSourceFactory();
         domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
         domainService.start();
         alertService = new AdminAlertServiceImpl(dataSourceFactory,
                                                  executorProvider,
                                                  domainService,
                                                  new TimeProvider(),
-                                                 1,
+                                                 2,
                                                  DOMAIN_NAME,
-                                                 PersistenceDomainMigrator.FAIL_ON_MIGRATION);
+                                                 PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                 100,
+                                                 100);
         alertService.start();
 
         var mount = new AdminAlertServletMount(new AdminBearerAuthFilter(VALID_TOKEN), new AdminResolveServlet(alertService));
@@ -85,7 +91,7 @@ class AdminResolveServletTest {
 
     @Test
     void missingBearer_returns401() {
-        String alertId = raiseActive("k1");
+        String alertId = raiseActive();
 
         HttpResponse<String> response = sendResolve(alertId, null, GRAFANA_USER);
 
@@ -94,7 +100,7 @@ class AdminResolveServletTest {
 
     @Test
     void wrongBearer_returns401() {
-        String alertId = raiseActive("k1");
+        String alertId = raiseActive();
 
         HttpResponse<String> response = sendResolve(alertId, "wrong-token", GRAFANA_USER);
 
@@ -110,8 +116,9 @@ class AdminResolveServletTest {
 
     @Test
     void alreadyResolved_returns409() {
-        String alertId = raiseActive("k1");
-        getAsUnchecked(() -> alertService.resolve("k1", Optional.empty()).get(10, SECONDS));
+        String alertId = raiseActive();
+        String key = readDedupKey(alertId);
+        getAsUnchecked(() -> alertService.resolve(key, "note").get(10, SECONDS));
 
         HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER);
 
@@ -120,30 +127,78 @@ class AdminResolveServletTest {
 
     @Test
     void activeAlert_resolvesAndStampsGrafanaUser() {
-        String alertId = raiseActive("k1");
+        String alertId = raiseActive();
 
         HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER);
 
         assertThat(response.statusCode()).isEqualTo(204);
-        AdminAlert alert = getAsUnchecked(() -> alertService.getById(alertId).get(10, SECONDS)).orElseThrow();
-        assertThat(alert.resolvedBy()).contains(GRAFANA_USER);
-        assertThat(alert.resolvedAt()).isPresent();
+        assertThat(readResolvedBy(alertId)).contains(GRAFANA_USER);
     }
 
     @Test
     void missingGrafanaUserHeader_resolvesWithFallbackIdentity() {
-        String alertId = raiseActive("k1");
+        String alertId = raiseActive();
 
         HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, null);
 
         assertThat(response.statusCode()).isEqualTo(204);
-        AdminAlert alert = getAsUnchecked(() -> alertService.getById(alertId).get(10, SECONDS)).orElseThrow();
-        assertThat(alert.resolvedBy()).contains(AdminBearerAuthFilter.DEFAULT_GRAFANA_USER);
+        assertThat(readResolvedBy(alertId)).contains(AdminBearerAuthFilter.DEFAULT_GRAFANA_USER);
     }
 
-    private String raiseActive(String dedupKey) {
-        var data = new AdminAlertData(dedupKey, "title", "desc", AdminAlertSeverity.ERROR, Map.of("category", "my-category"));
-        return getAsUnchecked(() -> alertService.raise(data).get(10, SECONDS));
+    private String readDedupKey(String alertId) {
+        return readColumnById(alertId, "dedup_key").orElseThrow();
+    }
+
+    private Optional<String> readResolvedBy(String alertId) {
+        return readColumnById(alertId, "resolved_by");
+    }
+
+    private Optional<String> readColumnById(String alertId, String column) {
+        try (Connection connection = dataSourceFactory.create().getConnection();
+             PreparedStatement stmt = connection.prepareStatement(
+                     "SELECT " + column + " FROM admin_alerts_alert WHERE id = ?")) {
+            stmt.setString(1, alertId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.ofNullable(rs.getString(1));
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private String readIdByKey(String key) {
+        try (Connection connection = dataSourceFactory.create().getConnection();
+             PreparedStatement stmt = connection.prepareStatement(
+                     "SELECT id FROM admin_alerts_alert WHERE dedup_key = ? ORDER BY first_seen_at DESC LIMIT 1")) {
+            stmt.setString(1, key);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (!rs.next()) {
+                    throw new IllegalStateException("No alert with key " + key);
+                }
+                return rs.getString(1);
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void flush() {
+        getAsUnchecked(() -> executor.submit(() -> {}).get(10, SECONDS));
+    }
+
+    private String raiseActive() {
+        var data = AdminAlertData.builder()
+                                 .setSeverity(AdminAlertSeverity.ERROR)
+                                 .setTitle("title")
+                                 .setDescription("desc")
+                                 .setLabels(Map.of("category", "my-category"))
+                                 .build();
+        String key = alertService.raise(data);
+        flush();
+        return readIdByKey(key);
     }
 
     private HttpResponse<String> sendResolve(String alertId, String bearerToken, String grafanaUser) {
