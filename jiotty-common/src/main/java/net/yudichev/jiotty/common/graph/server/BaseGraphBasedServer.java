@@ -34,12 +34,10 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     private final ExponentialBackOff reinitBackoff;
 
     protected int panicCount;
-    @Nullable
-    protected String panicReason;
+    protected @Nullable String panicReason;
     private SchedulingExecutor executor;
     private Closeable panicResetSchedule;
-    @Nullable
-    private GraphRunner graphRunner;
+    private @Nullable GraphRunner graphRunner;
 
     protected BaseGraphBasedServer(Provider<SchedulingExecutor> executorProvider, CurrentDateTimeProvider timeProvider, DoubleSupplier backoffRng) {
         this.executorProvider = checkNotNull(executorProvider);
@@ -106,7 +104,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
         getAsUnchecked(() -> nodeClosingFuture.get(5, SECONDS));
     }
 
-    protected void handlePanic(String reason) {
+    protected void handlePanic(@Nullable String message, @Nullable Throwable cause) {
     }
 
     private void createGraph() {
@@ -144,8 +142,8 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
             }
 
             @Override
-            public void panic(String reason) {
-                BaseGraphBasedServer.this.panic(reason);
+            public void panic(@Nullable String message, @Nullable Throwable cause) {
+                BaseGraphBasedServer.this.panic(message, cause);
             }
         };
 
@@ -168,24 +166,34 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
 
     private void panic(RuntimeException e) {
         logger.info("Panic", e);
-        panic(humanReadableMessage(e));
+        panic(null, e);
     }
 
-    private void panic(String reason) {
+    private void panic(@Nullable String message, @Nullable Throwable cause) {
+        String composedReason;
+        if (message != null && cause != null) {
+            composedReason = message + ": " + humanReadableMessage(cause);
+        } else if (message != null) {
+            composedReason = message;
+        } else if (cause != null) {
+            composedReason = humanReadableMessage(cause);
+        } else {
+            composedReason = "Reason unknown";
+        }
         if (panicReason != null) {
-            logger.info("Additional panic  while in panic state [{}], ignoring new panic [{}]", panicReason, reason);
+            logger.info("Additional panic  while in panic state [{}], ignoring new panic [{}]", panicReason, composedReason);
         } else {
             try {
-                logger.info("Panic: {}, resetting", reason);
-                panicReason = checkNotNull(reason);
-                handlePanic(reason);
+                logger.info("Panic: {}, resetting", composedReason);
+                panicReason = composedReason;
+                handlePanic(message, cause);
                 if (++panicCount == PANIC_COUNT_BEFORE_ALERT) {
                     closeIfNotNull(panicResetSchedule);
                     panicResetSchedule = executor.schedule(Duration.ofHours(1), () -> {
                         logger.debug("1 hour without panic - resetting panic count");
                         panicCount = 0;
                     });
-                    logger.error("Panic count reached {}, last reason: {}", PANIC_COUNT_BEFORE_ALERT, reason);
+                    logger.error("Panic count reached {}, last reason: {}", PANIC_COUNT_BEFORE_ALERT, composedReason);
                 }
                 logState("Panic");
                 assert graphRunner != null;

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.graph.server;
 
+import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.graph.Graph;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
@@ -25,7 +26,11 @@ public abstract class GraphRunner extends BaseIdempotentCloseable {
 
     public abstract void scheduleNewWave(String triggeredBy);
 
-    public abstract void panic(String reason);
+    public final void panic(String reason) {
+        panic(reason, null);
+    }
+
+    public abstract void panic(@Nullable String message, @Nullable Throwable cause);
 
     @Override
     protected void doClose() {

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.adminalerts;
 
+import jakarta.annotation.Nullable;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.Logger;
 
@@ -22,12 +23,21 @@ import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.huma
 public interface AdminAlertService {
     /// Convenience overload of [#raise(AdminAlertSeverity, String, String)] for an exception-based alert. Also logs the failure.
     default String raise(AdminAlertSeverity severity, String title, Logger logger, Throwable e) {
+        return raise(severity, title, logger, null, e);
+    }
+
+    /// Convenience overload that combines an explicit description prefix with an exception. The resulting alert description is `description + ": " +
+    /// humanReadableMessage(e)` when `description` is non-null and non-blank; otherwise the bare `humanReadableMessage(e)`. Also logs the failure at the
+    /// severity-matching level.
+    default String raise(AdminAlertSeverity severity, String title, Logger logger, @Nullable String description, Throwable e) {
+        var noDescription = description == null || description.isBlank();
+        String combined = noDescription ? humanReadableMessage(e) : description + ": " + humanReadableMessage(e);
         logger.log(switch (severity) {
                        case WARNING -> Level.WARN;
                        case ERROR -> Level.ERROR;
                    },
-                   "{}", title, e);
-        return raise(severity, title, humanReadableMessage(e));
+                   "{}{}", title, noDescription ? "" : ": " + description, e);
+        return raise(severity, title, combined);
     }
 
     /// Simplest convenience overload of [#raise(AdminAlertData)].
