@@ -203,22 +203,28 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
             }).add(subscription);
         });
 
-        return idempotent(() -> executor.execute(guarded(logger, "unsubscribe", () ->
-                subscriptionsByFilter.computeIfPresent(topicFilter, (_, subscriptions) -> {
-                    subscriptions.remove(subscription);
-                    if (subscriptions.isEmpty()) {
-                        if (client.isConnected()) {
-                            try {
-                                asUnchecked(() -> client.unsubscribe(topicFilter));
-                            } catch (RuntimeException e) {
-                                boolean started = isStarted();
-                                logger.log(started ? Level.WARN : Level.DEBUG, "Failed to unsubscribe", started ? e : null);
+        return idempotent(() -> {
+            if (!isStarted()) {
+                logger.debug("Skip unsubscribing - already stopped");
+                return;
+            }
+            executor.execute(guarded(logger, "unsubscribe", () ->
+                    subscriptionsByFilter.computeIfPresent(topicFilter, (_, subscriptions) -> {
+                        subscriptions.remove(subscription);
+                        if (subscriptions.isEmpty()) {
+                            if (client.isConnected()) {
+                                try {
+                                    asUnchecked(() -> client.unsubscribe(topicFilter));
+                                } catch (RuntimeException e) {
+                                    boolean started = isStarted();
+                                    logger.log(started ? Level.WARN : Level.DEBUG, "Failed to unsubscribe", started ? e : null);
+                                }
                             }
+                            return null;
                         }
-                        return null;
-                    }
-                    return subscriptions;
-                }))));
+                        return subscriptions;
+                    })));
+        });
     }
 
     @Override
