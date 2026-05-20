@@ -106,7 +106,7 @@ public final class FakeUserPersistence implements UserPersistence {
         synchronized (lock) {
             checkNotNull(identities, "identities");
             StoredUser storedUser = getActiveUser(userId);
-            var identitiesByProvider = new LinkedHashMap<String, UserIdentity>(identities.size());
+            var identitiesByProvider = LinkedHashMap.<String, UserIdentity>newLinkedHashMap(identities.size());
             for (UserIdentity identity : identities) {
                 checkNotNull(identity, "identity");
                 UserIdentity previousIdentity = identitiesByProvider.put(identity.provider(), identity);

@@ -105,10 +105,11 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
                                                                .setDataSourceFactory(dataSourceFactorySpec)
                                                                .setExecutor(annotatedWith(Executor.class))
                                                                .build());
-
         bind(exposedKey).to(registerLifecycleComponent(AdminAlertServiceImpl.class));
-        registerLifecycleComponent(AlertHistoryCleanupJob.class);
         expose(exposedKey);
+
+        bind(AdminAlertService.class).annotatedWith(AlertHistoryCleanupJob.Dependency.class).to(exposedKey);
+        registerLifecycleComponent(AlertHistoryCleanupJob.class);
     }
 
     @BindingAnnotation

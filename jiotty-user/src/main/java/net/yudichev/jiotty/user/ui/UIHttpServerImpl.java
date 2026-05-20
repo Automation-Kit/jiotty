@@ -2,91 +2,49 @@ package net.yudichev.jiotty.user.ui;
 
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
-import jakarta.servlet.DispatcherType;
-import jakarta.servlet.Filter;
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.ServletRequest;
-import jakarta.servlet.ServletResponse;
-import jakarta.servlet.http.HttpServlet;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.eclipse.jetty.ee10.servlet.DefaultServlet;
-import org.eclipse.jetty.ee10.servlet.FilterHolder;
-import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
-import org.eclipse.jetty.ee10.servlet.ServletHolder;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.eclipse.jetty.server.handler.DefaultHandler;
 
-import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
-import static java.util.Objects.requireNonNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
-import static net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
 
+/// Thin Jetty host. Composes all injected [ServletMount]s into a single [ContextHandlerCollection] (which routes by longest matching context path), wrapped in
+/// a [Handler.Sequence] with a trailing [DefaultHandler] that returns 404 for requests not matching any mount.
 final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
     private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
-    private static final String REQUEST_CONTEXT = UIHttpServerImpl.class.getName() + ".requestContext";
 
-    private final UIRequestAuthoriser requestAuthoriser;
-    private final Optional<ServletMount> servletMount;
+    private final Set<ServletMount> servletMounts;
     private final Server server;
     private final ServerConnector connector;
-    private final ServletContextHandler servletContextHandler;
 
     @Inject
-    UIHttpServerImpl(@Dependency UIRequestAuthoriser requestAuthoriser,
-                     @ListenPort int listenPort,
-                     Optional<ServletMount> servletMount) {
-        this.requestAuthoriser = checkNotNull(requestAuthoriser, "requestAuthoriser");
-        this.servletMount = checkNotNull(servletMount, "servletMount");
+    UIHttpServerImpl(@ListenPort int listenPort, Set<ServletMount> servletMounts) {
+        this.servletMounts = checkNotNull(servletMounts, "servletMounts");
         checkArgument(listenPort >= 0 && listenPort <= 65_535, "listenPort: %s", listenPort);
         server = new Server();
-        HttpConfiguration httpConfig = new HttpConfiguration();
+        var httpConfig = new HttpConfiguration();
         httpConfig.setFormEncodedMethods("POST");
-
         connector = new ServerConnector(server, new HttpConnectionFactory(httpConfig));
         connector.setPort(listenPort);
         server.addConnector(connector);
-
-        servletContextHandler = new ServletContextHandler();
-        servletContextHandler.setContextPath(AuthenticatedHttpServerModule.PATH_ROOT);
-        String styleCssPath = requireNonNull(getClass().getResource("/uiserver/wwwroot/style.css")).toString();
-        servletContextHandler.setBaseResourceAsString(styleCssPath.substring(0, styleCssPath.lastIndexOf('/')));
-
-        var requestContextFilter = new FilterHolder(new RequestContextFilter());
-        requestContextFilter.setAsyncSupported(true);
-        servletContextHandler.addFilter(requestContextFilter, "/*", EnumSet.of(DispatcherType.REQUEST, DispatcherType.ASYNC));
-
-        servletContextHandler.addServlet(createAsyncServletHolder(new OptionsServlet()), AuthenticatedHttpServerModule.SUB_PATH_OPTIONS);
-        servletContextHandler.addServlet(createAsyncServletHolder(new DownloadServlet()), "/displayables/*");
-        servletContextHandler.addServlet(createAsyncServletHolder(new ApiServlet()), "/api/*");
-
-        var resourceServletHolder = new ServletHolder("default", DefaultServlet.class);
-        resourceServletHolder.setInitParameter("dirAllowed", "false");
-        servletContextHandler.addServlet(resourceServletHolder, "/");
     }
 
     @Override
@@ -96,11 +54,11 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
 
     @Override
     protected void doStart() {
-        var handlers = new ArrayList<Handler>(3);
-        handlers.add(servletContextHandler);
-        servletMount.ifPresent(mount -> handlers.add(mount.buildHandler()));
-        handlers.add(new DefaultHandler());
-        server.setHandler(new Handler.Sequence(handlers));
+        var contexts = new ContextHandlerCollection();
+        for (ServletMount mount : servletMounts) {
+            contexts.addHandler(mount.buildHandler());
+        }
+        server.setHandler(new Handler.Sequence(contexts, new DefaultHandler()));
         asUnchecked(server::start);
     }
 
@@ -109,144 +67,9 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         Closeable.closeSafelyIfNotNull(logger, server::stop);
     }
 
-    private static ServletHolder createAsyncServletHolder(HttpServlet servlet) {
-        var servletHolder = new ServletHolder(servlet);
-        servletHolder.setAsyncSupported(true);
-        return servletHolder;
-    }
-
-    static void setRequestContext(HttpServletRequest request, UIRequestContext requestContext) {
-        request.setAttribute(REQUEST_CONTEXT, requestContext);
-    }
-
-    static UIRequestContext requestContext(HttpServletRequest request) {
-        Object requestContext = request.getAttribute(REQUEST_CONTEXT);
-        checkState(requestContext instanceof UIRequestContext, "Request context is not initialised");
-        return (UIRequestContext) requestContext;
-    }
-
-    private static UIServerRuntime runtime(HttpServletRequest request) {
-        return requestContext(request).uiServerRuntime();
-    }
-
-    private static String relativePath(HttpServletRequest request) {
-        return request.getRequestURI().substring(request.getContextPath().length());
-    }
-
-    private static boolean requiresRequestContext(HttpServletRequest request) {
-        String path = relativePath(request);
-        return path.startsWith("/api/")
-               || path.startsWith("/displayables/")
-               || "POST".equals(request.getMethod());
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface Dependency {
-    }
-
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface ListenPort {
-    }
-
-    private final class RequestContextFilter implements Filter {
-        @Override
-        public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain chain)
-                throws IOException, ServletException {
-            checkArgument(servletRequest instanceof HttpServletRequest, "Expected HttpServletRequest");
-            checkArgument(servletResponse instanceof HttpServletResponse, "Expected HttpServletResponse");
-            var request = (HttpServletRequest) servletRequest;
-            var response = (HttpServletResponse) servletResponse;
-            if (request.getAttribute(REQUEST_CONTEXT) != null || !requiresRequestContext(request)) {
-                chain.doFilter(request, response);
-                return;
-            }
-            requestAuthoriser.authorise(request, response, chain);
-        }
-    }
-
-    private static final class OptionsServlet extends HttpServlet {
-        @Override
-        protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
-            // TODO:commerce remove this redirect when the old UIServer browser SPA is deleted.
-            response.sendRedirect(AuthenticatedHttpServerModule.PATH_ROOT + "/index.html");
-        }
-
-        @Override
-        protected void doPost(HttpServletRequest request, HttpServletResponse response) {
-            runtime(request).handleOptionsPost(request, response);
-        }
-    }
-
-    private static final class DownloadServlet extends HttpServlet {
-        @Override
-        protected void doGet(HttpServletRequest request, HttpServletResponse response) {
-            runtime(request).handleDownload(request, response);
-        }
-    }
-
-    private static final class ApiServlet extends HttpServlet {
-        @Override
-        protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
-            UIServerRuntime runtime = runtime(request);
-            switch (request.getPathInfo()) {
-                case "/displayables" -> runtime.handleGetDisplayablesList(response);
-                case "/displayables/item" -> runtime.handleGetDisplayableItem(request, response);
-                case "/displayables/stream" -> startDisplayablesSse(request, response, runtime);
-                case null, default -> writeUnknownPath(response);
-            }
-        }
-
-        @Override
-        protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
-            UIServerRuntime runtime = runtime(request);
-            if ("/push/devices".equals(request.getPathInfo())) {
-                runtime.handlePushDeviceRegister(request, response);
-            } else {
-                writeUnknownPath(response);
-            }
-        }
-
-        @Override
-        protected void doDelete(HttpServletRequest request, HttpServletResponse response) throws IOException {
-            UIServerRuntime runtime = runtime(request);
-            String pathInfo = request.getPathInfo();
-            String prefix = "/push/devices/";
-            if (pathInfo != null && pathInfo.startsWith(prefix) && pathInfo.length() > prefix.length()) {
-                runtime.handlePushDeviceUnregister(pathInfo.substring(prefix.length()), request, response);
-            } else {
-                writeUnknownPath(response);
-            }
-        }
-
-        private static void writeUnknownPath(HttpServletResponse response) throws IOException {
-            response.setCharacterEncoding("utf-8");
-            response.setContentType("application/json");
-            response.setStatus(404);
-            response.getWriter().print("{\"error\":\"Unknown path\"}");
-        }
-
-        /// @implNote there are 3 threads acting on the state in this method; it looks hard to reason about, however, I was not able to fault it - looks solid
-        private static void startDisplayablesSse(HttpServletRequest request, HttpServletResponse response, UIServerRuntime runtime) throws IOException {
-            UIRequestContext requestContext = requestContext(request);
-            var streamClosed = new AtomicBoolean();
-            var invalidationSubscriptionRef = new AtomicReference<Closeable>();
-            Closeable sseStream = runtime.startSse(request, response, () -> {
-                streamClosed.set(true);
-                closeSubscription(invalidationSubscriptionRef);
-            });
-            Closeable invalidationSubscription = requestContext.subscribeToInvalidation(sseStream::close);
-            invalidationSubscriptionRef.set(invalidationSubscription);
-            if (streamClosed.get()) {
-                closeSubscription(invalidationSubscriptionRef);
-            }
-        }
-
-        private static void closeSubscription(AtomicReference<Closeable> subscriptionRef) {
-            Closeable.closeIfNotNull(subscriptionRef.getAndSet(null));
-        }
     }
 }

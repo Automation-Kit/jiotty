@@ -45,7 +45,7 @@ public final class AlertHistoryCleanupJob extends BaseLifecycleComponent {
     private SchedulingExecutor executor;
 
     @Inject
-    public AlertHistoryCleanupJob(AdminAlertService alertService,
+    public AlertHistoryCleanupJob(@Dependency AdminAlertService alertService,
                                   @Dependency VarStore varStore,
                                   ExecutorFactory executorFactory,
                                   CurrentDateTimeProvider timeProvider,

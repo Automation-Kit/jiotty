@@ -110,10 +110,10 @@ class AuthenticatedUIRequestAuthoriserTest {
         authoriser.authorise(request, response, chain);
 
         verify(asyncContext).dispatch();
-        assertThat(UIHttpServerImpl.requestContext(request).uiServerRuntime()).isSameAs(uiServer);
+        assertThat(RequestContextFilter.requestContext(request).uiServerRuntime()).isSameAs(uiServer);
 
         var invalidated = new MutableReference<>(false);
-        Closeable subscription = UIHttpServerImpl.requestContext(request).subscribeToInvalidation(() -> invalidated.set(true));
+        Closeable subscription = RequestContextFilter.requestContext(request).subscribeToInvalidation(() -> invalidated.set(true));
         tokenStateSubscriptionHandler.get().accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, uiServer));
         assertThat(invalidated.get()).isFalse();
 

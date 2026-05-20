@@ -7,6 +7,7 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPrice;
@@ -38,16 +39,16 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
     private static final Duration ONE_HOUR = Duration.ofHours(1);
     private final Provider<SchedulingExecutor> executorProvider;
     private final AgilePredictPriceService priceService;
-    private final Listeners<Prices> listeners = new Listeners<>();
+    private final Listeners<Either<Prices, Failure>> listeners = new Listeners<>();
 
     private Instant startOfOldestPricePeriod;
-    private volatile List<Double> pricesPerPeriod;
+
+    private @Nullable
+    volatile Either<Prices, Failure> lastResult;
     private SchedulingExecutor executor;
     private Closeable refreshSchedule;
-    @Nullable
-    private Closeable retrySchedule;
-    @Nullable
-    private Throwable lastFailure;
+    private @Nullable Closeable retrySchedule;
+    private @Nullable Throwable lastFailure;
 
     @Inject
     public AgilePredictEnergyPriceServiceImpl(@ExecutorProvider Provider<SchedulingExecutor> executorProvider,
@@ -57,14 +58,13 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
     }
 
     @Override
-    public Optional<Prices> getPrices() {
-        return whenStartedAndNotLifecycling(() -> Optional.ofNullable(pricesPerPeriod)
-                                                          .map(this::constructPrices));
+    public Optional<Either<Prices, Failure>> getResult() {
+        return whenStartedAndNotLifecycling(() -> Optional.ofNullable(lastResult));
     }
 
     @Override
-    public Closeable subscribeToPrices(Consumer<Prices> consumer) {
-        return whenStartedAndNotLifecycling(() -> listeners.addListener(executor, this::getPrices, consumer));
+    public Closeable subscribeToPrices(Consumer<Either<Prices, Failure>> consumer) {
+        return whenStartedAndNotLifecycling(() -> listeners.addListener(executor, this::getResult, consumer));
     }
 
     @Override
@@ -96,7 +96,11 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
         logger.info("Requesting AgilePredict prices for 13 days");
         // TODO:commerce region must be a parameter, # of days must be a dynamic parameter of this service (will need to change on the fly)
         priceService.getPrices("A", 13)
-                    .thenAcceptAsync(prices -> listeners.notify(handleAgilePredictPrices(prices)), executor)
+                    .thenAcceptAsync(prices -> {
+                        Either<Prices, Failure> result = Either.left(handleAgilePredictPrices(prices));
+                        lastResult = result;
+                        listeners.notify(result);
+                    }, executor)
                     .whenCompleteAsync((_, throwable) -> {
                         if (throwable != null) {
                             handleFailure(throwable);
@@ -144,8 +148,7 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
             newPricesPerPeriodBuilder.add(price.predictedPrice());
             expectedStartTime = expectedStartTime.plusSeconds(PRICE_PERIOD_LENGTH_SEC);
         }
-        pricesPerPeriod = newPricesPerPeriodBuilder.build();
-        return constructPrices(pricesPerPeriod);
+        return constructPrices(newPricesPerPeriodBuilder.build());
     }
 
     private Prices constructPrices(List<Double> pricesPerPeriod) {

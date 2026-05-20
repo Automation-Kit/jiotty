@@ -17,37 +17,7 @@ final class FakeUIServer implements UIServer, UIServerRuntime {
     }
 
     @Override
-    public void handleOptionsPost(HttpServletRequest request, HttpServletResponse response) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void handleGetDisplayablesList(HttpServletResponse response) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void handleGetDisplayableItem(HttpServletRequest request, HttpServletResponse response) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void handleDownload(HttpServletRequest request, HttpServletResponse response) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void handlePushDeviceRegister(HttpServletRequest request, HttpServletResponse response) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void handlePushDeviceUnregister(String deviceId, HttpServletRequest request, HttpServletResponse response) {
-        throw new UnsupportedOperationException();
+    public boolean dispatchApiPath(HttpServletRequest request, HttpServletResponse response) {
+        return false;
     }
 }

@@ -474,7 +474,7 @@ $(function () {
                 $stat.removeClass('error show');
                 const mySeq = ++reqSeq;
                 clearHideTimer();
-                $.post('options', {name, value: curr})
+                $.post('api/options', {name, value: curr})
                     .done(function (resp) {
                         if (mySeq !== reqSeq) return;
                         if (type === 'checkbox') {
@@ -517,7 +517,7 @@ $(function () {
             function sendMsg() {
                 const msg = $input.val().trim();
                 if (!msg) return;
-                $.post('options', {name, value: msg})
+                $.post('api/options', {name, value: msg})
                     .done(function (responseBody) {
                         $hist.val(responseBody != null ? responseBody : '');
                         $hist[0].scrollTop = $hist[0].scrollHeight;

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.shelly;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.BindingAnnotation;
 import jakarta.annotation.Nullable;
@@ -80,7 +81,7 @@ class ShellyPlugImpl extends BaseLifecycleComponent implements ShellyPlug {
         httpClient = createHttpClient();
     }
 
-    /// for tests
+    @VisibleForTesting
     OkHttpClient createHttpClient() {
         return newClient();
     }

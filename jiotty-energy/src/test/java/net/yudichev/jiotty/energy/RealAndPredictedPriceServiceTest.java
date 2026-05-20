@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.energy;
 
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.security.AuthState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,29 +28,31 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class RealAndPredictedPriceServiceTest {
-    private Optional<Prices> realPrices;
-    private Optional<Prices> predictedPrices;
-    private Consumer<Prices> realPriceConsumer;
-    private Consumer<Prices> predictedPriceConsumer;
+    private Optional<Either<Prices, EnergyPriceService.Failure>> realResult;
+    private Optional<Either<Prices, EnergyPriceService.Failure>> predictedResult;
+    private Consumer<Either<Prices, EnergyPriceService.Failure>> realConsumer;
+    private Consumer<Either<Prices, EnergyPriceService.Failure>> predictedConsumer;
     @Mock
-    private Closeable realPriceSubscription;
+    private Closeable realSubscription;
     @Mock
-    private Closeable predictedPriceSubscription;
+    private Closeable predictedSubscription;
     private RealAndPredictedPriceService service;
 
     @BeforeEach
     void setUp() {
+        realResult = empty();
+        predictedResult = empty();
         service = new RealAndPredictedPriceService(new EnergyPriceService() {
             @Override
-            public Optional<Prices> getPrices() {
-                return realPrices;
+            public Optional<Either<Prices, Failure>> getResult() {
+                return realResult;
             }
 
             @Override
-            public Closeable subscribeToPrices(Consumer<Prices> consumer) {
-                assertThat(realPriceConsumer).isNull();
-                realPriceConsumer = consumer;
-                return realPriceSubscription;
+            public Closeable subscribeToPrices(Consumer<Either<Prices, Failure>> consumer) {
+                assertThat(realConsumer).isNull();
+                realConsumer = consumer;
+                return realSubscription;
             }
 
             @Override
@@ -59,15 +62,15 @@ class RealAndPredictedPriceServiceTest {
             }
         }, new EnergyPriceService() {
             @Override
-            public Optional<Prices> getPrices() {
-                return predictedPrices;
+            public Optional<Either<Prices, Failure>> getResult() {
+                return predictedResult;
             }
 
             @Override
-            public Closeable subscribeToPrices(Consumer<Prices> consumer) {
-                assertThat(predictedPriceConsumer).isNull();
-                predictedPriceConsumer = consumer;
-                return predictedPriceSubscription;
+            public Closeable subscribeToPrices(Consumer<Either<Prices, Failure>> consumer) {
+                assertThat(predictedConsumer).isNull();
+                predictedConsumer = consumer;
+                return predictedSubscription;
             }
 
             @Override
@@ -79,13 +82,15 @@ class RealAndPredictedPriceServiceTest {
 
     @ParameterizedTest
     @MethodSource
-    void combinesGetPrices(Optional<Prices> realPrices, Optional<Prices> predictedPrices, Optional<Prices> expectedResult) {
-        this.realPrices = realPrices;
-        this.predictedPrices = predictedPrices;
-        assertThat(service.getPrices()).isEqualTo(expectedResult);
+    void combinesGetResult(Optional<Prices> realPrices, Optional<Prices> predictedPrices, Optional<Prices> expected) {
+        realResult = realPrices.map(Either::left);
+        predictedResult = predictedPrices.map(Either::left);
+
+        Optional<Prices> actual = service.getResult().flatMap(Either::getLeft);
+        assertThat(actual).isEqualTo(expected);
     }
 
-    static Stream<Arguments> combinesGetPrices() {
+    static Stream<Arguments> combinesGetResult() {
         return Stream.of(
                 Arguments.of(empty(), empty(), empty()),
                 Arguments.of(empty(), of(p("00:00", 0, 5.0)), empty()),
@@ -102,36 +107,57 @@ class RealAndPredictedPriceServiceTest {
     }
 
     @Test
+    void realFailureSurfacesUnchanged() {
+        var failure = new EnergyPriceService.Failure.PriceRetrievalError(new RuntimeException("boom"));
+        realResult = of(Either.right(failure));
+        predictedResult = of(Either.left(p("00:00", 0, 1.0)));
+
+        var combined = service.getResult().orElseThrow();
+        assertThat(combined.getRight()).contains(failure);
+    }
+
+    @Test
     void combinesSubscriptions() {
-        List<Prices> receivedPrices = new ArrayList<>();
-        Closeable subscription = service.subscribeToPrices(receivedPrices::add);
-        assertThat(receivedPrices).isEmpty();
+        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
+        Closeable subscription = service.subscribeToPrices(received::add);
+        assertThat(received).isEmpty();
 
         Prices realPrices = p("00:00", 1, 0.0);
         Prices predictedPrices = p("00:30", 0, 1.0);
 
-        predictedPriceConsumer.accept(predictedPrices);
-        assertThat(receivedPrices).isEmpty();
+        predictedConsumer.accept(Either.left(predictedPrices));
+        assertThat(received).isEmpty();
 
-        realPriceConsumer.accept(realPrices);
-        assertThat(receivedPrices).containsExactly(p("00:00", 1, 0.0, 1.0));
+        realConsumer.accept(Either.left(realPrices));
+        assertThat(received).containsExactly(Either.left(p("00:00", 1, 0.0, 1.0)));
 
-        verifyNoMoreInteractions(realPriceSubscription, predictedPriceSubscription);
+        verifyNoMoreInteractions(realSubscription, predictedSubscription);
         subscription.close();
-        verify(realPriceSubscription).close();
-        verify(predictedPriceSubscription).close();
+        verify(realSubscription).close();
+        verify(predictedSubscription).close();
+    }
+
+    @Test
+    void realFailureForwardedFromSubscription() {
+        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
+        service.subscribeToPrices(received::add);
+
+        var failure = new EnergyPriceService.Failure.IncompatibleTariff("E-1R-GO-VAR-22-10-14-A");
+        realConsumer.accept(Either.right(failure));
+
+        assertThat(received).containsExactly(Either.right(failure));
     }
 
     @Test
     void realPricesUsedWithoutPredictedOnSubscription() {
-        List<Prices> receivedPrices = new ArrayList<>();
-        service.subscribeToPrices(receivedPrices::add);
-        assertThat(receivedPrices).isEmpty();
+        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
+        service.subscribeToPrices(received::add);
+        assertThat(received).isEmpty();
 
         Prices prices = p("00:00", 0, 0.0);
 
-        realPriceConsumer.accept(prices);
-        assertThat(receivedPrices).containsExactly(prices);
+        realConsumer.accept(Either.left(prices));
+        assertThat(received).containsExactly(Either.left(prices));
     }
 
     static Prices p(String start, int idxOfPredictedPriceStart, Double... elements) {
@@ -142,5 +168,4 @@ class RealAndPredictedPriceServiceTest {
         return str.length() == 5 ? Instant.parse("2024-01-01T" + str + ":00Z")
                                  : Instant.parse("2024-01-01T" + str + "Z");
     }
-
 }

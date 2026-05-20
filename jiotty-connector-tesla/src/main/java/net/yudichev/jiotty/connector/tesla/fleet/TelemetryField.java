@@ -21,7 +21,9 @@ public sealed interface TelemetryField permits
         TelemetryField.THvacRightTemperatureRequest,
         TelemetryField.TVehicleSpeed,
         TelemetryField.TGear,
-        TelemetryField.TDriveRail {
+        TelemetryField.TDriveRail,
+        TelemetryField.TACChargingEnergyIn,
+        TelemetryField.TDCChargingEnergyIn {
 
     @SuppressWarnings("PublicStaticCollectionField") // immutable
     ImmutableSet<String> ALL_NAMES = Stream.of(TelemetryField.class.getPermittedSubclasses())
@@ -157,8 +159,23 @@ public sealed interface TelemetryField permits
         TVehicleSpeed INVALID = new Invalid(NAME);
     }
 
+    /// Per-charging-session counter, kWh, measured from the AC charger. Tesla docs note: ignore during DC charging. Per-session cumulative — resets when a new
+    /// session begins.
+    sealed interface TACChargingEnergyIn extends TelemetryField permits TACChargingEnergyInValue, Invalid {
+        String NAME = "ACChargingEnergyIn";
+        TACChargingEnergyIn INVALID = new Invalid(NAME);
+    }
+
+    /// Per-charging-session counter, kWh, measured at the battery. Tesla docs note: reliable for both AC and DC charging. Maps to the legacy
+    /// `charge_state.charge_energy_added` field in the polling API.
+    sealed interface TDCChargingEnergyIn extends TelemetryField permits TDCChargingEnergyInValue, Invalid {
+        String NAME = "DCChargingEnergyIn";
+        TDCChargingEnergyIn INVALID = new Invalid(NAME);
+    }
+
     record Invalid(String fieldName)
-            implements TBatteryLevel, TLocation, TChargeLimitSoc, TInsideTemp, THvacLeftTemperatureRequest, THvacRightTemperatureRequest, TVehicleSpeed {
+            implements TBatteryLevel, TLocation, TChargeLimitSoc, TInsideTemp, THvacLeftTemperatureRequest, THvacRightTemperatureRequest, TVehicleSpeed,
+            TACChargingEnergyIn, TDCChargingEnergyIn {
         @Override
         public String toString() {
             return fieldName + "[INVALID]";
@@ -238,6 +255,20 @@ public sealed interface TelemetryField permits
     }
 
     record TVehicleSpeedValue(double value) implements TVehicleSpeed {
+        @Override
+        public String fieldName() {
+            return NAME;
+        }
+    }
+
+    record TACChargingEnergyInValue(double value) implements TACChargingEnergyIn {
+        @Override
+        public String fieldName() {
+            return NAME;
+        }
+    }
+
+    record TDCChargingEnergyInValue(double value) implements TDCChargingEnergyIn {
         @Override
         public String fieldName() {
             return NAME;

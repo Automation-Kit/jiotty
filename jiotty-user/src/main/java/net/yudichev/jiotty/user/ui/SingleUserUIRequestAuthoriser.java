@@ -23,7 +23,7 @@ final class SingleUserUIRequestAuthoriser implements UIRequestAuthoriser {
 
     @Override
     public void authorise(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws IOException, ServletException {
-        UIHttpServerImpl.setRequestContext(request, requestContext);
+        RequestContextFilter.setRequestContext(request, requestContext);
         chain.doFilter(request, response);
     }
 }

@@ -5,10 +5,14 @@ import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TInsideTempValue;
 
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TACChargingEnergyIn;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TACChargingEnergyInValue;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TBatteryLevel;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TBatteryLevelValue;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TChargeLimitSoc;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TChargeLimitSocValue;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TDCChargingEnergyIn;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TDCChargingEnergyInValue;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TDetailedChargeState;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TDriveRail;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TGear;
@@ -42,6 +46,8 @@ final class TelemetryFieldDecoder {
             case TVehicleSpeed.NAME -> decodeVehicleSpeed(jsonData);
             case TGear.NAME -> TGear.decode(jsonData);
             case TDriveRail.NAME -> TDriveRail.decode(jsonData);
+            case TACChargingEnergyIn.NAME -> decodeAcChargingEnergyIn(jsonData);
+            case TDCChargingEnergyIn.NAME -> decodeDcChargingEnergyIn(jsonData);
             default -> null;
         };
     }
@@ -82,4 +88,11 @@ final class TelemetryFieldDecoder {
         return "null".equals(jsonData) ? TVehicleSpeed.INVALID : new TVehicleSpeedValue(decodeDouble(jsonData));
     }
 
+    static TACChargingEnergyIn decodeAcChargingEnergyIn(String jsonData) {
+        return "null".equals(jsonData) ? TACChargingEnergyIn.INVALID : new TACChargingEnergyInValue(decodeDouble(jsonData));
+    }
+
+    static TDCChargingEnergyIn decodeDcChargingEnergyIn(String jsonData) {
+        return "null".equals(jsonData) ? TDCChargingEnergyIn.INVALID : new TDCChargingEnergyInValue(decodeDouble(jsonData));
+    }
 }

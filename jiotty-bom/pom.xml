@@ -7,7 +7,7 @@
     <parent>
         <groupId>net.yudichev.jiotty</groupId>
         <artifactId>jiotty</artifactId>
-        <version>3.5.0-SNAPSHOT</version>
+        <version>3.6.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>jiotty-bom</artifactId>
@@ -30,6 +30,18 @@
             <dependency>
                 <groupId>${project.groupId}</groupId>
                 <artifactId>jiotty-admin-alerts</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>jiotty-timeseries-cache</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>jiotty-timeseries-cache</artifactId>
                 <version>${project.version}</version>
                 <type>test-jar</type>
                 <scope>test</scope>

@@ -15,4 +15,10 @@ import java.util.List;
 interface BaseElectricityMeterPoint {
     @JsonProperty("agreements")
     List<Tariff> tariffs();
+
+    @Value.Redacted
+    String mpan();
+
+    @JsonProperty("meters")
+    List<ElectricityMeter> meters();
 }

@@ -325,7 +325,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
                 try {
                     checkState(userExists(connection, userId), "User %s not found or deleted", userId);
                     Instant now = timeProvider.currentInstant();
-                    var identitiesByProvider = new LinkedHashMap<String, UserIdentity>(identities.size());
+                    var identitiesByProvider = LinkedHashMap.<String, UserIdentity>newLinkedHashMap(identities.size());
                     identities.forEach(identity -> identitiesByProvider.put(identity.provider(), identity));
                     for (UserIdentity identity : identitiesByProvider.values()) {
                         String existingUserId = selectIdentityByProviderUserId(connection, identity);
@@ -564,7 +564,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     }
 
     private static void validateDistinctIdentityProviders(List<UserIdentity> identities) {
-        var identitiesByProvider = new LinkedHashMap<String, UserIdentity>(identities.size());
+        var identitiesByProvider = LinkedHashMap.<String, UserIdentity>newLinkedHashMap(identities.size());
         for (UserIdentity identity : identities) {
             checkNotNull(identity, "identity");
             UserIdentity previousIdentity = identitiesByProvider.putIfAbsent(identity.provider(), identity);

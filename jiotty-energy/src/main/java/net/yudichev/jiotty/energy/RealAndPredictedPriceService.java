@@ -4,6 +4,7 @@ import com.google.common.base.Verify;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.security.AuthState;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -31,20 +32,27 @@ final class RealAndPredictedPriceService implements EnergyPriceService {
     }
 
     @Override
-    public Optional<Prices> getPrices() {
-        return realPricesService.getPrices().map(real -> predictedPricesService.getPrices()
-                                                                               .map(predicted -> combine(real, predicted))
-                                                                               .orElse(real));
+    public Optional<Either<Prices, Failure>> getResult() {
+        return realPricesService.getResult().map(realResult -> realResult.map(
+                realPrices -> Either.left(combineWithPredicted(realPrices)),
+                _ -> realResult));
     }
 
     @Override
-    public Closeable subscribeToPrices(Consumer<Prices> consumer) {
+    public Closeable subscribeToPrices(Consumer<Either<Prices, Failure>> consumer) {
         return new CombiningSubscription(consumer);
     }
 
     @Override
     public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
         return realPricesService.subscribeToAuthState(consumer);
+    }
+
+    private Prices combineWithPredicted(Prices realPrices) {
+        return predictedPricesService.getResult()
+                                     .flatMap(Either::getLeft)
+                                     .map(predicted -> combine(realPrices, predicted))
+                                     .orElse(realPrices);
     }
 
     private static Prices combine(Prices realPrices, Prices predictedPrices) {
@@ -79,28 +87,32 @@ final class RealAndPredictedPriceService implements EnergyPriceService {
                                            }));
     }
 
-    private class CombiningSubscription extends BaseIdempotentCloseable {
+    private final class CombiningSubscription extends BaseIdempotentCloseable {
 
-        private final Consumer<Prices> consumer;
+        private final Consumer<Either<Prices, Failure>> consumer;
         private final Closeable subscription;
 
-        private Prices realPrices;
+        private Either<Prices, Failure> realResult;
         private Prices predictedPrices;
 
-        public CombiningSubscription(Consumer<Prices> consumer) {
+        public CombiningSubscription(Consumer<Either<Prices, Failure>> consumer) {
             this.consumer = checkNotNull(consumer);
-            subscription = Closeable.forCloseables(realPricesService.subscribeToPrices(this::onRealPrices),
-                                                   predictedPricesService.subscribeToPrices(this::onPredictedPrices));
+            subscription = Closeable.forCloseables(realPricesService.subscribeToPrices(this::onRealResult),
+                                                   predictedPricesService.subscribeToPrices(this::onPredictedResult));
         }
 
-        public void onRealPrices(Prices realPrices) {
-            this.realPrices = checkNotNull(realPrices);
+        public void onRealResult(Either<Prices, Failure> result) {
+            realResult = checkNotNull(result);
             combineAndSend();
         }
 
-        public void onPredictedPrices(Prices predictedPrices) {
-            this.predictedPrices = checkNotNull(predictedPrices);
-            combineAndSend();
+        public void onPredictedResult(Either<Prices, Failure> result) {
+            // The predicted service has no native failure modes today; if one ever lands, ignore it for combination purposes — failures from the real service
+            // are what callers must react to, and stale-but-present predicted data still enhances future-spanning real prices.
+            result.getLeft().ifPresent(prices -> {
+                predictedPrices = checkNotNull(prices);
+                combineAndSend();
+            });
         }
 
         @Override
@@ -109,14 +121,8 @@ final class RealAndPredictedPriceService implements EnergyPriceService {
         }
 
         private void combineAndSend() {
-            if (realPrices != null) {
-                Prices result;
-                if (predictedPrices != null) {
-                    result = combine(realPrices, predictedPrices);
-                } else {
-                    result = realPrices;
-                }
-                consumer.accept(result);
+            if (realResult != null) {
+                consumer.accept(realResult.mapLeft(realPrices -> predictedPrices == null ? realPrices : combine(realPrices, predictedPrices)));
             }
         }
     }

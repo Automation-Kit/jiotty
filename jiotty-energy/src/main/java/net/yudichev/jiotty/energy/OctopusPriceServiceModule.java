@@ -53,10 +53,9 @@ public final class OctopusPriceServiceModule extends BaseLifecycleComponentModul
                                                               .setThreadName(literally("Prices"))
                                                               .withAnnotation(forAnnotation(ExecutorProvider.class))
                                                               .build());
-        installLifecycleComponentModule(OctopusEnergyModule.builder()
-                                                           .setApiKey(octopusApiKeySpec)
-                                                           .setAccountId(octopusAccountId)
-                                                           .build());
+        installLifecycleComponentModule(OctopusEnergyModule.builder().build());
+        octopusApiKeySpec.bind(String.class).annotatedWith(OctopusEnergyPriceServiceImpl.ApiKey.class).installedBy(this::installLifecycleComponentModule);
+        octopusAccountId.bind(String.class).annotatedWith(OctopusEnergyPriceServiceImpl.AccountId.class).installedBy(this::installLifecycleComponentModule);
         bind(EnergyPriceService.class).annotatedWith(Octopus.class).to(registerLifecycleComponent(OctopusEnergyPriceServiceImpl.class));
 
         installLifecycleComponentModule(new AgilePredictPriceModule());

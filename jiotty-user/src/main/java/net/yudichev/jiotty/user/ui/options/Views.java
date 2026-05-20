@@ -1,5 +1,8 @@
 package net.yudichev.jiotty.user.ui.options;
 
+import com.fasterxml.jackson.annotation.JsonView;
+
+/// Constants defining UI [JsonView]s.
 public final class Views {
     private Views() {
     }

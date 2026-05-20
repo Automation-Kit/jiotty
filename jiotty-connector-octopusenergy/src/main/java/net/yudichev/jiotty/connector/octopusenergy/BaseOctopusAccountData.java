@@ -12,7 +12,7 @@ import java.util.Optional;
 @PublicImmutablesStyle
 @JsonDeserialize
 @JsonIgnoreProperties(ignoreUnknown = true)
-interface BaseOctopusAccount {
+interface BaseOctopusAccountData {
     List<AccountProperty> properties();
 
     /// error detail in case of failure

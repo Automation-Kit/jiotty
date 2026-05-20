@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.rest;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
 import com.google.common.util.concurrent.MoreExecutors;
 import net.yudichev.jiotty.common.lang.Json;
@@ -14,10 +15,14 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
@@ -111,8 +116,7 @@ public final class RestClients {
                             if (attemptParsingUnsuccessfulResponse) {
                                 parseAndCompleteFuture(responseString);
                             } else {
-                                future.completeExceptionally(new RuntimeException(
-                                        "Response code " + response.code() + ", body: " + responseString));
+                                future.completeExceptionally(new HttpResponseException(response.code(), responseString));
                             }
                         }
                     } catch (RuntimeException | IOException e) {
@@ -140,6 +144,42 @@ public final class RestClients {
             }
         });
         return future;
+    }
+
+    /// Generic page-following fetch for REST endpoints that return `{ "results": [...], "next": "<url>" }`-shaped pages. Issues a GET via `callFactory` for
+    /// each URL in turn, deserialises the body as `pageType`, appends `results(page)` to a single shared [ImmutableList.Builder], then recurses into
+    /// `nextUrl(page)` if present.
+    ///
+    /// @param expectedTotalCount non-binding sizing hint passed to [ImmutableList#builderWithExpectedSize] to pre-allocate the accumulator and avoid
+    /// growth-time copies. Over- or under-estimating is harmless. Compute from whatever domain knowledge the caller has — slot count from a time range, typical
+    /// catalogue size, etc.
+    /// @implNote Threading: appends to the accumulator are sequenced by [CompletableFuture#thenCompose]'s happens-before edges, so the non-concurrent
+    /// [ImmutableList.Builder] is safe even though OkHttp's dispatcher may deliver successive pages on different worker threads — at any moment only one
+    /// continuation is executing for a given chain.
+    public static <PageT, T> CompletableFuture<List<T>> paginate(Function<String, Call> callFactory,
+                                                                 String firstUrl,
+                                                                 int expectedTotalCount,
+                                                                 TypeToken<PageT> pageType,
+                                                                 Function<PageT, ? extends List<T>> resultsAccessor,
+                                                                 Function<PageT, Optional<String>> nextUrlAccessor) {
+        checkArgument(expectedTotalCount >= 0, "expectedTotalCount must be non-negative");
+        var accumulator = ImmutableList.<T>builderWithExpectedSize(expectedTotalCount);
+        return paginateInto(callFactory, firstUrl, pageType, resultsAccessor, nextUrlAccessor, accumulator)
+                .thenApply(_ -> accumulator.build());
+    }
+
+    private static <PageT, T> CompletableFuture<Void> paginateInto(Function<String, Call> callFactory,
+                                                                   String url,
+                                                                   TypeToken<PageT> pageType,
+                                                                   Function<PageT, ? extends List<T>> resultsAccessor,
+                                                                   Function<PageT, Optional<String>> nextUrlAccessor,
+                                                                   ImmutableList.Builder<T> accumulator) {
+        return call(callFactory.apply(url), pageType).thenCompose(page -> {
+            accumulator.addAll(resultsAccessor.apply(page));
+            return nextUrlAccessor.apply(page)
+                                  .map(nextUrl -> paginateInto(callFactory, nextUrl, pageType, resultsAccessor, nextUrlAccessor, accumulator))
+                                  .orElseGet(() -> CompletableFuture.completedFuture(null));
+        });
     }
 
     public static JsonNode getRequiredNode(JsonNode parentNode, String nodeName) {

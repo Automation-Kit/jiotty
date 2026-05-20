@@ -1,19 +1,16 @@
 package net.yudichev.jiotty.connector.octopusenergy;
 
+import com.google.inject.Key;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import net.yudichev.jiotty.common.inject.BindingSpec;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
-
-import static com.google.common.base.Preconditions.checkNotNull;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
 public final class OctopusEnergyModule extends BaseLifecycleComponentModule implements ExposedKeyModule<OctopusEnergy> {
-    private final BindingSpec<String> apiKeySpec;
-    private final BindingSpec<String> accountIdSpec;
+    private final Key<OctopusEnergy> exposedKey;
 
-    private OctopusEnergyModule(BindingSpec<String> apiKeySpec, BindingSpec<String> accountIdSpec) {
-        this.apiKeySpec = checkNotNull(apiKeySpec);
-        this.accountIdSpec = checkNotNull(accountIdSpec);
+    private OctopusEnergyModule(SpecifiedAnnotation specifiedAnnotation) {
+        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
     public static Builder builder() {
@@ -21,34 +18,20 @@ public final class OctopusEnergyModule extends BaseLifecycleComponentModule impl
     }
 
     @Override
-    protected void configure() {
-        apiKeySpec.bind(String.class)
-                  .annotatedWith(OctopusEnergyImpl.ApiKey.class)
-                  .installedBy(this::installLifecycleComponentModule);
-        accountIdSpec.bind(String.class)
-                     .annotatedWith(OctopusEnergyImpl.AccountId.class)
-                     .installedBy(this::installLifecycleComponentModule);
-        bind(getExposedKey()).to(registerLifecycleComponent(OctopusEnergyImpl.class));
-        expose(getExposedKey());
+    public Key<OctopusEnergy> getExposedKey() {
+        return exposedKey;
     }
 
-    public static class Builder implements TypedBuilder<ExposedKeyModule<OctopusEnergy>> {
-        private BindingSpec<String> apiKeySpec;
-        private BindingSpec<String> accountIdSpec;
+    @Override
+    protected void configure() {
+        bind(exposedKey).to(registerLifecycleComponent(OctopusEnergyImpl.class));
+        expose(exposedKey);
+    }
 
-        public Builder setApiKey(BindingSpec<String> apiKeySpec) {
-            this.apiKeySpec = checkNotNull(apiKeySpec);
-            return this;
-        }
-
-        public Builder setAccountId(BindingSpec<String> accountIdSpec) {
-            this.accountIdSpec = checkNotNull(accountIdSpec);
-            return this;
-        }
-
+    public static final class Builder extends BaseModuleBuilder<OctopusEnergy, Builder> {
         @Override
         public ExposedKeyModule<OctopusEnergy> build() {
-            return new OctopusEnergyModule(apiKeySpec, accountIdSpec);
+            return new OctopusEnergyModule(specifiedAnnotation());
         }
     }
 }

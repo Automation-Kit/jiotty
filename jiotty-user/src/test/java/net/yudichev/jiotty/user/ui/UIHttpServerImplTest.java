@@ -5,7 +5,6 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.MutableReference;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.StreamInvalidationSubscription;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
@@ -24,14 +23,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.Optional;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -51,7 +50,7 @@ class UIHttpServerImplTest {
 
     @BeforeEach
     void setUp() {
-        server = new UIHttpServerImpl(requestAuthoriser, 0, Optional.empty());
+        server = new UIHttpServerImpl(0, defaultMounts());
         server.start();
         httpClient = HttpClient.newBuilder()
                                .followRedirects(HttpClient.Redirect.NEVER)
@@ -61,13 +60,12 @@ class UIHttpServerImplTest {
             var request = (HttpServletRequest) invocation.getArgument(0);
             var response = (HttpServletResponse) invocation.getArgument(1);
             FilterChain chain = invocation.getArgument(2);
-            UIHttpServerImpl.setRequestContext(request, new UIRequestContext(runtime, streamInvalidationSubscription));
+            RequestContextFilter.setRequestContext(request, new UIRequestContext(runtime, streamInvalidationSubscription));
             chain.doFilter(request, response);
             return null;
         }).when(requestAuthoriser).authorise(any(), any(), any()));
 
-        asUnchecked(() -> lenient().when(runtime.startSse(any(), any(), any())).thenReturn(Closeable.noop()));
-        lenient().when(streamInvalidationSubscription.subscribe(any())).thenReturn(Closeable.noop());
+        lenient().when(streamInvalidationSubscription.subscribe(any())).thenAnswer(_ -> Closeable.noop());
     }
 
     @AfterEach
@@ -80,7 +78,7 @@ class UIHttpServerImplTest {
     @ParameterizedTest
     @ValueSource(ints = {-1, 65_536})
     void invalidPort_throwsException(int port) {
-        assertThatThrownBy(() -> new UIHttpServerImpl(requestAuthoriser, port, Optional.empty()))
+        assertThatThrownBy(() -> new UIHttpServerImpl(port, Set.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -98,139 +96,41 @@ class UIHttpServerImplTest {
         verifyNoInteractions(requestAuthoriser);
     }
 
-    @Test
-    void optionsGet_redirectsToIndex() {
-        HttpResponse<String> response = sendGet("/ui/options");
-
-        assertThat(response.statusCode()).isEqualTo(302);
-        assertThat(response.headers().firstValue("Location")).hasValueSatisfying(location -> assertThat(location).endsWith("/ui/index.html"));
-        verifyNoInteractions(requestAuthoriser);
-    }
-
-    @Test
-    void optionsPost_callsHandleOptionsPost() {
-        HttpResponse<String> response = sendPost("/ui/options");
-
-        assertThat(response.statusCode()).isEqualTo(200);
-        verify(runtime).handleOptionsPost(any(), any());
-    }
-
-    @Test
-    void downloadGet_callsHandleDownload() {
-        sendGet("/ui/displayables/test-file");
-
-        verify(runtime).handleDownload(any(), any());
-    }
-
-    @Test
-    void apiGetDisplayables_callsGetDisplayablesList() {
-        sendGet("/ui/api/displayables");
-
-        asUnchecked(() -> verify(runtime).handleGetDisplayablesList(any()));
-    }
-
-    @Test
-    void apiGetDisplayableItem_callsGetDisplayableItem() {
-        sendGet("/ui/api/displayables/item");
-
-        asUnchecked(() -> verify(runtime).handleGetDisplayableItem(any(), any()));
-    }
-
-    @Test
-    void apiGetDisplayablesStream_startsSseStream() {
-        sendGet("/ui/api/displayables/stream");
-
-        asUnchecked(() -> verify(runtime).startSse(any(), any(), any()));
-    }
-
-    @Test
-    void apiPostPushDevices_callsPushDeviceRegister() {
-        HttpResponse<String> response = sendPost("/ui/api/push/devices");
-
-        assertThat(response.statusCode()).isEqualTo(200);
-        verify(runtime).handlePushDeviceRegister(any(), any());
-    }
-
-    @Test
-    void apiDeletePushDevice_callsPushDeviceUnregister() {
-        HttpResponse<String> response = sendDelete("/ui/api/push/devices/device123");
-
-        assertThat(response.statusCode()).isEqualTo(200);
-        verify(runtime).handlePushDeviceUnregister(eq("device123"), any(), any());
-    }
-
     @ParameterizedTest
     @ValueSource(strings = {"GET", "POST", "DELETE"})
-    void apiUnknownPath_returns404(String method) {
+    void apiUnknownPath_noHandlerMatches_returns404(String method) {
         HttpResponse<String> response = sendRequest(method, "/ui/api/unknown");
 
         assertThat(response.statusCode()).isEqualTo(404);
         assertThat(response.body()).isEqualTo("{\"error\":\"Unknown path\"}");
+        verify(runtime).dispatchApiPath(any(), any());
     }
 
-    @Test
-    void sseStream_invalidation_closesSseStream(@Mock Closeable sseStreamCloseable) {
-        asUnchecked(() -> when(runtime.startSse(any(), any(), any())).thenReturn(sseStreamCloseable));
-        var capturedOnInvalidated = new MutableReference<Runnable>();
-        when(streamInvalidationSubscription.subscribe(any())).thenAnswer(invocation -> {
-            capturedOnInvalidated.set(invocation.getArgument(0));
-            return Closeable.noop();
-        });
-
-        sendGet("/ui/api/displayables/stream");
-        capturedOnInvalidated.get().run();
-
-        verify(sseStreamCloseable).close();
-    }
-
-    @Test
-    void sseStream_closed_closesInvalidationSubscription(@Mock Closeable invalidationCloseable) {
-        var capturedOnStreamClosed = new MutableReference<Runnable>();
-        asUnchecked(() -> when(runtime.startSse(any(), any(), any())).thenAnswer(invocation -> {
-            capturedOnStreamClosed.set(invocation.getArgument(2));
-            return Closeable.noop();
+    @ParameterizedTest
+    @ValueSource(strings = {"GET", "POST", "DELETE"})
+    void apiUnknownPath_handlerMatches_runtimeWritesResponse(String method) {
+        asUnchecked(() -> when(runtime.dispatchApiPath(any(), any())).thenAnswer(invocation -> {
+            HttpServletResponse resp = invocation.getArgument(1);
+            resp.setStatus(200);
+            resp.setContentType("text/plain");
+            resp.getWriter().print("handled-by-api-path-handler");
+            return true;
         }));
-        when(streamInvalidationSubscription.subscribe(any())).thenReturn(invalidationCloseable);
 
-        sendGet("/ui/api/displayables/stream");
-        capturedOnStreamClosed.get().run();
+        HttpResponse<String> response = sendRequest(method, "/ui/api/analytics/some-report");
 
-        verify(invalidationCloseable).close();
-    }
-
-    @Test
-    void sseStream_closedDuringStartSse_closesInvalidationSubscription(@Mock Closeable invalidationCloseable) {
-        asUnchecked(() -> when(runtime.startSse(any(), any(), any())).thenAnswer(invocation -> {
-            Runnable onStreamClosed = invocation.getArgument(2);
-            onStreamClosed.run();
-            return Closeable.noop();
-        }));
-        when(streamInvalidationSubscription.subscribe(any())).thenReturn(invalidationCloseable);
-
-        sendGet("/ui/api/displayables/stream");
-
-        verify(invalidationCloseable).close();
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo("handled-by-api-path-handler");
+        verify(runtime).dispatchApiPath(any(), any());
     }
 
     @Test
     void servletMount_handlesRequestAtMountedPath() {
         server.stop();
 
-        ServletMount mount = () -> {
-            var contextHandler = new ServletContextHandler();
-            contextHandler.setContextPath("/mounted");
-            var servlet = new HttpServlet() {
-                @Override
-                protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-                    resp.setStatus(200);
-                    resp.setContentType("text/plain");
-                    resp.getWriter().print("mounted-response");
-                }
-            };
-            contextHandler.addServlet(new ServletHolder(servlet), "/hello");
-            return contextHandler;
-        };
-        server = new UIHttpServerImpl(requestAuthoriser, 0, Optional.of(mount));
+        var mounts = new LinkedHashSet<>(defaultMounts());
+        mounts.add(textMount("/mounted", "/hello", "mounted-response"));
+        server = new UIHttpServerImpl(0, mounts);
         server.start();
 
         HttpResponse<String> response = sendGet("/mounted/hello");
@@ -240,6 +140,60 @@ class UIHttpServerImplTest {
         verifyNoInteractions(requestAuthoriser);
     }
 
+    @Test
+    void multipleServletMounts_eachServesItsOwnContext() {
+        server.stop();
+
+        var mounts = new LinkedHashSet<>(defaultMounts());
+        mounts.add(textMount("/first", "/hello", "first-response"));
+        mounts.add(textMount("/second", "/hello", "second-response"));
+        server = new UIHttpServerImpl(0, mounts);
+        server.start();
+
+        HttpResponse<String> firstResponse = sendGet("/first/hello");
+        HttpResponse<String> secondResponse = sendGet("/second/hello");
+
+        assertThat(firstResponse.statusCode()).isEqualTo(200);
+        assertThat(firstResponse.body()).isEqualTo("first-response");
+        assertThat(secondResponse.statusCode()).isEqualTo(200);
+        assertThat(secondResponse.body()).isEqualTo("second-response");
+        verifyNoInteractions(requestAuthoriser);
+    }
+
+    @Test
+    void overlappingContexts_routeByLongestContextPath() {
+        // Verifies that /ui/api/* is routed to the API mount even though /ui is a shorter-prefix sibling.
+        HttpResponse<String> staticResponse = sendGet("/ui/style.css");
+        HttpResponse<String> apiResponse = sendGet("/ui/api/displayables/unknown");
+
+        assertThat(staticResponse.statusCode()).isEqualTo(200);
+        assertThat(staticResponse.body()).isNotEmpty();
+        // /ui/api/* reaches the runtime's dispatchApiPath even when the path doesn't match any handler.
+        verify(runtime).dispatchApiPath(any(), any());
+        assertThat(apiResponse.statusCode()).isEqualTo(404);
+    }
+
+    private Set<ServletMount> defaultMounts() {
+        return Set.of(new ApiServletMount(requestAuthoriser), new StaticResourceServletMount());
+    }
+
+    private static ServletMount textMount(String contextPath, String servletPathSpec, String body) {
+        return () -> {
+            var contextHandler = new ServletContextHandler();
+            contextHandler.setContextPath(contextPath);
+            var servlet = new HttpServlet() {
+                @Override
+                protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+                    resp.setStatus(200);
+                    resp.setContentType("text/plain");
+                    resp.getWriter().print(body);
+                }
+            };
+            contextHandler.addServlet(new ServletHolder(servlet), servletPathSpec);
+            return contextHandler;
+        };
+    }
+
     private String baseUrl() {
         return "http://localhost:" + server.listenPort();
     }
@@ -247,22 +201,6 @@ class UIHttpServerImplTest {
     private HttpResponse<String> sendGet(String path) {
         return getAsUnchecked(() -> httpClient.send(
                 HttpRequest.newBuilder().uri(URI.create(baseUrl() + path)).GET().build(),
-                HttpResponse.BodyHandlers.ofString()));
-    }
-
-    private HttpResponse<String> sendPost(String path) {
-        return getAsUnchecked(() -> httpClient.send(
-                HttpRequest.newBuilder()
-                           .uri(URI.create(baseUrl() + path))
-                           .POST(HttpRequest.BodyPublishers.ofString(""))
-                           .header("Content-Type", "application/x-www-form-urlencoded")
-                           .build(),
-                HttpResponse.BodyHandlers.ofString()));
-    }
-
-    private HttpResponse<String> sendDelete(String path) {
-        return getAsUnchecked(() -> httpClient.send(
-                HttpRequest.newBuilder().uri(URI.create(baseUrl() + path)).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString()));
     }
 

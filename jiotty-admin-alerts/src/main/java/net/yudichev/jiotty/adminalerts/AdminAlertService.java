@@ -59,7 +59,9 @@ public interface AdminAlertService {
     /// @return the alert key
     String raise(AdminAlertData data);
 
-    /// Server-driven resolution. Resolved-by is recorded as `"system"`.
+    /// Server-driven resolution. Resolved-by is recorded as `"system"`. This method can only be called if the caller can guarantee that exactly the condition
+    /// that caused the alert with the specified key is no longer a problem. If such guarantee cannot be made, the method should not be called: the alert will
+    /// need to be left for the operator to resolve.
     ///
     /// @return a future of the id of the resolved alert, or empty if no active alert matches the given key
     CompletableFuture<Optional<String>> resolve(String key, String note);

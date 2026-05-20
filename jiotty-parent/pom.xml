@@ -5,7 +5,7 @@
     <parent>
         <groupId>net.yudichev.jiotty</groupId>
         <artifactId>jiotty</artifactId>
-        <version>3.5.0-SNAPSHOT</version>
+        <version>3.6.0-SNAPSHOT</version>
     </parent>
     <artifactId>jiotty-parent</artifactId>
     <properties>
@@ -86,6 +86,15 @@
                 <artifactId>embedded-postgres</artifactId>
                 <version>2.2.0</version>
                 <scope>test</scope>
+            </dependency>
+            <!-- Pins the embedded Postgres binary version to 16. The embedded-postgres library transitively pulls older binaries
+                 (14.x at the time of writing); importing this BOM overrides the per-platform binary artefacts in one place. -->
+            <dependency>
+                <groupId>io.zonky.test.postgres</groupId>
+                <artifactId>embedded-postgres-binaries-bom</artifactId>
+                <version>16.13.0</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>

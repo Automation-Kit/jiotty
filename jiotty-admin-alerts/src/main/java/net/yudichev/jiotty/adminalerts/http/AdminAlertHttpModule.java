@@ -13,7 +13,8 @@ import net.yudichev.jiotty.user.ui.ServletMount;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-/// Wires the admin-alert HTTP surface and exposes a [ServletMount] that callers plug into [AuthenticatedHttpServerModule] via `withServletMount(...)`.
+/// Wires the admin-alert HTTP surface and exposes a [ServletMount] that callers plug into [AuthenticatedHttpServerModule] via
+/// [AuthenticatedHttpServerModule.Builder#addServletMount].
 public final class AdminAlertHttpModule extends BaseLifecycleComponentModule implements ExposedKeyModule<ServletMount> {
     private final BindingSpec<String> resolveTokenSpec;
     private final BindingSpec<AdminAlertService> alertServiceSpec;

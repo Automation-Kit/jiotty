@@ -1,10 +1,11 @@
 package net.yudichev.jiotty.user.ui;
 
-import com.google.inject.multibindings.OptionalBinder;
+import com.google.inject.multibindings.Multibinder;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.user.ui.options.Option;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -12,6 +13,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
 ///
 /// This is intended for trusted applications not exposed to internet, such as home automation projects. Such apps would typically use one global [UIServer]
 /// instance for the whole process.
+///
+/// It also exposes publicly static resources for the basic web UI supporting [Option]s and [Displayable]s. This UI is accessible via `/ui/index.html`.
 public final class SingleUserHttpServerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<UIServer> {
     private final BindingSpec<Integer> listenPortSpec;
 
@@ -26,8 +29,10 @@ public final class SingleUserHttpServerModule extends BaseLifecycleComponentModu
     @Override
     protected void configure() {
         listenPortSpec.bind(int.class).annotatedWith(UIHttpServerImpl.ListenPort.class).installedBy(this::installLifecycleComponentModule);
-        bind(UIRequestAuthoriser.class).annotatedWith(UIHttpServerImpl.Dependency.class).to(SingleUserUIRequestAuthoriser.class);
-        OptionalBinder.newOptionalBinder(binder(), ServletMount.class);
+        bind(UIRequestAuthoriser.class).annotatedWith(ApiServletMount.Dependency.class).to(SingleUserUIRequestAuthoriser.class);
+        Multibinder<ServletMount> mountBinder = Multibinder.newSetBinder(binder(), ServletMount.class);
+        mountBinder.addBinding().to(ApiServletMount.class);
+        mountBinder.addBinding().to(StaticResourceServletMount.class);
         registerLifecycleComponent(UIHttpServerImpl.class);
     }
 
