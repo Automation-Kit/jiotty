@@ -12,7 +12,6 @@ import org.eclipse.jetty.server.HttpConnectionFactory;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
-import org.eclipse.jetty.server.handler.DefaultHandler;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -27,7 +26,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 /// Thin Jetty host. Composes all injected [ServletMount]s into a single [ContextHandlerCollection] (which routes by longest matching context path), wrapped in
-/// a [Handler.Sequence] with a trailing [DefaultHandler] that returns 404 for requests not matching any mount.
+/// a [Handler.Sequence] with a trailing [JsonErrorHandler] that returns a JSON `{"error":"Not found"}` envelope for requests not matching any mount.
 final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
     private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
 
@@ -58,7 +57,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         for (ServletMount mount : servletMounts) {
             contexts.addHandler(mount.buildHandler());
         }
-        server.setHandler(new Handler.Sequence(contexts, new DefaultHandler()));
+        server.setHandler(new Handler.Sequence(contexts, new JsonErrorHandler()));
         asUnchecked(server::start);
     }
 

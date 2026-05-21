@@ -23,6 +23,8 @@ final class StaticResourceServletMount implements ServletMount {
         resourceServletHolder.setInitParameter("dirAllowed", "false");
         contextHandler.addServlet(resourceServletHolder, "/");
 
+        contextHandler.setErrorHandler(new JsonErrorHandler());
+
         return contextHandler;
     }
 }

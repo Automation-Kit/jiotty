@@ -83,9 +83,10 @@ public final class OptionsPostHandler extends BaseLifecycleComponent implements 
                                   asyncContext.complete();
                               }
                           }, executor);
-                    //noinspection OverlyBroadCatchBlock — any synchronous failure on the submit pipeline (validation, the registered Option's own
+                } catch (
+                    // Any synchronous failure on the submit pipeline (validation, the registered Option's own
                     // onFormSubmit throwing, the registry lookup, …) must still complete the AsyncContext and reply 400; the broad catch is deliberate
-                } catch (RuntimeException e) {
+                        @SuppressWarnings("OverlyBroadCatchBlock") RuntimeException e) {
                     response.setCharacterEncoding("utf-8");
                     try {
                         writeOptionFormPostFailure(response, e);

@@ -124,6 +124,18 @@ class UIHttpServerImplTest {
         verify(runtime).dispatchApiPath(any(), any());
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"/unknown", "/ui/options", "/totally/unknown/path"})
+    void outOfMountPath_returnsJsonNotFound(String path) {
+        HttpResponse<String> response = sendGet(path);
+
+        assertThat(response.statusCode()).isEqualTo(404);
+        assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(
+                ct -> assertThat(ct).startsWith("application/json"));
+        assertThat(response.body()).isEqualTo("{\"error\":\"Not found\"}");
+        verifyNoInteractions(requestAuthoriser);
+    }
+
     @Test
     void servletMount_handlesRequestAtMountedPath() {
         server.stop();
