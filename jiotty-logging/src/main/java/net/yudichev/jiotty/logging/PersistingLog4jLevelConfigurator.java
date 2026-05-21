@@ -37,7 +37,7 @@ public final class PersistingLog4jLevelConfigurator extends BaseLifecycleCompone
     private final Map<String, String> levelsByLoggerName = new TreeMap<>();
 
     @Inject
-    public PersistingLog4jLevelConfigurator(VarStore varStore, @VarStoreKeyPrefix String varStoreKeyPrefix) {
+    public PersistingLog4jLevelConfigurator(@Dependency VarStore varStore, @VarStoreKeyPrefix String varStoreKeyPrefix) {
         this.varStore = checkNotNull(varStore);
         storeKey = varStoreKeyPrefix.isEmpty() ? "LogLevels" : varStoreKeyPrefix + '_' + "LogLevels";
     }
@@ -149,5 +149,11 @@ public final class PersistingLog4jLevelConfigurator extends BaseLifecycleCompone
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface VarStoreKeyPrefix {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Dependency {
     }
 }

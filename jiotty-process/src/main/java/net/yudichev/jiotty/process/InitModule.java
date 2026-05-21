@@ -12,6 +12,7 @@ import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccessModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.time.TimeModule;
+import net.yudichev.jiotty.logging.PersistingLog4jLevelConfiguratorModule;
 import net.yudichev.jiotty.persistence.db.DbConnectionConfig;
 import net.yudichev.jiotty.persistence.db.psql.PsqlDataSourceFactoryModule;
 import net.yudichev.jiotty.persistence.varstore.VarStoreModule;
@@ -89,6 +90,9 @@ public final class InitModule extends AbstractModule {
                 .withTableName(varStoreTableNameSpec)
                 .build();
         install(varStoreModule);
+        install(PersistingLog4jLevelConfiguratorModule.builder()
+                                                      .setVarStore(boundTo(varStoreModule.getExposedKey()))
+                                                      .build());
         bind(new TypeLiteral<Function<Injector, Module>>() {}).annotatedWith(AppManager.Dependency.class).toInstance(appModuleFactory);
         bind(LifecycleComponent.class).annotatedWith(uniqueAnnotation()).to(AppManager.class);
     }

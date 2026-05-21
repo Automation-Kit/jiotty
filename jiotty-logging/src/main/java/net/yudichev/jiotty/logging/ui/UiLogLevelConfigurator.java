@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.logging.ui;
 
 import com.google.common.base.Preconditions;
+import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -13,11 +14,17 @@ import net.yudichev.jiotty.user.ui.options.TextAreaOption;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.PARAMETER;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.stream.Collectors.joining;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 
@@ -34,7 +41,9 @@ public final class UiLogLevelConfigurator extends BaseLifecycleComponent {
     private Map<String, String> levels;
 
     @Inject
-    public UiLogLevelConfigurator(UIServer uiServer, LoggingLevelConfigurator loggingLevelConfigurator, ExecutorFactory executorFactory) {
+    public UiLogLevelConfigurator(@Dependency UIServer uiServer,
+                                  @Dependency LoggingLevelConfigurator loggingLevelConfigurator,
+                                  ExecutorFactory executorFactory) {
         this.uiServer = checkNotNull(uiServer);
         this.loggingLevelConfigurator = checkNotNull(loggingLevelConfigurator);
         this.executorFactory = checkNotNull(executorFactory);
@@ -82,5 +91,11 @@ public final class UiLogLevelConfigurator extends BaseLifecycleComponent {
         return loggingLevelConfigurator.getLevelsByLoggerName().entrySet().stream()
                                        .map(entry -> entry.getKey() + ' ' + entry.getValue())
                                        .collect(joining("\n"));
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Dependency {
     }
 }

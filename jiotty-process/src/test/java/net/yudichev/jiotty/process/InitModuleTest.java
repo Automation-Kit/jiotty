@@ -5,6 +5,7 @@ import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccess;
+import net.yudichev.jiotty.logging.LoggingLevelConfigurator;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.db.DbConnectionConfig;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
@@ -38,5 +39,6 @@ class InitModuleTest {
         assertThat(injector.findBindingsByType(new TypeLiteral<VarStore>() {})).isNotEmpty();
         assertThat(injector.findBindingsByType(new TypeLiteral<DataSourceFactory>() {})).isNotEmpty();
         assertThat(injector.findBindingsByType(new TypeLiteral<KeyStoreAccess>() {})).isNotEmpty();
+        assertThat(injector.findBindingsByType(new TypeLiteral<LoggingLevelConfigurator>() {})).isNotEmpty();
     }
 }
