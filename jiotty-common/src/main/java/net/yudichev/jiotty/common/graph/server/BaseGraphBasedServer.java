@@ -6,12 +6,14 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.graph.Graph;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.EvenMoreObjects;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -97,6 +99,14 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
 
     protected final boolean graphActive() {
         return graphRunner != null;
+    }
+
+    /// Timestamp subclasses should use when recording state from inside a post-wave hook.
+    ///
+    /// @return the most recently started wave's time when a wave has run (so multiple recorders fired from the same hook share an instant) or `null` if no
+    /// graph waves ever run
+    protected final @Nullable Instant lastWaveTime() {
+        return EvenMoreObjects.mapIfNotNull(graphRunner, r -> r.graph().lastWaveTime());
     }
 
     /// For tests.

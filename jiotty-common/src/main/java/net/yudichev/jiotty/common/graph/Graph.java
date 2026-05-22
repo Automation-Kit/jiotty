@@ -37,6 +37,8 @@ public class Graph extends BaseIdempotentCloseable {
     private int nodeIdGenerator;
     @Nullable
     private Instant waveTime;
+    @Nullable
+    private Instant lastWaveTime;
     private int waveId;
 
     public Graph(CurrentDateTimeProvider timeProvider, Consumer<RuntimeException> exceptionHandler) {
@@ -63,6 +65,13 @@ public class Graph extends BaseIdempotentCloseable {
     public final Instant waveTime() {
         assertCallingThreadConsistent();
         return checkNotNull(waveTime, "not in wave");
+    }
+
+    /// Time of the most recently started wave, or `null` if no wave has ever run. Unlike [#waveTime()] this remains readable after the wave finishes, so
+    /// post-wave hooks can timestamp their work with the same instant the wave used internally.
+    public final @Nullable Instant lastWaveTime() {
+        assertCallingThreadConsistent();
+        return lastWaveTime;
     }
 
     public final int waveId() {
@@ -93,7 +102,7 @@ public class Graph extends BaseIdempotentCloseable {
         }
         waveId++;
         assert setWaveIdInMdc();
-        waveTime = timeProvider.currentInstant();
+        waveTime = lastWaveTime = timeProvider.currentInstant();
         NodeState currentNode = nodesPendingTrigger.first();
         try {
             do {
