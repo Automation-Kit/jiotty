@@ -143,7 +143,11 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
                     }
                     logger.debug("New wave triggered at least by {}", triggeredBy);
                     graph().runWaves();
-                    recordState();
+                    try {
+                        recordState();
+                    } catch (RuntimeException e) {
+                        panic("Failed to record state", e);
+                    }
 
                     if (panicReason != null) {
                         reinitBackoff.reset();
