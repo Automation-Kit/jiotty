@@ -21,13 +21,13 @@ import static net.yudichev.jiotty.energy.Bindings.Dependency;
 import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 import static net.yudichev.jiotty.energy.Bindings.Octopus;
 
-public final class OctopusPriceServiceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<EnergyPriceService> {
+public final class OctopusAgilePriceServiceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<EnergyPriceService> {
     private final Key<EnergyPriceService> exposedKey;
     private final BindingSpec<ZoneId> zoneIdSpec;
     private final BindingSpec<String> octopusApiKeySpec;
     private final BindingSpec<String> octopusAccountId;
 
-    private OctopusPriceServiceModule(SpecifiedAnnotation specifiedAnnotation,
+    private OctopusAgilePriceServiceModule(SpecifiedAnnotation specifiedAnnotation,
                                       BindingSpec<ZoneId> zoneIdSpec,
                                       BindingSpec<String> octopusApiKeySpec,
                                       BindingSpec<String> octopusAccountId) {
@@ -54,9 +54,9 @@ public final class OctopusPriceServiceModule extends BaseLifecycleComponentModul
                                                               .withAnnotation(forAnnotation(ExecutorProvider.class))
                                                               .build());
         installLifecycleComponentModule(OctopusEnergyModule.builder().build());
-        octopusApiKeySpec.bind(String.class).annotatedWith(OctopusEnergyPriceServiceImpl.ApiKey.class).installedBy(this::installLifecycleComponentModule);
-        octopusAccountId.bind(String.class).annotatedWith(OctopusEnergyPriceServiceImpl.AccountId.class).installedBy(this::installLifecycleComponentModule);
-        bind(EnergyPriceService.class).annotatedWith(Octopus.class).to(registerLifecycleComponent(OctopusEnergyPriceServiceImpl.class));
+        octopusApiKeySpec.bind(String.class).annotatedWith(OctopusAgilePriceServiceImpl.ApiKey.class).installedBy(this::installLifecycleComponentModule);
+        octopusAccountId.bind(String.class).annotatedWith(OctopusAgilePriceServiceImpl.AccountId.class).installedBy(this::installLifecycleComponentModule);
+        bind(EnergyPriceService.class).annotatedWith(Octopus.class).to(registerLifecycleComponent(OctopusAgilePriceServiceImpl.class));
 
         installLifecycleComponentModule(new AgilePredictPriceModule());
         bind(EnergyPriceService.class).annotatedWith(AgilePredict.class).to(registerLifecycleComponent(AgilePredictEnergyPriceServiceImpl.class));
@@ -94,7 +94,7 @@ public final class OctopusPriceServiceModule extends BaseLifecycleComponentModul
 
         @Override
         public ExposedKeyModule<EnergyPriceService> build() {
-            return new OctopusPriceServiceModule(specifiedAnnotation,
+            return new OctopusAgilePriceServiceModule(specifiedAnnotation,
                                                  zoneIdSpec,
                                                  octopusApiKeySpec,
                                                  octopusAccountIdSpec);

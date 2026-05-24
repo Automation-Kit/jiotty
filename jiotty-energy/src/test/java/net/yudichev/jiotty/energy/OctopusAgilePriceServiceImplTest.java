@@ -37,7 +37,7 @@ import static org.mockito.Mockito.when;
 
 @SuppressWarnings("OctalInteger")
 @ExtendWith(MockitoExtension.class)
-class OctopusEnergyPriceServiceImplTest {
+class OctopusAgilePriceServiceImplTest {
 
     private static final ZoneId ZONE_ID = ZoneId.of("Europe/London");
     private static final String ACCOUNT_ID = "A-AAAAAAAA";
@@ -53,7 +53,7 @@ class OctopusEnergyPriceServiceImplTest {
     private OctopusAccountService accountService;
     @Mock
     private OctopusRegionService regionService;
-    private OctopusEnergyPriceServiceImpl service;
+    private OctopusAgilePriceServiceImpl service;
 
     @BeforeEach
     void setUp() {
@@ -61,7 +61,7 @@ class OctopusEnergyPriceServiceImplTest {
         clock.setTime(time(1, 14, 0));
         var jobScheduler = new JobSchedulerImpl(clock, clock, ZoneOffset.UTC);
         var executor = clock.createSingleThreadedSchedulingExecutor("thread");
-        service = new OctopusEnergyPriceServiceImpl(() -> executor, clock, octopusEnergy, ACCOUNT_ID, API_KEY, jobScheduler, ZONE_ID);
+        service = new OctopusAgilePriceServiceImpl(() -> executor, clock, octopusEnergy, ACCOUNT_ID, API_KEY, jobScheduler, ZONE_ID);
 
         // The account future resolves to the same Agile-tariff payload across the success scenarios; tests vary the rates returned by the region service.
         // `incompatibleTariff_emitsFailureWithoutCallingRegionService` overrides this with a non-Agile tariff payload.
@@ -134,10 +134,9 @@ class OctopusEnergyPriceServiceImplTest {
         // problems continue until day 2's regular call — and the retries-overran point lands a `PriceRetrievalError` on the result stream
         clock.setTimeAndTick(time(2, 16, 05));
         var lastResult = service.getResult().orElseThrow();
-        assertThat(lastResult.getRight()).hasValueSatisfying(failure ->
-                                                                     assertThat(failure).isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
-                                                                                                                error -> assertThat(error.cause()).hasMessageContaining(
-                                                                                                                        "oops")));
+        assertThat(lastResult.getRight()).hasValueSatisfying(failure -> assertThat(failure)
+                .isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
+                                        error -> assertThat(error.cause()).hasMessageContaining("oops")));
 
         // octopus recovered
         reset(regionService);

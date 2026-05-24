@@ -48,13 +48,10 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.energy.Bindings.Dependency;
 import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 
-// TODO:commerce — full redesign target for this package (documented here as a marker; landed in Task 2 of Stage C):
-//  depends on Stage D.1 landing first (so the IOG report's TimeSeriesCache stream layout exists for the price-service to share with), then runs before Stage
-//   F.1 (so F.1 can capture both Stage D and Stage D.5 in one version bump)
-//  1. Rename to `OctopusAgilePriceService*` (the service is Agile-only; the generic name is misleading).
-//  2. Move from user-app-scope to global-app-scope keyed by region. User-scope view becomes a thin resolver picking the right region's instance.
-//  3. Share `TimeSeriesCache` streams with analytics so `(region, productCode, tariffCode, [from..to])` Octopus calls happen once, not per consumer.
-//  4. Resolve the existing TODO inside [AgilePredictEnergyPriceServiceImpl] (also needs region as a global parameter).
+// TODO:commerce — remaining Stage D.5 work for this package (marker; depends on Stage D.1's TimeSeriesCache stream layout, runs before Stage F.1):
+//  1. Move from user-app-scope to global-app-scope keyed by region. User-scope view becomes a thin resolver picking the right region's instance.
+//  2. Share `TimeSeriesCache` streams with analytics so `(region, productCode, tariffCode, [from..to])` Octopus calls happen once, not per consumer.
+//  3. Resolve the existing TODO inside [AgilePredictEnergyPriceServiceImpl] (also needs region as a global parameter).
 //
 //  TODO: "incompatible tariff" should be a permanent failure delivered via #subscribeToAuthState, which needs to be rebranded to PriceServiceState and
 //   correctly combine both AuthState and tariff state. The, the energy integration should display this error clearly to the user instead of just sending a push
@@ -62,8 +59,8 @@ import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 //   - think how to handle this best.
 //   As part of this, possibly add tariff code to the EnergyProviderIntegrationConfig which will be sent as part of the "successful" PriceServiceState and
 //   displayed to the user.
-final class OctopusEnergyPriceServiceImpl extends BaseLifecycleComponent implements EnergyPriceService {
-    private static final Logger logger = LogManager.getLogger(OctopusEnergyPriceServiceImpl.class);
+final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent implements EnergyPriceService {
+    private static final Logger logger = LogManager.getLogger(OctopusAgilePriceServiceImpl.class);
 
     private static final long PRICE_PERIOD_LENGTH_MIN = 30;
     private static final int PRICE_PERIOD_LENGTH_SEC = toIntExact(TimeUnit.MINUTES.toSeconds(PRICE_PERIOD_LENGTH_MIN));
@@ -90,13 +87,13 @@ final class OctopusEnergyPriceServiceImpl extends BaseLifecycleComponent impleme
     private @Nullable Throwable lastFailure;
 
     @Inject
-    public OctopusEnergyPriceServiceImpl(@ExecutorProvider Provider<SchedulingExecutor> executorProvider,
-                                         CurrentDateTimeProvider timeProvider,
-                                         OctopusEnergy octopusEnergy,
-                                         @AccountId String accountId,
-                                         @ApiKey String apiKey,
-                                         JobScheduler jobScheduler,
-                                         @Dependency ZoneId zoneId) {
+    public OctopusAgilePriceServiceImpl(@ExecutorProvider Provider<SchedulingExecutor> executorProvider,
+                                        CurrentDateTimeProvider timeProvider,
+                                        OctopusEnergy octopusEnergy,
+                                        @AccountId String accountId,
+                                        @ApiKey String apiKey,
+                                        JobScheduler jobScheduler,
+                                        @Dependency ZoneId zoneId) {
         this.executorProvider = checkNotNull(executorProvider);
         this.timeProvider = checkNotNull(timeProvider);
         this.octopusEnergy = checkNotNull(octopusEnergy);
