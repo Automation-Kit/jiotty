@@ -3,15 +3,9 @@ package net.yudichev.jiotty.energy;
 import net.yudichev.jiotty.common.async.JobSchedulerImpl;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
-import net.yudichev.jiotty.common.lang.Either;
-import net.yudichev.jiotty.connector.octopusenergy.AccountProperty;
-import net.yudichev.jiotty.connector.octopusenergy.ElectricityMeterPoint;
-import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountData;
-import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
-import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusRegionService;
 import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
-import net.yudichev.jiotty.connector.octopusenergy.Tariff;
+import net.yudichev.jiotty.timeseriescache.InMemoryTimeSeriesCache;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,7 +19,6 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
-import static java.time.temporal.ChronoUnit.DAYS;
 import static java.time.temporal.ChronoUnit.MINUTES;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,17 +33,10 @@ import static org.mockito.Mockito.when;
 class OctopusAgilePriceServiceImplTest {
 
     private static final ZoneId ZONE_ID = ZoneId.of("Europe/London");
-    private static final String ACCOUNT_ID = "A-AAAAAAAA";
-    private static final String API_KEY = "sk_test_xxxxxxxxxxxx";
     private static final String PRODUCT_CODE = "AGILE-23-12-06";
     private static final String TARIFF_CODE = "E-1R-AGILE-23-12-06-A";
-    private static final char REGION = 'A';
 
     private ProgrammableClock clock;
-    @Mock
-    private OctopusEnergy octopusEnergy;
-    @Mock
-    private OctopusAccountService accountService;
     @Mock
     private OctopusRegionService regionService;
     private OctopusAgilePriceServiceImpl service;
@@ -61,16 +47,10 @@ class OctopusAgilePriceServiceImplTest {
         clock.setTime(time(1, 14, 0));
         var jobScheduler = new JobSchedulerImpl(clock, clock, ZoneOffset.UTC);
         var executor = clock.createSingleThreadedSchedulingExecutor("thread");
-        service = new OctopusAgilePriceServiceImpl(() -> executor, clock, octopusEnergy, ACCOUNT_ID, API_KEY, jobScheduler, ZONE_ID);
+        var cache = new InMemoryTimeSeriesCache();
+        service = new OctopusAgilePriceServiceImpl(() -> executor, clock, cache, jobScheduler, regionService, PRODUCT_CODE, TARIFF_CODE);
 
-        // The account future resolves to the same Agile-tariff payload across the success scenarios; tests vary the rates returned by the region service.
-        // `incompatibleTariff_emitsFailureWithoutCallingRegionService` overrides this with a non-Agile tariff payload.
-        when(octopusEnergy.account(ACCOUNT_ID, API_KEY)).thenReturn(accountService);
-        lenient().when(accountService.getAccount()).thenReturn(completedFuture(agileAccountData()));
-        lenient().when(octopusEnergy.region(REGION)).thenReturn(regionService);
-
-        lenient().when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE),
-                                                          eq(clock.currentInstant()), eq(clock.currentInstant().plus(2, DAYS))))
+        lenient().when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any()))
                  .thenReturn(completedFuture(prices(time(1, 14, 0), time(1, 23, 00))));
 
         jobScheduler.start();
@@ -84,18 +64,16 @@ class OctopusAgilePriceServiceImplTest {
 
         for (int day = 1; day < 4; day += 2) {
             reset(regionService);
-            when(octopusEnergy.region(REGION)).thenReturn(regionService);
 
             // normal case - after 16:00 on day 1 prices are available until 23:00 next day
-            when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), eq(time(day, 16, 05)), eq(time(day + 2, 16, 05))))
+            when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any()))
                     .thenReturn(completedFuture(prices(time(day, 16, 00), time(day + 1, 23, 00))));
             clock.setTimeAndTick(time(day, 16, 05).plusNanos(12));
             assertPricesAvailable(time(day, 16, 00), time(day + 1, 23, 00));
             reset(regionService);
-            when(octopusEnergy.region(REGION)).thenReturn(regionService);
 
             // next day, for some reason, prices are not yet available for the day after, even after 16:00
-            when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), eq(time(day + 1, 16, 05)), eq(time(day + 3, 16, 05))))
+            when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any()))
                     .thenReturn(completedFuture(prices(time(day + 1, 16, 00), time(day + 1, 23, 00))));
             clock.setTimeAndTick(time(day + 1, 16, 05));
             assertPricesAvailable(time(day + 1, 16, 00), time(day + 1, 23, 00));
@@ -106,8 +84,7 @@ class OctopusAgilePriceServiceImplTest {
 
             // 2nd retry - now we're talking
             reset(regionService);
-            when(octopusEnergy.region(REGION)).thenReturn(regionService);
-            when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), eq(time(day + 1, 16, 05)), eq(time(day + 3, 16, 05))))
+            when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any()))
                     .thenReturn(completedFuture(prices(time(day + 1, 16, 00), time(day + 2, 23, 00))));
             clock.setTimeAndTick(time(day + 1, 16, 35));
             assertPricesAvailable(time(day + 1, 16, 00), time(day + 2, 23, 00));
@@ -125,7 +102,6 @@ class OctopusAgilePriceServiceImplTest {
         assertPricesAvailable(time(1, 14, 00), time(1, 23, 00));
 
         reset(regionService);
-        when(octopusEnergy.region(REGION)).thenReturn(regionService);
         when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any())).thenReturn(CompletableFutures.failure("oops"));
         clock.setTimeAndTick(time(1, 16, 05));
         // then no new prices as octopus call failed
@@ -140,24 +116,10 @@ class OctopusAgilePriceServiceImplTest {
 
         // octopus recovered
         reset(regionService);
-        when(octopusEnergy.region(REGION)).thenReturn(regionService);
-        when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), eq(time(2, 16, 05)), any()))
+        when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any()))
                 .thenReturn(completedFuture(prices(time(2, 16, 00), time(3, 23, 00))));
         clock.setTimeAndTick(time(2, 16, 20));
         assertPricesAvailable(time(2, 16, 00), time(3, 23, 00));
-    }
-
-    @Test
-    void incompatibleTariff_emitsFailureWithoutCallingRegionService() {
-        // Override the default Agile account data with a non-Agile tariff (Octopus Go) so the price service short-circuits to IncompatibleTariff.
-        var goTariffCode = "E-1R-GO-VAR-22-10-14-A";
-        when(accountService.getAccount()).thenReturn(completedFuture(accountDataWithTariff(goTariffCode)));
-
-        service.start();
-        clock.tick();
-
-        Either<Prices, EnergyPriceService.Failure> result = service.getResult().orElseThrow();
-        assertThat(result.getRight()).contains(new EnergyPriceService.Failure.IncompatibleTariff(goTariffCode));
     }
 
     private void assertPricesAvailable(Instant from, Instant to) {
@@ -175,30 +137,6 @@ class OctopusAgilePriceServiceImplTest {
             validTo = validTo.minus(30, MINUTES);
         }
         return result;
-    }
-
-    /// Builds an [OctopusAccountData] whose only electricity meter point's current tariff has the Agile `(productCode, tariffCode, region)` tuple this test
-    /// uses. The tariff window is wide enough to cover every clock advance in the scenarios.
-    private static OctopusAccountData agileAccountData() {
-        return accountDataWithTariff(TARIFF_CODE);
-    }
-
-    private static OctopusAccountData accountDataWithTariff(String tariffCode) {
-        Tariff tariff = Tariff.builder()
-                              .setTariffCode(tariffCode)
-                              .setValidFrom(Instant.parse("2020-01-01T00:00:00Z"))
-                              .setValidTo(Instant.parse("2099-01-01T00:00:00Z"))
-                              .build();
-        ElectricityMeterPoint meterPoint = ElectricityMeterPoint.builder()
-                                                                .addTariffs(tariff)
-                                                                .setMpan("9999999999999")
-                                                                .build();
-        AccountProperty property = AccountProperty.builder()
-                                                  .addElectricityMeterPoints(meterPoint)
-                                                  .build();
-        return OctopusAccountData.builder()
-                                 .addProperties(property)
-                                 .build();
     }
 
     private static Instant time(int day, int hour, int min) {

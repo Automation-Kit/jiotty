@@ -27,7 +27,8 @@ class AgilePredictEnergyPriceServiceImplTest {
                                                   apPrice("07:30", 6),
                                                   apPrice("09:00", 9), // AP bug - gap with 2 elements missing
                                                   apPrice("09:30", 10),
-                                                  apPrice("10:00", 11))));
+                                                  apPrice("10:00", 11))),
+                'A');
     }
 
     @Test

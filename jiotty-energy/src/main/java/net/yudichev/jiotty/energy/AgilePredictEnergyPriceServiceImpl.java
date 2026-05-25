@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.energy;
 
 import com.google.common.collect.ImmutableList;
+import com.google.inject.assistedinject.Assisted;
 import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
@@ -28,9 +29,12 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.StrictMath.toIntExact;
 import static java.util.Comparator.comparing;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
-import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
+import static net.yudichev.jiotty.energy.Bindings.AgilePredict;
 
-final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent implements EnergyPriceService {
+/// App-scope per-region AgilePredict forecast service. One instance per region letter, constructed and started lazily by [AgilePredictPriceServiceRegistry].
+/// The region is passed at construction and stays fixed for the instance's lifetime; the user-scope resolver picks the right region's instance when the user's
+/// account resolves to it.
+public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent implements AgilePredictEnergyPriceService {
     private static final Logger logger = LogManager.getLogger(AgilePredictEnergyPriceServiceImpl.class);
     private static final long PRICE_PERIOD_LENGTH_MIN = 30;
     private static final int PRICE_PERIOD_LENGTH_SEC = toIntExact(TimeUnit.MINUTES.toSeconds(PRICE_PERIOD_LENGTH_MIN));
@@ -39,6 +43,7 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
     private static final Duration ONE_HOUR = Duration.ofHours(1);
     private final Provider<SchedulingExecutor> executorProvider;
     private final AgilePredictPriceService priceService;
+    private final String region;
     private final Listeners<Either<Prices, Failure>> listeners = new Listeners<>();
 
     private Instant startOfOldestPricePeriod;
@@ -51,10 +56,12 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
     private @Nullable Throwable lastFailure;
 
     @Inject
-    public AgilePredictEnergyPriceServiceImpl(@ExecutorProvider Provider<SchedulingExecutor> executorProvider,
-                                              AgilePredictPriceService priceService) {
+    public AgilePredictEnergyPriceServiceImpl(@AgilePredict Provider<SchedulingExecutor> executorProvider,
+                                              AgilePredictPriceService priceService,
+                                              @Assisted char regionLetter) {
         this.executorProvider = checkNotNull(executorProvider);
         this.priceService = checkNotNull(priceService);
+        region = String.valueOf(regionLetter);
     }
 
     @Override
@@ -93,9 +100,9 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
     }
 
     private void retrievePrices() {
-        logger.info("Requesting AgilePredict prices for 13 days");
-        // TODO:commerce region must be a parameter, # of days must be a dynamic parameter of this service (will need to change on the fly)
-        priceService.getPrices("A", 13)
+        logger.info("Requesting AgilePredict prices for region {} for 13 days", region);
+        // TODO:commerce # of days must be a dynamic parameter of this service (will need to change on the fly)
+        priceService.getPrices(region, 13)
                     .thenAcceptAsync(prices -> {
                         Either<Prices, Failure> result = Either.left(handleAgilePredictPrices(prices));
                         lastResult = result;
@@ -157,5 +164,9 @@ final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent im
 
     private void scheduleRetry() {
         retrySchedule = executor.schedule(RETRY_DELAY, this::retrievePrices);
+    }
+
+    public interface Factory {
+        AgilePredictEnergyPriceService create(char regionLetter);
     }
 }

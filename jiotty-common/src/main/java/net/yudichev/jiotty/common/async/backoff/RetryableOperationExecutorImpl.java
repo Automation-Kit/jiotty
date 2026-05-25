@@ -14,7 +14,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.LongConsumer;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -35,7 +35,7 @@ final class RetryableOperationExecutorImpl implements RetryableOperationExecutor
     @Override
     public <T> CompletableFuture<T> withBackOffAndRetry(String operationName,
                                                         Supplier<? extends CompletableFuture<T>> action,
-                                                        LongConsumer backoffEventConsumer) {
+                                                        BiConsumer<Long, Throwable> backoffEventConsumer) {
         var exceptionHandler = exceptionHandlerProvider.get();
         logger.debug("Executing operation '{}' with retries using handler {}", operationName, exceptionHandler);
         return doWithBackOffAndRetry(operationName, action, backoffEventConsumer, exceptionHandler);
@@ -43,7 +43,7 @@ final class RetryableOperationExecutorImpl implements RetryableOperationExecutor
 
     private static <T> CompletableFuture<T> doWithBackOffAndRetry(String operationName,
                                                                   Supplier<? extends CompletableFuture<T>> action,
-                                                                  LongConsumer backoffEventConsumer,
+                                                                  BiConsumer<Long, Throwable> backoffEventConsumer,
                                                                   BackingOffExceptionHandler exceptionHandler) {
         return action.get()
                      .thenApply(Either::<T, RetryableFailure>left)
@@ -58,7 +58,7 @@ final class RetryableOperationExecutorImpl implements RetryableOperationExecutor
                                                                      logger.debug("Retrying operation '{}' with backoff {}ms",
                                                                                   operationName,
                                                                                   retryableFailure.backoffDelayMs());
-                                                                     backoffEventConsumer.accept(backoffDelayMs);
+                                                                     backoffEventConsumer.accept(backoffDelayMs, retryableFailure.exception());
                                                                      return doWithBackOffAndRetry(operationName,
                                                                                                   action,
                                                                                                   backoffEventConsumer,
