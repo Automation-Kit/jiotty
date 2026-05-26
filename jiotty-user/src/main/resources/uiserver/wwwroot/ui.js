@@ -312,6 +312,21 @@ $(function () {
             }
             html += '</fieldset>';
             return html;
+        } else if (type === 'location') {
+            const v = opt.value || {};
+            const latVal = v.lat != null ? ' value="' + escapeHtml(String(v.lat)) + '"' : '';
+            const lonVal = v.lon != null ? ' value="' + escapeHtml(String(v.lon)) + '"' : '';
+            const inputCls = 'form-control d-inline-block w-auto';
+            return '<fieldset class="mb-3" data-option="' + key + '" data-option-type="location">' +
+                '<legend>' + label + '</legend>' +
+                '<label class="me-2" for="' + key + '-lat">Latitude</label>' +
+                '<input id="' + key + '-lat" type="number" step="any" min="-90" max="90"' +
+                ' class="' + inputCls + ' me-3" data-loc-axis="lat"' + latVal + '>' +
+                '<label class="me-2" for="' + key + '-lon">Longitude</label>' +
+                '<input id="' + key + '-lon" type="number" step="any" min="-180" max="180"' +
+                ' class="' + inputCls + '" data-loc-axis="lon"' + lonVal + '>' +
+                statusSpan +
+                '</fieldset>';
         }
         return '';
     }
@@ -366,12 +381,23 @@ $(function () {
         return false;
     }
 
+    function combineLatLonJson(latStr, lonStr) {
+        const latTrim = (latStr == null ? '' : String(latStr)).trim();
+        const lonTrim = (lonStr == null ? '' : String(lonStr)).trim();
+        if (latTrim === '' && lonTrim === '') return '';
+        return JSON.stringify({lat: parseFloat(latTrim), lon: parseFloat(lonTrim)});
+    }
+
     function dtoValueFor(opt) {
         if (opt.type === 'checkbox') return opt.checked;
         if (opt.type === 'multiselect') return (opt.selectedIds || []).slice().sort().join(',');
         if (opt.type === 'duration') return opt.valueHuman != null ? opt.valueHuman : '';
         if (opt.type === 'chat') return opt.historyText || '';
         if (opt.type === 'car_integrations' || opt.type === 'energy_provider_integration') return JSON.stringify(opt.value);
+        if (opt.type === 'location') {
+            const v = opt.value || {};
+            return combineLatLonJson(v.lat, v.lon);
+        }
         return opt.value != null ? opt.value : '';
     }
 
@@ -403,6 +429,17 @@ $(function () {
                     }
                     return;
                 }
+                if (type === 'location') {
+                    const v = opt.value || {};
+                    const newLat = v.lat != null ? String(v.lat) : '';
+                    const newLon = v.lon != null ? String(v.lon) : '';
+                    const $lat = $el.find('[data-loc-axis="lat"]');
+                    const $lon = $el.find('[data-loc-axis="lon"]');
+                    if ($lat.val() !== newLat) $lat.val(newLat);
+                    if ($lon.val() !== newLon) $lon.val(newLon);
+                    $el.data('lastVal', combineLatLonJson(newLat, newLon));
+                    return;
+                }
                 const newDtoVal = dtoValueFor(opt);
                 const curDomVal = currentDomValue($el, type);
                 if (curDomVal === newDtoVal) return;
@@ -425,7 +462,7 @@ $(function () {
 
     // ----- Option save handlers -----
     function attachOptionHandlers() {
-        $('[data-option][data-option-type!="chat"]').each(function () {
+        $('[data-option][data-option-type!="chat"][data-option-type!="location"]').each(function () {
             const $el = $(this);
             const name = $el.data('option');
             const type = $el.data('option-type');
@@ -540,6 +577,70 @@ $(function () {
             });
             $hist.each(function () {
                 this.scrollTop = this.scrollHeight;
+            });
+        });
+
+        // Location widgets
+        $('[data-option-type="location"]').each(function () {
+            const $wrap = $(this);
+            const name = $wrap.data('option');
+            const $lat = $wrap.find('[data-loc-axis="lat"]');
+            const $lon = $wrap.find('[data-loc-axis="lon"]');
+            const $stat = $wrap.find('.save-status');
+
+            function clearHideTimer() {
+                const t = $stat.data('hideTimer');
+                if (t) {
+                    clearTimeout(t);
+                    $stat.removeData('hideTimer');
+                }
+            }
+
+            function combinedValue() {
+                return combineLatLonJson($lat.val(), $lon.val());
+            }
+
+            $wrap.data('lastVal', combinedValue());
+            let reqSeq = 0;
+
+            function maybePost() {
+                const curr = combinedValue();
+                if (curr === $wrap.data('lastVal')) {
+                    if ($stat.hasClass('error')) $stat.removeClass('error show');
+                    return;
+                }
+                $stat.removeClass('error show');
+                const mySeq = ++reqSeq;
+                clearHideTimer();
+                $.post('api/options', {name, value: curr})
+                    .done(function (resp) {
+                        if (mySeq !== reqSeq) return;
+                        const v = resp || {};
+                        const latVal = v.lat != null ? String(v.lat) : '';
+                        const lonVal = v.lon != null ? String(v.lon) : '';
+                        $lat.val(latVal);
+                        $lon.val(lonVal);
+                        $wrap.data('lastVal', combineLatLonJson(latVal, lonVal));
+                        clearHideTimer();
+                        $stat.text('Saved').removeClass('error').addClass('show');
+                        const t = setTimeout(function () {
+                            $stat.text('Saved').removeClass('show');
+                            $stat.removeData('hideTimer');
+                        }, 1000);
+                        $stat.data('hideTimer', t);
+                    })
+                    .fail(function (jqXHR) {
+                        if (mySeq !== reqSeq) return;
+                        clearHideTimer();
+                        $stat.text(jqXHR.responseText || 'Error').addClass('error show');
+                    });
+            }
+
+            $lat.add($lon).on('blur', maybePost).on('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    maybePost();
+                }
             });
         });
     }
