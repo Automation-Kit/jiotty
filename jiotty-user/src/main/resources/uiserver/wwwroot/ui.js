@@ -600,10 +600,18 @@ $(function () {
                 return combineLatLonJson($lat.val(), $lon.val());
             }
 
+            function isPartial() {
+                const latFilled = ($lat.val() || '').trim() !== '';
+                const lonFilled = ($lon.val() || '').trim() !== '';
+                return latFilled !== lonFilled;
+            }
+
             $wrap.data('lastVal', combinedValue());
             let reqSeq = 0;
 
             function maybePost() {
+                // wait for the user to fill both axes (or clear both); partial input is treated as still-typing.
+                if (isPartial()) return;
                 const curr = combinedValue();
                 if (curr === $wrap.data('lastVal')) {
                     if ($stat.hasClass('error')) $stat.removeClass('error show');
