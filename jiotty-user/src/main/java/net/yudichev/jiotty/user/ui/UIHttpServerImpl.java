@@ -6,9 +6,9 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.server.Response;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
@@ -25,8 +25,9 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
-/// Thin Jetty host. Composes all injected [ServletMount]s into a single [ContextHandlerCollection] (which routes by longest matching context path), wrapped in
-/// a [Handler.Sequence] with a trailing [JsonErrorHandler] that returns a JSON `{"error":"Not found"}` envelope for requests not matching any mount.
+/// Thin Jetty host. Composes all injected [ServletMount]s into a single [ContextHandlerCollection] (which routes by longest matching context path) and installs
+/// [JsonErrorHandler] as the server-wide error handler so requests not matching any mount return a JSON `{"error":"Not found"}` envelope via
+/// [Response#writeError].
 final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
     private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
 
@@ -57,7 +58,8 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         for (ServletMount mount : servletMounts) {
             contexts.addHandler(mount.buildHandler());
         }
-        server.setHandler(new Handler.Sequence(contexts, new JsonErrorHandler()));
+        server.setHandler(contexts);
+        server.setErrorHandler(new JsonErrorHandler());
         asUnchecked(server::start);
     }
 

@@ -4,19 +4,18 @@ import org.eclipse.jetty.http.HttpHeader;
 import org.eclipse.jetty.http.HttpStatus;
 import org.eclipse.jetty.http.MimeTypes;
 import org.eclipse.jetty.io.Content;
-import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.Response;
 import org.eclipse.jetty.util.Callback;
 
 import java.util.Locale;
 
-/// JSON error responder. Used in two spots: as the trailing fallback in [UIHttpServerImpl]'s [Handler.Sequence] for paths matching no mount (where the response
-/// status has not been set yet and defaults to 404), and as the per-context error handler in [StaticResourceServletMount] for any error the static SPA mount
-/// emits (where the upstream servlet has already set the status — 404 for a missing file, 405 for an unsupported method, 416 for a bad range, 5xx for an
-/// internal failure, etc.). Writes `{"error":"<reason>"}` matching the in-mount envelope used by [ApiServlet#writeUnknownPath]; the reason is the sentence-case
-/// form of the standard HTTP status phrase for the current status code.
-final class JsonErrorHandler extends Handler.Abstract {
+/// JSON error responder. Installed as the server-wide error handler in [UIHttpServerImpl] (invoked by [Response#writeError] for requests not matching any
+/// mount, with the status pre-set to 404) and as the per-context error handler in [StaticResourceServletMount] for any error the static SPA mount emits (where
+/// the upstream servlet has already set the status — 404 for a missing file, 405 for an unsupported method, 416 for a bad range, 5xx for an internal failure,
+/// etc.). Writes `{"error":"<reason>"}` matching the in-mount envelope used by [ApiServlet#writeUnknownPath]; the reason is the sentence-case form of the
+/// standard HTTP status phrase for the current status code.
+final class JsonErrorHandler implements Request.Handler {
     @Override
     public boolean handle(Request request, Response response, Callback callback) {
         int status = response.getStatus();
