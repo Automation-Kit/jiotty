@@ -17,13 +17,13 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
-final class MetricsHttpHandler extends BaseLifecycleComponent {
+public final class MetricsHttpHandler extends BaseLifecycleComponent {
     private static final Logger logger = LogManager.getLogger(MetricsHttpHandler.class);
     private static final String METRICS_PATH = "/metrics";
     private static final String EXPOSITION_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8";
 
     @Inject
-    MetricsHttpHandler(@Dependency RestServer restServer, PrometheusMeterRegistry registry) {
+    public MetricsHttpHandler(@Dependency RestServer restServer, PrometheusMeterRegistry registry) {
         checkNotNull(restServer, "restServer");
         checkNotNull(registry, "registry");
         restServer.get(METRICS_PATH, ctx -> {

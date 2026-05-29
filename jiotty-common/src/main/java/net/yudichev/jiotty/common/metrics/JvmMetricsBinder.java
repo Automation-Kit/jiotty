@@ -19,14 +19,14 @@ import java.util.List;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 
-final class JvmMetricsBinder extends BaseLifecycleComponent {
+public final class JvmMetricsBinder extends BaseLifecycleComponent {
     private static final Logger logger = LogManager.getLogger(JvmMetricsBinder.class);
 
     private final MeterRegistry registry;
     private final List<AutoCloseable> binderCloseables = new ArrayList<>();
 
     @Inject
-    JvmMetricsBinder(MeterRegistry registry) {
+    public JvmMetricsBinder(MeterRegistry registry) {
         this.registry = checkNotNull(registry, "registry");
     }
 
