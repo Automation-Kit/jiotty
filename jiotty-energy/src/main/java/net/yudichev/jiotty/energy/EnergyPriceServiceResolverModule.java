@@ -70,11 +70,14 @@ public final class EnergyPriceServiceResolverModule extends BaseLifecycleCompone
                                                                                         .build()))
                                                 .build());
         octopusApiKeySpec.bind(String.class)
-                         .annotatedWith(OctopusAgileEnergyPriceServiceResolver.ApiKey.class)
+                         .annotatedWith(OctopusAccountContext.ApiKey.class)
                          .installedBy(this::installLifecycleComponentModule);
         octopusAccountIdSpec.bind(String.class)
-                            .annotatedWith(OctopusAgileEnergyPriceServiceResolver.AccountId.class)
+                            .annotatedWith(OctopusAccountContext.AccountId.class)
                             .installedBy(this::installLifecycleComponentModule);
+        // Register the account context before the resolver: the resolver subscribes to the context in its doStart, so the context must start (and thus be
+        // started-and-not-lifecycling) first.
+        registerLifecycleComponent(OctopusAccountContext.class);
         bind(exposedKey).to(registerLifecycleComponent(OctopusAgileEnergyPriceServiceResolver.class));
         expose(exposedKey);
     }

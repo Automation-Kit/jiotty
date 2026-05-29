@@ -54,6 +54,7 @@ class OctopusAgileEnergyPriceServiceResolverTest {
     private FakeAgilePriceService agilePredictRegionA;
     private FakeAgilePriceService agilePredictRegionB;
 
+    private OctopusAccountContext accountContext;
     private OctopusAgileEnergyPriceServiceResolver resolver;
 
     @BeforeEach
@@ -73,15 +74,20 @@ class OctopusAgileEnergyPriceServiceResolverTest {
         lenient().when(agilePredictRegistry.forRegion('A')).thenReturn(agilePredictRegionA);
         lenient().when(agilePredictRegistry.forRegion('B')).thenReturn(agilePredictRegionB);
 
-        resolver = new OctopusAgileEnergyPriceServiceResolver(() -> executor, clock, octopusEnergy, ACCOUNT_ID, API_KEY, octopusRegistry, agilePredictRegistry,
-                                                              RetryableOperationExecutor.noRetries());
+        accountContext = new OctopusAccountContext(() -> executor, octopusEnergy, ACCOUNT_ID, API_KEY, RetryableOperationExecutor.noRetries());
+        resolver = new OctopusAgileEnergyPriceServiceResolver(() -> executor, clock, accountContext, octopusRegistry, agilePredictRegistry);
+    }
+
+    private void startServices() {
+        accountContext.start();
+        resolver.start();
     }
 
     @Test
     void initialAgileTariff_routesToCorrectDelegates() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
 
-        resolver.start();
+        startServices();
         clock.tick();
 
         assertThat(agileRegionA.subscribers).hasSize(1);
@@ -104,7 +110,7 @@ class OctopusAgileEnergyPriceServiceResolverTest {
     void tariffChange_reroutesOctopusDelegate() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
 
-        resolver.start();
+        startServices();
         clock.tick();
         assertThat(agileRegionA.subscribers).hasSize(1);
 
@@ -125,7 +131,7 @@ class OctopusAgileEnergyPriceServiceResolverTest {
         when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        resolver.start();
+        startServices();
         resolver.subscribeToPrices(received::add);
         clock.tick();
 
@@ -140,7 +146,7 @@ class OctopusAgileEnergyPriceServiceResolverTest {
         when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        resolver.start();
+        startServices();
         resolver.subscribeToPrices(received::add);
         clock.tick();
         assertThat(received).hasSize(1);
@@ -157,7 +163,7 @@ class OctopusAgileEnergyPriceServiceResolverTest {
         when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus 500"));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        resolver.start();
+        startServices();
         resolver.subscribeToPrices(received::add);
         clock.tick();
         assertThat(received).hasSize(1);
@@ -173,7 +179,7 @@ class OctopusAgileEnergyPriceServiceResolverTest {
         when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        resolver.start();
+        startServices();
         resolver.subscribeToPrices(received::add);
         clock.tick();
         assertThat(received).hasSize(1);
@@ -196,7 +202,7 @@ class OctopusAgileEnergyPriceServiceResolverTest {
         when(accountService.getAccount()).thenReturn(completedFuture(OctopusAccountData.builder().build()));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        resolver.start();
+        startServices();
         resolver.subscribeToPrices(received::add);
         clock.tick();
 
@@ -208,7 +214,7 @@ class OctopusAgileEnergyPriceServiceResolverTest {
     void incompatibleTariff_emitsFailureAndClosesDelegates() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
 
-        resolver.start();
+        startServices();
         clock.tick();
         assertThat(agileRegionA.subscribers).hasSize(1);
 
