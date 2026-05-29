@@ -3,6 +3,8 @@ package net.yudichev.jiotty.user.ui;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.inject.BindingAnnotation;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.servlet.AsyncContext;
@@ -27,18 +29,29 @@ import static net.yudichev.jiotty.user.ui.UserTokenAuthoriser.TokenNotAuthentica
 
 final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
     private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory());
+    private static final String AUTHORISE_TIMER = "ui_authorise_seconds";
 
     private final UserTokenAuthoriser userTokenAuthoriser;
+    private final MeterRegistry meterRegistry;
+    private final Timer missingTokenAuthTimer;
+    private final Timer authenticatedAuthTimer;
+    private final Timer rejectedAuthTimer;
 
     @Inject
-    AuthenticatedUIRequestAuthoriser(@Dependency UserTokenAuthoriser userTokenAuthoriser) {
+    AuthenticatedUIRequestAuthoriser(@Dependency UserTokenAuthoriser userTokenAuthoriser, MeterRegistry meterRegistry) {
         this.userTokenAuthoriser = checkNotNull(userTokenAuthoriser, "userTokenAuthoriser");
+        this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
+        missingTokenAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "missing_token");
+        authenticatedAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "authenticated");
+        rejectedAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "rejected");
     }
 
     @Override
     public void authorise(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws IOException {
+        Timer.Sample authSample = Timer.start(meterRegistry);
         String token = bearerToken(request);
         if (token == null) {
+            authSample.stop(missingTokenAuthTimer);
             writeAuthenticationFailure(response,
                                        new TokenNotAuthenticated(Reason.INVALID, "Missing or invalid Authorization bearer token"));
             return;
@@ -49,10 +62,12 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
         userTokenAuthoriser.deliverTokenStateTo(token, state -> asyncContext.start(() -> {
             switch (state) {
                 case TokenAuthenticated tokenAuthenticated -> {
+                    authSample.stop(authenticatedAuthTimer);
                     RequestContextFilter.setRequestContext(request, createRequestContext(token, tokenAuthenticated));
                     asyncContext.dispatch();
                 }
                 case TokenNotAuthenticated tokenNotAuthenticated -> {
+                    authSample.stop(rejectedAuthTimer);
                     asUnchecked(() -> writeAuthenticationFailure(response, tokenNotAuthenticated));
                     asyncContext.complete();
                 }

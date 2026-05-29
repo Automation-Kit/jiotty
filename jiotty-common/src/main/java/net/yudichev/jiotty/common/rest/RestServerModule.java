@@ -1,18 +1,21 @@
 package net.yudichev.jiotty.common.rest;
 
-import com.google.inject.Module;
+import com.google.inject.Key;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
 public final class RestServerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<RestServer> {
     private final BindingSpec<Integer> listenPortSpec;
+    private final Key<RestServer> exposedKey;
 
-    private RestServerModule(BindingSpec<Integer> listenPortSpec) {
+    private RestServerModule(SpecifiedAnnotation specifiedAnnotation, BindingSpec<Integer> listenPortSpec) {
+        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.listenPortSpec = checkNotNull(listenPortSpec);
     }
 
@@ -21,15 +24,20 @@ public final class RestServerModule extends BaseLifecycleComponentModule impleme
     }
 
     @Override
+    public Key<RestServer> getExposedKey() {
+        return exposedKey;
+    }
+
+    @Override
     protected void configure() {
         listenPortSpec.bind(int.class)
                       .annotatedWith(JavalinRestServer.ListenPort.class)
                       .installedBy(this::installLifecycleComponentModule);
-        bind(getExposedKey()).to(registerLifecycleComponent(JavalinRestServer.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(JavalinRestServer.class));
+        expose(exposedKey);
     }
 
-    public static final class Builder implements TypedBuilder<Module> {
+    public static final class Builder extends BaseModuleBuilder<RestServer, Builder> {
         private BindingSpec<Integer> listenPortSpec = literally(0);
 
         public Builder withListenPort(BindingSpec<Integer> listenPortSpec) {
@@ -38,8 +46,8 @@ public final class RestServerModule extends BaseLifecycleComponentModule impleme
         }
 
         @Override
-        public Module build() {
-            return new RestServerModule(listenPortSpec);
+        public ExposedKeyModule<RestServer> build() {
+            return new RestServerModule(specifiedAnnotation(), listenPortSpec);
         }
     }
 }

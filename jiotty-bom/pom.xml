@@ -429,6 +429,13 @@
                 <version>7.1.0</version>
             </dependency>
             <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-bom</artifactId>
+                <version>1.16.5</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
                 <groupId>com.github.mob41.blapi</groupId>
                 <artifactId>broadlink-java-api</artifactId>
                 <version>1.0.1</version>

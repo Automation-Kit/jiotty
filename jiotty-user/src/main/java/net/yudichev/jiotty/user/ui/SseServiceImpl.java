@@ -3,6 +3,8 @@ package net.yudichev.jiotty.user.ui;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.LinkedListMultimap;
 import com.google.inject.BindingAnnotation;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
@@ -28,10 +30,12 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
@@ -59,6 +63,10 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     private final DisplayableRegistry displayableRegistry;
     private final CurrentDateTimeProvider currentDateTimeProvider;
     private final Duration optionsThrottlingPeriod;
+    private final MeterRegistry meterRegistry;
+    private final Timer headersToSnapshotStartTimer;
+    private final Timer displayablesSnapshotTimer;
+    private final Timer optionsSnapshotTimer;
 
     private SchedulingExecutor executor;
     private ThrottlingConsumer<Object> optionSnapshotThrottle;
@@ -72,12 +80,17 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                           OptionRegistry optionRegistry,
                           DisplayableRegistry displayableRegistry,
                           CurrentDateTimeProvider currentDateTimeProvider,
-                          @OptionsThrottlingPeriod Duration optionsThrottlingPeriod) {
+                          @OptionsThrottlingPeriod Duration optionsThrottlingPeriod,
+                          MeterRegistry meterRegistry) {
         this.executorProvider = checkNotNull(executorProvider, "executorProvider");
         this.optionRegistry = checkNotNull(optionRegistry, "optionRegistry");
         this.displayableRegistry = checkNotNull(displayableRegistry, "displayableRegistry");
         this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider, "currentDateTimeProvider");
         this.optionsThrottlingPeriod = checkNotNull(optionsThrottlingPeriod, "optionsThrottlingPeriod");
+        this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
+        headersToSnapshotStartTimer = meterRegistry.timer("sse_headers_to_snapshot_start_seconds");
+        displayablesSnapshotTimer = meterRegistry.timer("sse_displayables_snapshot_seconds");
+        optionsSnapshotTimer = meterRegistry.timer("sse_options_snapshot_seconds");
     }
 
     @Override
@@ -118,6 +131,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("X-Client-Id-Seq-Num", String.valueOf(clientIdSeqNum));
         response.flushBuffer();
+        Timer.Sample headersToSnapshotStartSample = Timer.start(meterRegistry);
 
         var client = new SseClient(asyncContext, clientId, clientIdSeqNum, idempotent(onStreamClosed::run));
         logger.debug("[SSE {}] created", clientId);
@@ -125,9 +139,24 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
             sseClients.add(client);
             client.init();
             logger.debug("[SSE {}] delivering initial image", clientId);
+            headersToSnapshotStartSample.stop(headersToSnapshotStartTimer);
+            Timer.Sample displayablesSample = Timer.start(meterRegistry);
+            Timer.Sample optionsSample = Timer.start(meterRegistry);
             var targetClients = List.of(client);
-            sendDisplayablesSnapshotTo(targetClients);
-            sendOptionSnapshotTo(targetClients);
+            sendDisplayablesSnapshotTo(targetClients).whenComplete((_, throwable) -> {
+                if (throwable == null) {
+                    displayablesSample.stop(displayablesSnapshotTimer);
+                } else {
+                    logger.debug("[SSE {}] displayables snapshot failed before completing the timer", clientId, throwable);
+                }
+            });
+            sendOptionSnapshotTo(targetClients).whenComplete((_, throwable) -> {
+                if (throwable == null) {
+                    optionsSample.stop(optionsSnapshotTimer);
+                } else {
+                    logger.debug("[SSE {}] options snapshot failed before completing the timer", clientId, throwable);
+                }
+            });
             try {
                 asyncContext.addListener(new AsyncListener() {
                     @Override
@@ -177,35 +206,38 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
         sendOptionSnapshotTo(sseClients);
     }
 
-    private void sendOptionSnapshotTo(Iterable<SseClient> clients) {
-        ImmutableList.copyOf(optionRegistry.all()).stream()
-                     .map(Option::toDto)
-                     .collect(toFutureOfList())
-                     .whenCompleteAsync((allOptionDtos, throwable) -> {
-                         if (throwable == null) {
-                             var optionsByTabName = LinkedListMultimap.<String, OptionDto>create(allOptionDtos.size());
-                             for (OptionDto optionDto : allOptionDtos) {
-                                 optionsByTabName.put(optionDto.tabName(), optionDto);
-                             }
-                             var tabs = new ArrayList<Map<String, Object>>(optionsByTabName.keySet().size());
-                             optionsByTabName.asMap().forEach((tabName, tabDtos) ->
-                                                                      tabs.add(Map.of("id", toDomId(tabName), "name", tabName, "options", tabDtos)));
-                             broadcastSse("options-update", Map.of("tabs", tabs), clients);
-                         } else {
-                             // this is a bug, so fine to spam
-                             logger.warn("Failed to generate options DTOs", throwable);
-                         }
-                     }, executor);
+    private CompletableFuture<?> sendOptionSnapshotTo(Iterable<SseClient> clients) {
+        return ImmutableList.copyOf(optionRegistry.all()).stream()
+                            .map(Option::toDto)
+                            .collect(toFutureOfList())
+                            .whenCompleteAsync((allOptionDtos, throwable) -> {
+                                if (throwable == null) {
+                                    var optionsByTabName = LinkedListMultimap.<String, OptionDto>create(allOptionDtos.size());
+                                    for (OptionDto optionDto : allOptionDtos) {
+                                        optionsByTabName.put(optionDto.tabName(), optionDto);
+                                    }
+                                    var tabs = new ArrayList<Map<String, Object>>(optionsByTabName.keySet().size());
+                                    optionsByTabName.asMap().forEach((tabName, tabDtos) ->
+                                                                             tabs.add(Map.of("id", toDomId(tabName), "name", tabName, "options", tabDtos)));
+                                    broadcastSse("options-update", Map.of("tabs", tabs), clients);
+                                } else {
+                                    // this is a bug, so fine to spam
+                                    logger.warn("Failed to generate options DTOs", throwable);
+                                }
+                            }, executor);
     }
 
-    private void sendDisplayablesSnapshotTo(List<SseClient> targetClients) {
-        for (Displayable displayable : displayableRegistry.all()) {
-            sendDisplayableUpdate(displayable, targetClients);
+    private CompletableFuture<Void> sendDisplayablesSnapshotTo(List<SseClient> targetClients) {
+        Collection<Displayable> allDisplayables = displayableRegistry.all();
+        var futures = new ArrayList<CompletableFuture<?>>(allDisplayables.size());
+        for (Displayable displayable : allDisplayables) {
+            futures.add(sendDisplayableUpdate(displayable, targetClients));
         }
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0]));
     }
 
-    private void sendDisplayableUpdate(Displayable displayable, Iterable<SseClient> clients) {
-        displayable.toDto().whenCompleteAsync((displayableDto, throwable) -> {
+    private CompletableFuture<?> sendDisplayableUpdate(Displayable displayable, Iterable<SseClient> clients) {
+        return displayable.toDto().whenCompleteAsync((displayableDto, throwable) -> {
             if (throwable != null) {
                 logger.warn("Displayable {} failed to generate DTO", displayable.getId(), throwable);
                 return;

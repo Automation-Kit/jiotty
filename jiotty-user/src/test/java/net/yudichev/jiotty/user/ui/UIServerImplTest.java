@@ -17,6 +17,8 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,6 +45,8 @@ class UIServerImplTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(request.getContextPath()).thenReturn("/ui/api");
+        lenient().when(request.getServletPath()).thenReturn("");
         server = new UIServerImpl(optionRegistry, displayableRegistry, Set.of());
         server.start();
     }
@@ -104,6 +108,29 @@ class UIServerImplTest {
         when(request.getPathInfo()).thenReturn("/analytics-other");
         assertThat(server.dispatchApiPath(request, response)).isFalse();
         verify(handler, never()).handle(request, response);
+    }
+
+    @Test
+    void dispatchApiPath_setsRouteNameAttributeBeforeInvokingHandler(@Mock ApiPathHandler handler) {
+        stubPrefix(handler, "/analytics");
+        server = serverWith(handler);
+        when(request.getPathInfo()).thenReturn("/analytics/savings");
+
+        assertThat(server.dispatchApiPath(request, response)).isTrue();
+
+        var inOrder = inOrder(request, handler);
+        inOrder.verify(request).setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/ui/api/analytics");
+        inOrder.verify(handler).handle(request, response);
+    }
+
+    @Test
+    void dispatchApiPath_noHandlerMatches_doesNotSetRouteNameAttribute(@Mock ApiPathHandler handler) {
+        stubPrefix(handler, "/something");
+        server = serverWith(handler);
+        when(request.getPathInfo()).thenReturn("/other");
+
+        assertThat(server.dispatchApiPath(request, response)).isFalse();
+        verify(request, never()).setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/ui/api/something");
     }
 
     @Test

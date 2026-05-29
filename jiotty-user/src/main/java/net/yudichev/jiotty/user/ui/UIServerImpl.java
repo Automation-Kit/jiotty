@@ -66,6 +66,11 @@ public final class UIServerImpl extends BaseLifecycleComponent implements UIServ
         if (handler == null) {
             return false;
         }
+        // Set before invoking handle: SSE handlers commit the response inside flushBuffer, which fires Jetty's onResponseBegin while we are still inside
+        // handle(); the metrics layer reads this attribute there to tag the request's TTFB with the matched route. The full URL path
+        // (context-path + servlet-path + handler prefix) is stored rather than the bare pathPrefix so the tag is unambiguous across mounts.
+        request.setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE,
+                             request.getContextPath() + request.getServletPath() + handler.pathPrefix());
         handler.handle(request, response);
         return true;
     }

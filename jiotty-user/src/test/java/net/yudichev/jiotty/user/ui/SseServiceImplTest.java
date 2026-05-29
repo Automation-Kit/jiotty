@@ -5,6 +5,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.AsyncListener;
@@ -65,6 +68,7 @@ class SseServiceImplTest {
     private OptionRegistryImpl optionRegistry;
     private DisplayableRegistryImpl displayableRegistry;
     private SseServiceImpl sseService;
+    private MeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
@@ -72,7 +76,8 @@ class SseServiceImplTest {
         Provider<SchedulingExecutor> executorProvider = () -> clock.createSingleThreadedSchedulingExecutor("test");
         optionRegistry = new OptionRegistryImpl(persistence);
         displayableRegistry = new DisplayableRegistryImpl(executorProvider);
-        sseService = new SseServiceImpl(executorProvider, optionRegistry, displayableRegistry, clock, THROTTLING_PERIOD);
+        meterRegistry = new SimpleMeterRegistry();
+        sseService = new SseServiceImpl(executorProvider, optionRegistry, displayableRegistry, clock, THROTTLING_PERIOD, meterRegistry);
         optionRegistry.start();
         displayableRegistry.start();
         sseService.start();
@@ -101,6 +106,28 @@ class SseServiceImplTest {
         assertThat(output).contains("event: hello");
         assertThat(output).contains("event: displayable-update");
         assertThat(output).contains("\"id\":\"d1\"");
+    }
+
+    @Test
+    void connectingSseClient_recordsPostFlushDisplayablesAndOptionsSnapshotTimers() {
+        displayableRegistry.register(createDisplayable("d1", "Display 1",
+                                                       completedFuture(new HistoryDisplayableDto(Map.of("key", List.of())))));
+        clock.tick();
+
+        connectSseClient();
+
+        assertThat(meterRegistry.find("sse_headers_to_snapshot_start_seconds").timer())
+                .as("sse_headers_to_snapshot_start_seconds is recorded for every connecting SSE client")
+                .isNotNull()
+                .returns(1L, Timer::count);
+        assertThat(meterRegistry.find("sse_displayables_snapshot_seconds").timer())
+                .as("sse_displayables_snapshot_seconds is recorded once all displayables have flushed")
+                .isNotNull()
+                .returns(1L, Timer::count);
+        assertThat(meterRegistry.find("sse_options_snapshot_seconds").timer())
+                .as("sse_options_snapshot_seconds is recorded once the options snapshot has flushed")
+                .isNotNull()
+                .returns(1L, Timer::count);
     }
 
     @Test

@@ -1,5 +1,8 @@
 package net.yudichev.jiotty.user.ui;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
@@ -53,10 +56,12 @@ class AuthenticatedUIRequestAuthoriserTest {
     @Mock
     private FilterChain chain;
     private StringWriter responseBody;
+    private MeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
-        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser);
+        meterRegistry = new SimpleMeterRegistry();
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, meterRegistry);
     }
 
     @Test
@@ -68,6 +73,10 @@ class AuthenticatedUIRequestAuthoriserTest {
         verify(response).setStatus(401);
         verify(userTokenAuthoriser, never()).deliverTokenStateTo(anyString(), any());
         assertThat(responseBody.toString()).contains("INVALID").contains("Missing or invalid Authorization bearer token");
+        assertThat(meterRegistry.find("ui_authorise_seconds").tag("outcome", "missing_token").timer())
+                .as("ui_authorise_seconds is tagged outcome=missing_token when no bearer token is present")
+                .isNotNull()
+                .returns(1L, Timer::count);
     }
 
     @ParameterizedTest
@@ -88,6 +97,10 @@ class AuthenticatedUIRequestAuthoriserTest {
         verify(asyncContext).complete();
         verify(response).setStatus(expectedStatus(reason));
         assertThat(responseBody.toString()).contains(reason.name()).contains("failure");
+        assertThat(meterRegistry.find("ui_authorise_seconds").tag("outcome", "rejected").timer())
+                .as("ui_authorise_seconds is tagged outcome=rejected when the token is not authenticated")
+                .isNotNull()
+                .returns(1L, Timer::count);
     }
 
     @Test
@@ -111,6 +124,10 @@ class AuthenticatedUIRequestAuthoriserTest {
 
         verify(asyncContext).dispatch();
         assertThat(RequestContextFilter.requestContext(request).uiServerRuntime()).isSameAs(uiServer);
+        assertThat(meterRegistry.find("ui_authorise_seconds").tag("outcome", "authenticated").timer())
+                .as("ui_authorise_seconds is tagged outcome=authenticated on the success path")
+                .isNotNull()
+                .returns(1L, Timer::count);
 
         var invalidated = new MutableReference<>(false);
         Closeable subscription = RequestContextFilter.requestContext(request).subscribeToInvalidation(() -> invalidated.set(true));

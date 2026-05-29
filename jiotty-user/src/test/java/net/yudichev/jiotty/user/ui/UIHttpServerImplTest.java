@@ -1,5 +1,7 @@
 package net.yudichev.jiotty.user.ui;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -38,19 +40,19 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class UIHttpServerImplTest {
+    private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
     @Mock
     private UIRequestAuthoriser requestAuthoriser;
     @Mock
     private UIServerRuntime runtime;
     @Mock
     private StreamInvalidationSubscription streamInvalidationSubscription;
-
     private UIHttpServerImpl server;
     private HttpClient httpClient;
 
     @BeforeEach
     void setUp() {
-        server = new UIHttpServerImpl(0, defaultMounts());
+        server = new UIHttpServerImpl(0, defaultMounts(), meterRegistry);
         server.start();
         httpClient = HttpClient.newBuilder()
                                .followRedirects(HttpClient.Redirect.NEVER)
@@ -78,7 +80,7 @@ class UIHttpServerImplTest {
     @ParameterizedTest
     @ValueSource(ints = {-1, 65_536})
     void invalidPort_throwsException(int port) {
-        assertThatThrownBy(() -> new UIHttpServerImpl(port, Set.of()))
+        assertThatThrownBy(() -> new UIHttpServerImpl(port, Set.of(), meterRegistry))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -124,6 +126,72 @@ class UIHttpServerImplTest {
         verify(runtime).dispatchApiPath(any(), any());
     }
 
+    @Test
+    void dispatchedRequest_pathTagDerivedFromRouteNameAttribute() {
+        asUnchecked(() -> when(runtime.dispatchApiPath(any(), any())).thenAnswer(invocation -> {
+            HttpServletRequest req = invocation.getArgument(0);
+            HttpServletResponse resp = invocation.getArgument(1);
+            req.setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/api/analytics");
+            resp.setStatus(200);
+            resp.setContentType("text/plain");
+            resp.getWriter().print("ok");
+            return true;
+        }));
+
+        sendGet("/ui/api/analytics/some-report");
+
+        assertThat(meterRegistry.find("http_response_begin_seconds")
+                                .tag("path", "/api/analytics")
+                                .timer())
+                .as("TTFB timer should be tagged with the matched route name")
+                .isNotNull();
+    }
+
+    @Test
+    void staticResource_pathTagFallsBackToFirstUrlSegment() {
+        sendGet("/ui/style.css");
+
+        assertThat(meterRegistry.find("http_response_begin_seconds")
+                                .tag("path", "/ui")
+                                .timer())
+                .as("TTFB timer for a static resource falls back to the first URL segment")
+                .isNotNull();
+    }
+
+    @Test
+    void unhandledRootPath_taggedAsUnmatched() {
+        sendGet("/favicon.ico");
+
+        assertThat(meterRegistry.find("http_response_begin_seconds")
+                                .tag("path", "unmatched")
+                                .timer())
+                .as("TTFB timer for an unhandled root path collapses into the 'unmatched' bucket")
+                .isNotNull();
+        assertThat(meterRegistry.find("http_response_begin_seconds")
+                                .tag("path", "/favicon.ico")
+                                .timer())
+                .as("the literal per-file path must NOT appear as a tag value")
+                .isNull();
+    }
+
+    @Test
+    void multiSegmentContextMount_firstSegmentBecomesAllowedTag() {
+        server.stop();
+
+        var mounts = new LinkedHashSet<>(defaultMounts());
+        mounts.add(textMount("/admin/api/alerts", "/x", "alerts-x"));
+        server = new UIHttpServerImpl(0, mounts, meterRegistry);
+        server.start();
+
+        sendGet("/admin/api/alerts/x");
+
+        assertThat(meterRegistry.find("http_response_begin_seconds")
+                                .tag("path", "/admin")
+                                .timer())
+                .as("a mount at /admin/api/alerts contributes /admin to the allowed first-segment set")
+                .isNotNull();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"/unknown", "/ui/options", "/totally/unknown/path"})
     void outOfMountPath_returnsJsonNotFound(String path) {
@@ -142,7 +210,7 @@ class UIHttpServerImplTest {
 
         var mounts = new LinkedHashSet<>(defaultMounts());
         mounts.add(textMount("/mounted", "/hello", "mounted-response"));
-        server = new UIHttpServerImpl(0, mounts);
+        server = new UIHttpServerImpl(0, mounts, meterRegistry);
         server.start();
 
         HttpResponse<String> response = sendGet("/mounted/hello");
@@ -159,7 +227,7 @@ class UIHttpServerImplTest {
         var mounts = new LinkedHashSet<>(defaultMounts());
         mounts.add(textMount("/first", "/hello", "first-response"));
         mounts.add(textMount("/second", "/hello", "second-response"));
-        server = new UIHttpServerImpl(0, mounts);
+        server = new UIHttpServerImpl(0, mounts, meterRegistry);
         server.start();
 
         HttpResponse<String> firstResponse = sendGet("/first/hello");
