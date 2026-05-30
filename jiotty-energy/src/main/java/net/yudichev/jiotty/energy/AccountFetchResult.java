@@ -1,23 +1,25 @@
 package net.yudichev.jiotty.energy;
 
-import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountData;
+import static com.google.common.base.Preconditions.checkNotNull;
 
-/// The latest outcome of [OctopusAccountContext]'s account poll. Exactly one of the three states holds at any time: the first fetch has not completed yet, the
-/// most recent fetch succeeded, or the most recent fetch (after any retries) failed.
+/// The outcome of an attempt to obtain an account's details. There is no "pending" variant: a subscriber receives nothing until a result is available, so the
+/// first delivery is always a terminal [Loaded] or [Failed].
 public sealed interface AccountFetchResult {
-    /// No fetch has completed yet — the value held before the first poll resolves.
-    record Loading() implements AccountFetchResult {
+    /// The most recent attempt succeeded.
+    ///
+    /// @param account the obtained account details
+    record Loaded(OctopusAccountDetails account) implements AccountFetchResult {
+        public Loaded {
+            checkNotNull(account);
+        }
     }
 
-    /// The most recent poll fetched the account successfully.
+    /// The most recent attempt failed.
     ///
-    /// @param account the fetched account payload
-    record Loaded(OctopusAccountData account) implements AccountFetchResult {
-    }
-
-    /// The most recent poll failed after exhausting retries.
-    ///
-    /// @param cause the failure that ended the most recent fetch attempt
+    /// @param cause the failure that ended the most recent attempt
     record Failed(Throwable cause) implements AccountFetchResult {
+        public Failed {
+            checkNotNull(cause);
+        }
     }
 }

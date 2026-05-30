@@ -9,8 +9,7 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
-import net.yudichev.jiotty.common.lang.Listeners;
-import net.yudichev.jiotty.common.security.AuthState;
+import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPrice;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPriceService;
 import org.apache.logging.log4j.LogManager;
@@ -44,12 +43,11 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
     private final Provider<SchedulingExecutor> executorProvider;
     private final AgilePredictPriceService priceService;
     private final String region;
-    private final Listeners<Either<Prices, Failure>> listeners = new Listeners<>();
+    /// The latest price-or-failure result, empty until the first one is produced. New subscribers receive the present value immediately.
+    private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult = ObservableValue.concurrent(Optional.empty());
 
     private Instant startOfOldestPricePeriod;
 
-    private @Nullable
-    volatile Either<Prices, Failure> lastResult;
     private SchedulingExecutor executor;
     private Closeable refreshSchedule;
     private @Nullable Closeable retrySchedule;
@@ -65,18 +63,13 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
     }
 
     @Override
-    public Optional<Either<Prices, Failure>> getResult() {
-        return whenStartedAndNotLifecycling(() -> Optional.ofNullable(lastResult));
+    public Optional<Either<Prices, Failure>> getPrices() {
+        return whenStartedAndNotLifecycling(priceResult);
     }
 
     @Override
     public Closeable subscribeToPrices(Consumer<Either<Prices, Failure>> consumer) {
-        return whenStartedAndNotLifecycling(() -> listeners.addListener(executor, this::getResult, consumer));
-    }
-
-    @Override
-    public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
-        throw new UnsupportedOperationException("subscribeToAuthState");
+        return whenStartedAndNotLifecycling(() -> priceResult.subscribe(result -> result.ifPresent(consumer)));
     }
 
     @Override
@@ -85,6 +78,8 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
         refreshSchedule = executor.scheduleAtFixedRate(Duration.ZERO, RETRIEVAL_PERIOD, () -> {
             // stop retries if they overflow until next refresh period
             if (retrySchedule != null) {
+                // TODO:commerce admin alert needs to be raised here; one thought is to add a STALE flag (with the lastFailure encoded in it) to existing Prices
+                //  and then consumers would raise an admin alert.
                 logger.warn("Retries overran until next refresh period, stopping them", lastFailure);
                 retrySchedule.close();
                 retrySchedule = null;
@@ -105,8 +100,7 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
         priceService.getPrices(region, 13)
                     .thenAcceptAsync(prices -> {
                         Either<Prices, Failure> result = Either.left(handleAgilePredictPrices(prices));
-                        lastResult = result;
-                        listeners.notify(result);
+                        priceResult.accept(Optional.of(result));
                     }, executor)
                     .whenCompleteAsync((_, throwable) -> {
                         if (throwable != null) {

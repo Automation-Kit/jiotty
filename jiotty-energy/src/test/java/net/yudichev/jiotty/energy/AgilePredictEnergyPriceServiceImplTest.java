@@ -37,7 +37,7 @@ class AgilePredictEnergyPriceServiceImplTest {
         clock.tick();
 
         var expected = new Prices(i("07:00"), new PriceProfile(30 * 60, 0, List.of(5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0)));
-        assertThat(service.getResult()).hasValue(Either.left(expected));
+        assertThat(service.getPrices()).hasValue(Either.left(expected));
     }
 
     private static AgilePredictPrice apPrice(String time, double predictedPrice) {

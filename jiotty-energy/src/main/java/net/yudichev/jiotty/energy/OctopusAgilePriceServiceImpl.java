@@ -10,10 +10,8 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
-import net.yudichev.jiotty.common.lang.Listeners;
-import net.yudichev.jiotty.common.security.AuthState;
+import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusRegionService;
 import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
 import net.yudichev.jiotty.timeseriescache.TimeSeriesCache;
@@ -46,9 +44,7 @@ import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 /// share the same Octopus call.
 ///
 /// Subscribers receive [Either]`<Prices, Failure>` notifications on every refresh; connector failures surface as [Failure.PriceRetrievalError]. The
-/// [Failure.IncompatibleTariff] path is owned by the user-scope resolver, not this impl — by construction this instance only exists for an Agile tariff.
-///
-/// [#subscribeToAuthState] throws [UnsupportedOperationException]; auth-state is per-user and observed at the user's [OctopusAccountService] layer.
+/// [Failure.IncompatibleTariff] path is owned by the user-scope provider, not this impl — by construction this instance only exists for an Agile tariff.
 public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent implements OctopusAgilePriceService {
     private static final Logger logger = LogManager.getLogger(OctopusAgilePriceServiceImpl.class);
 
@@ -64,10 +60,9 @@ public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent i
     private final TimeSeriesStream<StandardUnitRate> ratesStream;
     private final String tariffCode;
     private final JobScheduler jobScheduler;
-    private final Listeners<Either<Prices, Failure>> listeners = new Listeners<>();
+    /// The latest price-or-failure result, empty until the first one is produced. New subscribers receive the present value immediately.
+    private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult = ObservableValue.concurrent(Optional.empty());
 
-    private @Nullable
-    volatile Either<Prices, Failure> lastResult;
     private SchedulingExecutor executor;
     private Closeable jobSchedule;
     private @Nullable Closeable retrySchedule;
@@ -92,18 +87,13 @@ public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent i
     }
 
     @Override
-    public Optional<Either<Prices, Failure>> getResult() {
-        return whenStartedAndNotLifecycling(() -> Optional.ofNullable(lastResult));
+    public Optional<Either<Prices, Failure>> getPrices() {
+        return whenStartedAndNotLifecycling(priceResult);
     }
 
     @Override
     public Closeable subscribeToPrices(Consumer<Either<Prices, Failure>> consumer) {
-        return whenStartedAndNotLifecycling(() -> listeners.addListener(executor, this::getResult, consumer));
-    }
-
-    @Override
-    public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
-        throw new UnsupportedOperationException("subscribeToAuthState is a user-scope concern; subscribe via the user's OctopusAccountService");
+        return whenStartedAndNotLifecycling(() -> priceResult.subscribe(result -> result.ifPresent(consumer)));
     }
 
     @Override
@@ -116,8 +106,7 @@ public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent i
                                                  retrySchedule.close();
                                                  retrySchedule = null;
                                                  Either<Prices, Failure> result = Either.right(new Failure.PriceRetrievalError(checkNotNull(lastFailure)));
-                                                 lastResult = result;
-                                                 listeners.notify(result);
+                                                 priceResult.accept(Optional.of(result));
                                                  lastFailure = null;
                                              }
                                              retrieveOctopusPrices(timeProvider.currentInstant());
@@ -134,10 +123,7 @@ public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent i
         var alignedTo = alignedFrom.plus(2, DAYS);
         logger.info("Requesting prices [{}] from {} to {}", tariffCode, alignedFrom, alignedTo);
         fetchAgilePrices(alignedFrom, alignedTo)
-                .thenAcceptAsync(result -> {
-                    lastResult = result;
-                    listeners.notify(result);
-                }, executor)
+                .thenAcceptAsync(result -> priceResult.accept(Optional.of(result)), executor)
                 .whenCompleteAsync((_, throwable) -> {
                     if (throwable != null) {
                         handleFailure(alignedFrom, throwable);

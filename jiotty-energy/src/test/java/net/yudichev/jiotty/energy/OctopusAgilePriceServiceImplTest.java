@@ -109,7 +109,7 @@ class OctopusAgilePriceServiceImplTest {
 
         // problems continue until day 2's regular call — and the retries-overran point lands a `PriceRetrievalError` on the result stream
         clock.setTimeAndTick(time(2, 16, 05));
-        var lastResult = service.getResult().orElseThrow();
+        var lastResult = service.getPrices().orElseThrow();
         assertThat(lastResult.getRight()).hasValueSatisfying(failure -> assertThat(failure)
                 .isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
                                         error -> assertThat(error.cause()).hasMessageContaining("oops")));
@@ -123,7 +123,7 @@ class OctopusAgilePriceServiceImplTest {
     }
 
     private void assertPricesAvailable(Instant from, Instant to) {
-        var result = service.getResult().orElseThrow();
+        var result = service.getPrices().orElseThrow();
         var prices = result.getLeft().orElseThrow();
         assertThat(prices.profileStart()).describedAs("profile start").isEqualTo(from);
         assertThat(prices.profileEnd()).describedAs("profile end").isEqualTo(to);
