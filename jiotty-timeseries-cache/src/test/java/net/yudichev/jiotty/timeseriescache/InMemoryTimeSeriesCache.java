@@ -64,6 +64,16 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
         return CompletableFuture.completedFuture(deleted);
     }
 
+    @Override
+    public synchronized CompletableFuture<Integer> deleteOlderThan(Instant cutoffExclusive) {
+        int deleted = 0;
+        for (var stream : streams.values()) {
+            deleted += stream.purgeOlderThan(cutoffExclusive);
+        }
+        // No stream-handle removal: the purge spans live streams, matching TimeSeriesCacheImpl's contract.
+        return CompletableFuture.completedFuture(deleted);
+    }
+
     private record StreamKey(String streamId, Scope scope) {}
 
     private static final class InMemoryTimeSeriesStream<T> implements TimeSeriesStream<T> {
@@ -121,6 +131,14 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
                 }
                 return TimeSeriesCacheUtil.buildOrderedMap(fromInclusive, toInclusive, step, hits, computedValues);
             });
+        }
+
+        int purgeOlderThan(Instant cutoffExclusive) {
+            synchronized (lock) {
+                int before = rows.size();
+                rows.keySet().removeIf(slot -> slot.isBefore(cutoffExclusive));
+                return before - rows.size();
+            }
         }
     }
 }

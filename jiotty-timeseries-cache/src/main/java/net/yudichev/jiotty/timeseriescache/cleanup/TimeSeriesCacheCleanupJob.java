@@ -29,41 +29,42 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
-/// Periodic eviction of time-series cache rows belonging to deleted user accounts.
-///
-/// On each tick the job queries the current active-user set, computes which user-scoped rows in the cache belong to ids no longer active, and deletes them.
-/// State (next run timestamp) is persisted in [VarStore] so missed windows are caught up automatically on restart.
+/// Periodic time-series cache cleanup. On each tick the job purges rows older than the retention horizon (the storage-limitation control that bounds cache
+/// growth), then — if an [ActiveUserIdsSupplier] was wired — evicts rows belonging to deleted user accounts. State (next run timestamp) is persisted in
+/// [VarStore] so missed windows are caught up automatically on restart.
 public final class TimeSeriesCacheCleanupJob extends BaseLifecycleComponent {
     static final String NEXT_AT_KEY = "time_series_cache.cleanup.next_at";
     private static final Logger logger = LogManager.getLogger(TimeSeriesCacheCleanupJob.class);
 
-    private final ActiveUserIdsSupplier activeUserIdsSupplier;
+    private final TimeSeriesCache cache;
+    private final Optional<ActiveUserIdsSupplier> activeUserIdsSupplier;
     private final VarStore varStore;
     private final ExecutorFactory executorFactory;
     private final CurrentDateTimeProvider timeProvider;
     private final Duration interval;
+    private final Duration retention;
 
     private @Nullable Closeable scheduledTask;
     private SchedulingExecutor executor;
 
     @Inject
-    public TimeSeriesCacheCleanupJob(TimeSeriesCache cacheService,
-                                     ActiveUserIdsSupplier activeUserIdsSupplier,
+    public TimeSeriesCacheCleanupJob(TimeSeriesCache cache,
+                                     Optional<ActiveUserIdsSupplier> activeUserIdsSupplier,
                                      @Dependency VarStore varStore,
                                      ExecutorFactory executorFactory,
                                      CurrentDateTimeProvider timeProvider,
-                                     @CleanupInterval Duration interval) {
-        // cacheService is not stored yet — the current iteration is a framework hook with no enumeration sweep
-        // (orphan eviction goes through TimeSeriesCache.deleteAllForScope directly from user-deletion code paths).
-        // Keeping it on the constructor pins the Guice binding so a future enumeration-based sweep can be wired in
-        // without changing the module shape.
-        checkNotNull(cacheService, "cacheService");
+                                     @CleanupInterval Duration interval,
+                                     @CleanupRetention Duration retention) {
+        this.cache = checkNotNull(cache, "cache");
+        // Optional: the retention purge below needs no user set. When present, the orphan-eviction path (still a framework stub) additionally runs.
         this.activeUserIdsSupplier = checkNotNull(activeUserIdsSupplier, "activeUserIdsSupplier");
         this.varStore = checkNotNull(varStore, "varStore");
         this.executorFactory = checkNotNull(executorFactory, "executorFactory");
         this.timeProvider = checkNotNull(timeProvider, "timeProvider");
         this.interval = checkNotNull(interval, "interval");
         checkArgument(interval.isPositive(), "interval must be positive, was %s", interval);
+        this.retention = checkNotNull(retention, "retention");
+        checkArgument(retention.isPositive(), "retention must be positive, was %s", retention);
     }
 
     @Override
@@ -94,18 +95,23 @@ public final class TimeSeriesCacheCleanupJob extends BaseLifecycleComponent {
     }
 
     private void runCleanup() {
-        activeUserIdsSupplier.get()
-                             .thenComposeAsync(TimeSeriesCacheCleanupJob::evictOrphans, executor)
-                             .whenCompleteAsync((deletedCount, error) -> {
-                                 if (error != null) {
-                                     logger.info("Time-series cache cleanup failed; will retry next interval", error);
-                                 } else {
-                                     Instant nextAt = timeProvider.currentInstant().plus(interval);
-                                     varStore.saveValue(NEXT_AT_KEY, nextAt);
-                                     logger.info("Time-series cache cleanup deleted {} row(s); next run scheduled at {}", deletedCount, nextAt);
-                                 }
-                                 scheduleNext(interval);
-                             }, executor);
+        cache.deleteOlderThan(timeProvider.currentInstant().minus(retention))
+             .thenComposeAsync(purged -> {
+                 logger.info("Time-series cache retention purge deleted {} row(s) older than {}", purged, retention);
+                 return activeUserIdsSupplier
+                         .map(supplier -> supplier.get().thenComposeAsync(TimeSeriesCacheCleanupJob::evictOrphans, executor))
+                         .orElseGet(() -> CompletableFuture.completedFuture(0));
+             }, executor)
+             .whenCompleteAsync((_, error) -> {
+                 if (error != null) {
+                     logger.info("Time-series cache cleanup failed; will retry next interval", error);
+                 } else {
+                     Instant nextAt = timeProvider.currentInstant().plus(interval);
+                     varStore.saveValue(NEXT_AT_KEY, nextAt);
+                     logger.info("Time-series cache cleanup complete; next run scheduled at {}", nextAt);
+                 }
+                 scheduleNext(interval);
+             }, executor);
     }
 
     private static CompletableFuture<Integer> evictOrphans(Set<String> activeUserIds) {
@@ -131,5 +137,11 @@ public final class TimeSeriesCacheCleanupJob extends BaseLifecycleComponent {
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     public @interface CleanupInterval {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    public @interface CleanupRetention {
     }
 }

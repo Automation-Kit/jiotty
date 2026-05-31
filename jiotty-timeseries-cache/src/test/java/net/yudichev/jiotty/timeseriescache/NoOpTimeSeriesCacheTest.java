@@ -104,6 +104,7 @@ class NoOpTimeSeriesCacheTest {
 
         assertThat(cache.deleteAllForScope(SCOPE).join()).isZero();
         assertThat(cache.deleteAllForStream(STREAM_ID).join()).isZero();
+        assertThat(cache.deleteOlderThan(SLOT_APR_3).join()).isZero();
     }
 
     public record TestValue(String content) {}

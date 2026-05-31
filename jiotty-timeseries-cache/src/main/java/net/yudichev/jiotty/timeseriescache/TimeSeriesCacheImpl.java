@@ -62,6 +62,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
     private final String selectRangeSql;
     private final String deleteAllForScopeSql;
     private final String deleteAllForStreamSql;
+    private final String deleteOlderThanSql;
     /// Registry of live stream handles. Keyed by `(streamId, scope)` because the same logical streamId can have N concurrent registrations across different
     /// users / regions / global. [#deleteAllForScope] and [#deleteAllForStream] sweep matching entries so handles bound to a deleted scope don't linger
     /// pointing at empty rows.
@@ -101,6 +102,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
                          " WHERE scope_kind=? AND scope_value IS NOT DISTINCT FROM ? AND stream_id=? AND slot_start BETWEEN ? AND ?";
         deleteAllForScopeSql = "DELETE FROM " + entryTable + " WHERE scope_kind=? AND scope_value IS NOT DISTINCT FROM ?";
         deleteAllForStreamSql = "DELETE FROM " + entryTable + " WHERE stream_id=?";
+        deleteOlderThanSql = "DELETE FROM " + entryTable + " WHERE slot_start < ?";
     }
 
     @Override
@@ -152,6 +154,12 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
     public CompletableFuture<Integer> deleteAllForStream(String streamId) {
         checkArgument(streamId != null && !streamId.isBlank(), "streamId must be non-blank");
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doDeleteAllForStream(streamId)));
+    }
+
+    @Override
+    public CompletableFuture<Integer> deleteOlderThan(Instant cutoffExclusive) {
+        checkNotNull(cutoffExclusive, "cutoffExclusive");
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doDeleteOlderThan(cutoffExclusive)));
     }
 
     <T> CompletableFuture<Map<Instant, Optional<T>>> readRange(TimeSeriesStreamImpl<T> stream, Instant fromInclusive, Instant toInclusive) {
@@ -260,6 +268,20 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
             return deleted;
         } catch (SQLException e) {
             throw new RuntimeException("Failed to delete time-series cache entries for stream " + streamId, e);
+        }
+    }
+
+    private int doDeleteOlderThan(Instant cutoffExclusive) {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement stmt = connection.prepareStatement(deleteOlderThanSql)) {
+            stmt.setObject(1, cutoffExclusive.atOffset(ZoneOffset.UTC));
+            int deleted = stmt.executeUpdate();
+            // No streamsByKey eviction: this purge spans live streams, so the handles stay valid — a re-read of a purged past slot recomputes via the
+            //  stream's slotsComputation.
+            logger.info("Time-series cache: deleted {} row(s) older than {}", deleted, cutoffExclusive);
+            return deleted;
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to delete time-series cache entries older than " + cutoffExclusive, e);
         }
     }
 

@@ -258,6 +258,43 @@ class TimeSeriesCacheImplTest {
     }
 
     @Test
+    void deleteOlderThan_removesSlotsStrictlyBeforeCutoff_acrossAllScopesAndStreams() {
+        var user = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(),
+                                        Map.of(SLOT_APR_1, new TestRow("d", 1, "u"),
+                                               SLOT_APR_2, new TestRow("d", 2, "u"),
+                                               SLOT_APR_3, new TestRow("d", 3, "u")));
+        var global = defineStreamWithSeed(STREAM_B, Scope.global(), Resolution.daily(), Map.of(SLOT_APR_1, new TestRow("d", 1, "g")));
+        compose(user, SLOT_APR_1, SLOT_APR_3);
+        compose(global, SLOT_APR_1, SLOT_APR_1);
+
+        int deletedBeforeApr3 = service.deleteOlderThan(SLOT_APR_3).orTimeout(5, SECONDS).join();
+        // Strictly before APR_3, across both scopes: user APR_1 + APR_2 and global APR_1. The user's APR_3 row is on the cutoff, so it survives (exclusive).
+        assertThat(deletedBeforeApr3).isEqualTo(3);
+
+        int deletedBeforeApr5 = service.deleteOlderThan(SLOT_APR_5).orTimeout(5, SECONDS).join();
+        // Only the surviving user APR_3 row is below APR_5 — proof the first (cutoff-exclusive) purge retained the on-cutoff slot.
+        assertThat(deletedBeforeApr5).isEqualTo(1);
+    }
+
+    @Test
+    void deleteOlderThan_doesNotEvictStreamHandles() {
+        var stream = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of(SLOT_APR_1, new TestRow("d", 1, "u")));
+        compose(stream, SLOT_APR_1, SLOT_APR_1);
+
+        service.deleteOlderThan(SLOT_APR_5).orTimeout(5, SECONDS).join();
+
+        // Unlike deleteAllForScope/deleteAllForStream, the time-based purge leaves the handle live: re-defining the same (streamId, scope) returns the same
+        //  instance, not a fresh one.
+        var same = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of(SLOT_APR_1, new TestRow("d", 9, "u")));
+        assertThat(same).isSameAs(stream);
+    }
+
+    @Test
+    void deleteOlderThan_null_throws() {
+        assertThatThrownBy(() -> service.deleteOlderThan(null)).isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
     void deleteAllForScope_region_removesOnlyThatRegionsRows() {
         var rA = defineStreamWithSeed(STREAM_A, Scope.region("A"), Resolution.daily(),
                                       Map.of(SLOT_APR_1, new TestRow("d", 1, "rA-a")));

@@ -25,7 +25,9 @@ final class TimeSeriesCacheSchema {
             "CREATE UNIQUE INDEX IF NOT EXISTS %DOMAIN_PREFIX%entry_uk " +
             "ON %DOMAIN_PREFIX%entry (scope_kind, scope_value, stream_id, slot_start) NULLS NOT DISTINCT;",
             // Secondary index supports cleanup-by-stream (deleteAllForStream) without scanning the full UK btree.
-            "CREATE INDEX IF NOT EXISTS %DOMAIN_PREFIX%entry_stream_id_idx ON %DOMAIN_PREFIX%entry (stream_id);");
+            "CREATE INDEX IF NOT EXISTS %DOMAIN_PREFIX%entry_stream_id_idx ON %DOMAIN_PREFIX%entry (stream_id);",
+            // Supports the retention purge (deleteOlderThan: WHERE slot_start < ?) so the daily cleanup is an index range scan, not a full-table scan.
+            "CREATE INDEX IF NOT EXISTS %DOMAIN_PREFIX%entry_slot_start_idx ON %DOMAIN_PREFIX%entry (slot_start);");
 
     private TimeSeriesCacheSchema() {
     }

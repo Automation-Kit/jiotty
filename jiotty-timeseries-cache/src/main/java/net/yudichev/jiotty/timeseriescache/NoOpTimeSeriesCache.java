@@ -52,6 +52,12 @@ public final class NoOpTimeSeriesCache implements TimeSeriesCache {
         return CompletableFuture.completedFuture(0);
     }
 
+    @Override
+    public CompletableFuture<Integer> deleteOlderThan(Instant cutoffExclusive) {
+        // Nothing is retained, so there is nothing to purge.
+        return CompletableFuture.completedFuture(0);
+    }
+
     private record StreamKey(String streamId, Scope scope) {}
 
     /// Recomputes the full requested range on every [#readRange] and retains nothing. `type` is retained only so [#defineStream] can reject a conflicting

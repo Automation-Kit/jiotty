@@ -49,6 +49,11 @@ public interface TimeSeriesCache {
     /// decommissioned.
     CompletableFuture<Integer> deleteAllForStream(String streamId);
 
+    /// Removes every cached entry, across all scopes and all streams, whose slot start is strictly before `cutoffExclusive`. This is the storage-management
+    /// purge for a retention horizon. Unlike [#deleteAllForScope] / [#deleteAllForStream] it does NOT evict any stream handle — the streams stay live; a
+    /// purged past slot simply recomputes through its `slotsComputation` if read again. Returns the number of rows deleted.
+    CompletableFuture<Integer> deleteOlderThan(Instant cutoffExclusive);
+
     sealed interface Scope permits Scope.Global, Scope.User, Scope.Region {
         /// Returns the singleton global scope.
         static Scope global() {

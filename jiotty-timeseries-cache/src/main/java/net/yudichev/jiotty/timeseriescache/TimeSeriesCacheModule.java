@@ -3,6 +3,7 @@ package net.yudichev.jiotty.timeseriescache;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
+import com.google.inject.multibindings.OptionalBinder;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
@@ -14,6 +15,7 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainModule;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.timeseriescache.cleanup.ActiveUserIdsSupplier;
+import net.yudichev.jiotty.timeseriescache.cleanup.CacheRetention;
 import net.yudichev.jiotty.timeseriescache.cleanup.TimeSeriesCacheCleanupJob;
 import org.jspecify.annotations.Nullable;
 
@@ -37,6 +39,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
     private final @Nullable BindingSpec<VarStore> cleanupVarStoreSpec;
     private final @Nullable BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec;
     private final BindingSpec<Duration> cleanupIntervalSpec;
+    private final BindingSpec<Duration> cleanupRetentionSpec;
     private final Key<TimeSeriesCache> exposedKey;
 
     private TimeSeriesCacheModule(SpecifiedAnnotation specifiedAnnotation,
@@ -45,7 +48,8 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
                                   BindingSpec<String> domainNameSpec,
                                   @Nullable BindingSpec<VarStore> cleanupVarStoreSpec,
                                   @Nullable BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec,
-                                  BindingSpec<Duration> cleanupIntervalSpec) {
+                                  BindingSpec<Duration> cleanupIntervalSpec,
+                                  BindingSpec<Duration> cleanupRetentionSpec) {
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
         this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
@@ -53,6 +57,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
         this.cleanupVarStoreSpec = cleanupVarStoreSpec;
         this.cleanupActiveUserIdsSupplierSpec = cleanupActiveUserIdsSupplierSpec;
         this.cleanupIntervalSpec = checkNotNull(cleanupIntervalSpec, "cleanupIntervalSpec");
+        this.cleanupRetentionSpec = checkNotNull(cleanupRetentionSpec, "cleanupRetentionSpec");
     }
 
     public static Builder builder() {
@@ -94,17 +99,26 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
                                                                .build());
 
         bind(exposedKey).to(registerLifecycleComponent(TimeSeriesCacheImpl.class));
-        if (cleanupVarStoreSpec != null && cleanupActiveUserIdsSupplierSpec != null) {
+        // The VarStore (next-run-timestamp persistence) alone enables the cleanup job — its always-on action is the retention purge.
+        if (cleanupVarStoreSpec != null) {
             cleanupVarStoreSpec.bind(VarStore.class)
                                .annotatedWith(TimeSeriesCacheCleanupJob.Dependency.class)
                                .installedBy(this::installLifecycleComponentModule);
-            cleanupActiveUserIdsSupplierSpec.bind(ActiveUserIdsSupplier.class)
-                                            .annotatedWith(CleanupSupplier.class)
-                                            .installedBy(this::installLifecycleComponentModule);
-            bind(ActiveUserIdsSupplier.class).to(Key.get(ActiveUserIdsSupplier.class, CleanupSupplier.class));
+            // ActiveUserIdsSupplier is optional: the job injects Optional<ActiveUserIdsSupplier> and runs orphan eviction only when present. Absent → the
+            //  OptionalBinder default supplies Optional.empty() and only the retention purge runs.
+            OptionalBinder<ActiveUserIdsSupplier> supplierBinder = OptionalBinder.newOptionalBinder(binder(), ActiveUserIdsSupplier.class);
+            if (cleanupActiveUserIdsSupplierSpec != null) {
+                cleanupActiveUserIdsSupplierSpec.bind(ActiveUserIdsSupplier.class)
+                                                .annotatedWith(CleanupSupplier.class)
+                                                .installedBy(this::installLifecycleComponentModule);
+                supplierBinder.setBinding().to(Key.get(ActiveUserIdsSupplier.class, CleanupSupplier.class));
+            }
             cleanupIntervalSpec.bind(Duration.class)
                                .annotatedWith(TimeSeriesCacheCleanupJob.CleanupInterval.class)
                                .installedBy(this::installLifecycleComponentModule);
+            cleanupRetentionSpec.bind(Duration.class)
+                                .annotatedWith(TimeSeriesCacheCleanupJob.CleanupRetention.class)
+                                .installedBy(this::installLifecycleComponentModule);
             registerLifecycleComponent(TimeSeriesCacheCleanupJob.class);
         }
         expose(exposedKey);
@@ -153,6 +167,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
         private @Nullable BindingSpec<VarStore> cleanupVarStoreSpec;
         private @Nullable BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec;
         private BindingSpec<Duration> cleanupIntervalSpec = literally(Duration.ofHours(24));
+        private BindingSpec<Duration> cleanupRetentionSpec = literally(CacheRetention.DEFAULT_RETENTION);
 
         public Builder setDataSourceFactory(BindingSpec<DataSourceFactory> dataSourceFactorySpec) {
             this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
@@ -169,16 +184,29 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
             return this;
         }
 
-        /// Enables the periodic cleanup job. Both the `VarStore` (for next-run-timestamp persistence) and the [ActiveUserIdsSupplier] must be supplied;
-        /// omitting either disables the job entirely.
+        /// Enables the periodic cleanup job with both its actions. The `VarStore` (for next-run-timestamp persistence) enables the always-on retention purge;
+        /// the [ActiveUserIdsSupplier] additionally enables orphan eviction. To enable only the retention purge, use [#withRetentionCleanup] instead.
         public Builder withCleanup(BindingSpec<VarStore> cleanupVarStoreSpec, BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec) {
-            this.cleanupVarStoreSpec = checkNotNull(cleanupVarStoreSpec, "cleanupVarStoreSpec");
+            withRetentionCleanup(cleanupVarStoreSpec);
             this.cleanupActiveUserIdsSupplierSpec = checkNotNull(cleanupActiveUserIdsSupplierSpec, "cleanupActiveUserIdsSupplierSpec");
+            return this;
+        }
+
+        /// Enables the periodic cleanup job with only the retention purge (rows older than the retention horizon are deleted). The `VarStore` persists the
+        /// next-run timestamp. Orphan eviction is left off; supply an [ActiveUserIdsSupplier] via [#withCleanup] to enable it too.
+        public Builder withRetentionCleanup(BindingSpec<VarStore> cleanupVarStoreSpec) {
+            this.cleanupVarStoreSpec = checkNotNull(cleanupVarStoreSpec, "cleanupVarStoreSpec");
             return this;
         }
 
         public Builder withCleanupInterval(BindingSpec<Duration> cleanupIntervalSpec) {
             this.cleanupIntervalSpec = checkNotNull(cleanupIntervalSpec, "cleanupIntervalSpec");
+            return this;
+        }
+
+        /// Overrides the retention horizon (rows with `slot_start` older than `now − retention` are purged). Defaults to [CacheRetention#DEFAULT_RETENTION].
+        public Builder withCleanupRetention(BindingSpec<Duration> cleanupRetentionSpec) {
+            this.cleanupRetentionSpec = checkNotNull(cleanupRetentionSpec, "cleanupRetentionSpec");
             return this;
         }
 
@@ -190,7 +218,8 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
                                              domainNameSpec,
                                              cleanupVarStoreSpec,
                                              cleanupActiveUserIdsSupplierSpec,
-                                             cleanupIntervalSpec);
+                                             cleanupIntervalSpec,
+                                             cleanupRetentionSpec);
         }
     }
 }
