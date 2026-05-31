@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
@@ -23,7 +24,7 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
                                                              Scope scope,
                                                              Resolution resolution,
                                                              TypeToken<T> type,
-                                                             Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation) {
+                                                             Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
         var key = new StreamKey(streamId, scope);
         InMemoryTimeSeriesStream<?> existingStream = streams.get(key);
         if (existingStream != null) {
@@ -70,15 +71,16 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
         private final String streamId;
         private final Resolution resolution;
         private final TypeToken<T> type;
-        private final Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation;
-        private final Map<Instant, T> rows = new HashMap<>();
+        private final Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation;
+        // A present Optional is a cached value; an empty Optional is a negative-cache tombstone. Both count as a hit, so a tombstoned slot is never recomputed.
+        private final Map<Instant, Optional<T>> rows = new HashMap<>();
         private final Object lock = new Object();
 
         InMemoryTimeSeriesStream(Scope scope,
                                  String streamId,
                                  Resolution resolution,
                                  TypeToken<T> type,
-                                 Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation) {
+                                 Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
             this.scope = scope;
             this.streamId = streamId;
             this.resolution = resolution;
@@ -89,11 +91,11 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
         @Override
         public CompletableFuture<ImmutableMap<Instant, T>> readRange(Instant fromInclusive, Instant toInclusive) {
             Duration step = resolution.step();
-            var hits = new HashMap<Instant, T>();
+            var hits = new HashMap<Instant, Optional<T>>();
             var missingSlots = new TreeSet<Instant>();
             synchronized (lock) {
                 for (Instant slot = fromInclusive; !slot.isAfter(toInclusive); slot = slot.plus(step)) {
-                    T value = rows.get(slot);
+                    Optional<T> value = rows.get(slot);
                     if (value != null) {
                         hits.put(slot, value);
                     } else {
@@ -105,10 +107,12 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
                 return CompletableFuture.completedFuture(TimeSeriesCacheUtil.buildOrderedMap(fromInclusive, toInclusive, step, hits, Map.of()));
             }
             return slotsComputation.apply(missingSlots).thenApply(computedSlots -> {
-                var computedValues = new HashMap<Instant, T>();
+                var computedValues = new HashMap<Instant, Optional<T>>();
                 synchronized (lock) {
                     for (Instant slot : missingSlots) {
-                        T value = computedSlots.get(slot);
+                        // A present value and an Optional.empty() tombstone are both retained (so the tombstone suppresses recomputation); a slot the
+                        //  computation omitted entirely stays absent and is recomputed on the next read.
+                        Optional<T> value = computedSlots.get(slot);
                         if (value != null) {
                             rows.put(slot, value);
                             computedValues.put(slot, value);

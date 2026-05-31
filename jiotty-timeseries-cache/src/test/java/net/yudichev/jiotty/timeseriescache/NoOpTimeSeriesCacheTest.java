@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -29,9 +30,9 @@ class NoOpTimeSeriesCacheTest {
         var invocations = new AtomicInteger();
         var stream = cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE, missingSlots -> {
             invocations.incrementAndGet();
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             for (Instant slot : missingSlots) {
-                values.put(slot, new TestValue("v-" + slot));
+                values.put(slot, Optional.of(new TestValue("v-" + slot)));
             }
             return CompletableFuture.completedFuture(values);
         });
@@ -50,10 +51,10 @@ class NoOpTimeSeriesCacheTest {
     @Test
     void readRange_returnsOnlyPresentSlots_inChronologicalOrder() {
         var stream = cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE, missingSlots -> {
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             for (Instant slot : missingSlots) {
                 if (!slot.equals(SLOT_APR_2)) {   // omit the middle slot
-                    values.put(slot, new TestValue("v-" + slot));
+                    values.put(slot, Optional.of(new TestValue("v-" + slot)));
                 }
             }
             return CompletableFuture.completedFuture(values);

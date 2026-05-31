@@ -27,6 +27,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -120,7 +121,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
                                                 Scope scope,
                                                 Resolution resolution,
                                                 TypeToken<T> type,
-                                                Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation) {
+                                                Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
         checkArgument(streamId != null && !streamId.isBlank(), "streamId must be non-blank");
         checkNotNull(scope, "scope");
         checkNotNull(resolution, "resolution");
@@ -153,11 +154,11 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doDeleteAllForStream(streamId)));
     }
 
-    <T> CompletableFuture<Map<Instant, T>> readRange(TimeSeriesStreamImpl<T> stream, Instant fromInclusive, Instant toInclusive) {
+    <T> CompletableFuture<Map<Instant, Optional<T>>> readRange(TimeSeriesStreamImpl<T> stream, Instant fromInclusive, Instant toInclusive) {
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doReadRange(stream, fromInclusive, toInclusive)));
     }
 
-    <T> CompletableFuture<Void> writeBatch(TimeSeriesStreamImpl<T> stream, Map<Instant, T> values) {
+    <T> CompletableFuture<Void> writeBatch(TimeSeriesStreamImpl<T> stream, Map<Instant, Optional<T>> values) {
         checkNotNull(values, "values");
         if (values.isEmpty()) {
             return CompletableFuture.completedFuture(null);
@@ -168,8 +169,8 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         }));
     }
 
-    private <T> Map<Instant, T> doReadRange(TimeSeriesStreamImpl<T> stream, Instant fromInclusive, Instant toInclusive) {
-        var out = new HashMap<Instant, T>();
+    private <T> Map<Instant, Optional<T>> doReadRange(TimeSeriesStreamImpl<T> stream, Instant fromInclusive, Instant toInclusive) {
+        var out = new HashMap<Instant, Optional<T>>();
         try (Connection connection = dataSource.getConnection();
              PreparedStatement stmt = connection.prepareStatement(selectRangeSql)) {
             bindScopeColumns(stmt, stream.scope());
@@ -179,8 +180,8 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     Instant slotStart = rs.getObject(1, OffsetDateTime.class).toInstant();
-                    T value = codecRegistry.decode(rs.getBytes(2), stream.type());
-                    out.put(slotStart, value);
+                    // decode yields Optional.empty() for a tombstone row (a known-empty hit that must not be recomputed) and Optional.of(value) otherwise.
+                    out.put(slotStart, codecRegistry.decode(rs.getBytes(2), stream.type()));
                 }
             }
         } catch (SQLException e) {
@@ -190,18 +191,18 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         return out;
     }
 
-    private <T> void doWriteBatch(TimeSeriesStreamImpl<T> stream, Map<Instant, T> values) {
+    private <T> void doWriteBatch(TimeSeriesStreamImpl<T> stream, Map<Instant, Optional<T>> values) {
         Instant now = timeProvider.currentInstant();
         Timestamp nowTs = Timestamp.from(now);
         try (Connection connection = dataSource.getConnection();
              PreparedStatement stmt = connection.prepareStatement(upsertSql)) {
-            for (Map.Entry<Instant, T> entry : values.entrySet()) {
+            for (Map.Entry<Instant, Optional<T>> entry : values.entrySet()) {
                 bindScopeColumns(stmt, stream.scope());
                 stmt.setString(3, stream.streamId());
                 stmt.setObject(4, entry.getKey().atOffset(ZoneOffset.UTC));
 
-                // setBinaryStream over a ByteArrayInputStream avoids pgjdbc's defensive byte[] copy that setBytes(byte[]) performs, so batch memory stays at
-                //  one byte[] per row — the one the codec returned. CodecRegistry.encode hands back a fresh array per call, safe to retain across rows.
+                // encode frames the value, or a tombstone for an empty Optional. setBinaryStream over a ByteArrayInputStream avoids pgjdbc's defensive
+                //  byte[] copy that setBytes(byte[]) performs, so batch memory stays at one byte[] per row; the frame is only read here, never mutated.
                 byte[] payload = codecRegistry.encode(entry.getValue());
                 stmt.setBinaryStream(5, new ByteArrayInputStream(payload), payload.length);
 

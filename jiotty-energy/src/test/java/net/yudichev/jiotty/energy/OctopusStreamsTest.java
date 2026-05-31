@@ -151,6 +151,52 @@ class OctopusStreamsTest {
     }
 
     @Test
+    void ratesStream_uncoveredSlot_isNotTombstoned_andIsReFetched() {
+        // The rates stream is shared with the live Agile scheduler, whose future/unpublished slots must stay re-queryable — so an uncovered slot is left
+        // absent (not tombstoned). A first read returning no covering rate must therefore re-fetch on the second read.
+        Instant slot = Instant.parse("2024-01-15T00:00:00Z");
+        when(regionService.getStandardUnitRates(eq(PRODUCT), eq(TARIFF), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of()));   // no rate published yet
+
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
+        assertThat(stream.readRange(slot, slot).join()).isEmpty();
+        assertThat(stream.readRange(slot, slot).join()).isEmpty();
+
+        verify(regionService, times(2)).getStandardUnitRates(any(), any(), any(), any());
+    }
+
+    @Test
+    void consumptionStream_missingSlot_isTombstoned_andNotReFetched() {
+        // A consumption slot with no published reading is tombstoned (negative-cached): excluded from the result, but the second read does not re-fetch it.
+        Instant from = Instant.parse("2024-01-15T00:00:00Z");
+        Instant to = Instant.parse("2024-01-15T00:30:00Z");   // two slots; the connector only returns the first
+        when(accountService.getConsumption(eq(MPAN), eq(SERIAL), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(
+                        consumption("2024-01-15T00:00:00Z", "2024-01-15T00:30:00Z", 0.345))));
+
+        TimeSeriesStream<ConsumptionRow> stream = OctopusStreams.consumptionStream(cache, accountService, USER, MPAN, SERIAL);
+        assertThat(stream.readRange(from, to).join()).containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"));
+        // Second read: both the value slot and the tombstoned empty slot are hits, so the connector is not called again.
+        assertThat(stream.readRange(from, to).join()).containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"));
+
+        verify(accountService, times(1)).getConsumption(any(), any(), any(), any());
+    }
+
+    @Test
+    void standingChargesStream_uncoveredSlot_isTombstoned_andNotReFetched() {
+        // A standing-charge stream is only read for settled past days, so a day no published charge covers is tombstoned and not re-requested.
+        Instant day = Instant.parse("2024-01-15T00:00:00Z");
+        when(regionService.getStandingCharges(eq(PRODUCT), eq(TARIFF), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of()));   // no charge covers the day
+
+        TimeSeriesStream<StandingCharge> stream = OctopusStreams.standingChargesStream(cache, regionService, PRODUCT, TARIFF);
+        assertThat(stream.readRange(day, day).join()).isEmpty();
+        assertThat(stream.readRange(day, day).join()).isEmpty();
+
+        verify(regionService, times(1)).getStandingCharges(any(), any(), any(), any());
+    }
+
+    @Test
     void ratesStream_blankProductCode_throws() {
         assertThatThrownBy(() -> OctopusStreams.ratesStream(cache, regionService, "", TARIFF))
                 .isInstanceOf(IllegalArgumentException.class)

@@ -4,6 +4,7 @@ import com.google.common.reflect.TypeToken;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
@@ -19,7 +20,10 @@ import java.util.function.Function;
 /// - [Scope.User] — per-user rows.
 /// - [Scope.Region] — per-region rows; the region code is the discriminator.
 ///
-/// All operations are asynchronous; misses surface as absent entries in the composed map, not errors.
+/// All operations are asynchronous; misses surface as absent entries in the composed map, not errors. A `slotsComputation` reports each requested slot in one
+/// of three states: a present value ([Optional#of]) is cached and returned; an explicit empty ([Optional#empty]) is a *negative-cache tombstone* — the slot is
+/// definitively empty, cached as such, and never recomputed; a slot absent from the returned map is left uncached and recomputed on the next read. Tombstoned
+/// and absent slots are both excluded from the composed value map; they differ only in whether a later read recomputes them.
 ///
 /// @implSpec Implementations MUST serialise and deserialise values idempotently using a single mapper configuration consistent across every method, so values
 /// written by any caller round-trip back to the same POJO shape regardless of which call made the write.
@@ -34,7 +38,7 @@ public interface TimeSeriesCache {
                                          Scope scope,
                                          Resolution resolution,
                                          TypeToken<T> type,
-                                         Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation);
+                                         Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation);
 
     /// Removes every cached entry whose [Scope] matches the argument exactly, and evicts every registered stream handle with the same scope. Use when the
     /// underlying scope-bearing entity goes away — e.g. a deleted user account ([Scope.User]), a decommissioned region ([Scope.Region]), or a flush of all

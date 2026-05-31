@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -78,7 +79,7 @@ class TimeSeriesStreamTest {
     }
 
     private TimeSeriesStream<TestValue> defineStream(Resolution resolution,
-                                                     Function<SortedSet<Instant>, CompletableFuture<Map<Instant, TestValue>>> slotsComputation) {
+                                                     Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<TestValue>>>> slotsComputation) {
         return cache.defineStream(uniqueStreamId(), SCOPE, resolution, TYPE, slotsComputation);
     }
 
@@ -98,9 +99,9 @@ class TimeSeriesStreamTest {
         var receivedSets = new ArrayList<SortedSet<Instant>>();
         var stream = defineStream(Resolution.halfHourly(), missingSlots -> {
             receivedSets.add(missingSlots);
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             for (Instant slot : missingSlots) {
-                values.put(slot, new TestValue(slot.toString()));
+                values.put(slot, Optional.of(new TestValue(slot.toString())));
             }
             return CompletableFuture.completedFuture(values);
         });
@@ -118,9 +119,9 @@ class TimeSeriesStreamTest {
         var stream = defineStream(Resolution.daily(), missingSlots -> {
             chunkInvocations.incrementAndGet();
             receivedSets.add(missingSlots);
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             for (Instant slot : missingSlots) {
-                values.put(slot, new TestValue("chunked-" + slot));
+                values.put(slot, Optional.of(new TestValue("chunked-" + slot)));
             }
             return CompletableFuture.completedFuture(values);
         });
@@ -142,10 +143,10 @@ class TimeSeriesStreamTest {
         var recordedSets = new ArrayList<SortedSet<Instant>>();
         var stream = cache.defineStream(uniqueStreamId(), SCOPE, Resolution.daily(), TYPE, missingSlots -> {
             recordedSets.add(missingSlots);
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             for (Instant slot : missingSlots) {
                 if (slot.equals(SLOT_APR_2) || slot.equals(SLOT_APR_4)) {
-                    values.put(slot, new TestValue("warm-" + slot));
+                    values.put(slot, Optional.of(new TestValue("warm-" + slot)));
                 }
             }
             return CompletableFuture.completedFuture(values);
@@ -168,9 +169,9 @@ class TimeSeriesStreamTest {
         var streamId = uniqueStreamId();
         var stream = cache.defineStream(streamId, SCOPE, Resolution.daily(), TYPE, missingSlots -> {
             invocations.incrementAndGet();
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             for (Instant slot : missingSlots) {
-                values.put(slot, new TestValue("c-" + slot));
+                values.put(slot, Optional.of(new TestValue("c-" + slot)));
             }
             return CompletableFuture.completedFuture(values);
         });
@@ -189,15 +190,15 @@ class TimeSeriesStreamTest {
     @Test
     void omittedKeysAreTreatedAsNoValue_andNotCached() {
         // Lambda returns a map that contains only some of the missing slots; the omitted ones must be treated as having no value (no write, omitted from
-        // the composed output).
+        // the composed output). Omission is distinct from a tombstone (Optional.empty): an omitted slot stays uncached and is re-queried.
         var receivedSets = new ArrayList<SortedSet<Instant>>();
         var streamId = uniqueStreamId();
         var stream = cache.defineStream(streamId, SCOPE, Resolution.daily(), TYPE, missingSlots -> {
             receivedSets.add(missingSlots);
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             for (Instant slot : missingSlots) {
                 if (slot.equals(SLOT_APR_2) || slot.equals(SLOT_APR_4)) {
-                    values.put(slot, new TestValue("filled-" + slot));
+                    values.put(slot, Optional.of(new TestValue("filled-" + slot)));
                 }
                 // Omit SLOT_APR_1, SLOT_APR_3, SLOT_APR_5 entirely.
             }
@@ -214,6 +215,37 @@ class TimeSeriesStreamTest {
     }
 
     @Test
+    void emptyOptionalIsTombstoned_andNotRecomputed() {
+        // A slot the lambda resolves to Optional.empty() is a negative-cache tombstone: it is excluded from the composed output (no value), but unlike an
+        // omitted slot it IS cached, so a later compose does not re-query it. Slots 2 and 4 get values; slots 1, 3, 5 get tombstones.
+        var receivedSets = new ArrayList<SortedSet<Instant>>();
+        var streamId = uniqueStreamId();
+        var stream = cache.defineStream(streamId, SCOPE, Resolution.daily(), TYPE, missingSlots -> {
+            receivedSets.add(missingSlots);
+            var values = new HashMap<Instant, Optional<TestValue>>();
+            for (Instant slot : missingSlots) {
+                if (slot.equals(SLOT_APR_2) || slot.equals(SLOT_APR_4)) {
+                    values.put(slot, Optional.of(new TestValue("v-" + slot)));
+                } else {
+                    values.put(slot, Optional.empty());
+                }
+            }
+            return CompletableFuture.completedFuture(values);
+        });
+
+        Map<Instant, TestValue> firstResult = stream.readRange(SLOT_APR_1, SLOT_APR_5).orTimeout(5, SECONDS).join();
+        assertThat(firstResult).containsOnlyKeys(SLOT_APR_2, SLOT_APR_4);
+
+        // Second compose over the same range: every slot is now a hit (values + tombstones), so the lambda is not invoked at all.
+        receivedSets.clear();
+        Map<Instant, TestValue> secondResult = stream.readRange(SLOT_APR_1, SLOT_APR_5).orTimeout(5, SECONDS).join();
+        assertThat(receivedSets).isEmpty();
+        assertThat(secondResult).containsOnlyKeys(SLOT_APR_2, SLOT_APR_4)
+                                .containsEntry(SLOT_APR_2, new TestValue("v-" + SLOT_APR_2))
+                                .containsEntry(SLOT_APR_4, new TestValue("v-" + SLOT_APR_4));
+    }
+
+    @Test
     void singleSlotFilledOthersOmitted_onlyTheFilledSlotIsCached() {
         // Sparse-fill variant of omittedKeysAreTreatedAsNoValue_andNotCached: only one slot in the requested range gets a value, the others are omitted
         // from the lambda's returned map. None of the omitted slots are cached, so a re-compose asks the lambda for them again.
@@ -221,10 +253,10 @@ class TimeSeriesStreamTest {
         var streamId = uniqueStreamId();
         var stream = cache.defineStream(streamId, SCOPE, Resolution.daily(), TYPE, missingSlots -> {
             receivedSets.add(missingSlots);
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             for (Instant slot : missingSlots) {
                 if (slot.equals(SLOT_APR_3)) {
-                    values.put(slot, new TestValue("only-3"));
+                    values.put(slot, Optional.of(new TestValue("only-3")));
                 }
             }
             return CompletableFuture.completedFuture(values);
@@ -244,16 +276,16 @@ class TimeSeriesStreamTest {
         var streamId = uniqueStreamId();
         var firstCallSeen = new AtomicBoolean(false);
         var stream = cache.defineStream(streamId, SCOPE, Resolution.daily(), TYPE, missingSlots -> {
-            var values = new HashMap<Instant, TestValue>();
+            var values = new HashMap<Instant, Optional<TestValue>>();
             if (firstCallSeen.getAndSet(true)) {
                 // Second call: fill all missing slots with "fresh-" values, plus an over-fetched entry for slot 2 (already cached, NOT in `missing`).
                 for (Instant slot : missingSlots) {
-                    values.put(slot, new TestValue("fresh-" + slot));
+                    values.put(slot, Optional.of(new TestValue("fresh-" + slot)));
                 }
-                values.put(SLOT_APR_2, new TestValue("over-fetched-overwrite-attempt"));
+                values.put(SLOT_APR_2, Optional.of(new TestValue("over-fetched-overwrite-attempt")));
             } else {
                 // First call: warm slot 2 only.
-                values.put(SLOT_APR_2, new TestValue("cached-2"));
+                values.put(SLOT_APR_2, Optional.of(new TestValue("cached-2")));
             }
             return CompletableFuture.completedFuture(values);
         });

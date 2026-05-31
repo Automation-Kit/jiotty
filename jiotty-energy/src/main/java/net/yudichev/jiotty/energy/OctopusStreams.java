@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Optional;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.function.Function;
@@ -47,8 +48,9 @@ public final class OctopusStreams {
 
     /// Defines (or returns the existing) `octopus.rates:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandardUnitRates].
     /// Each half-hour slot maps to whichever returned rate's `[validFrom, validTo)` window contains it: an exact match for half-hourly tariffs (each
-    /// window is one half-hour), the covering window for flat or multi-day tariffs. Slots no returned rate covers are omitted so a future call
-    /// re-requests them.
+    /// window is one half-hour), the covering window for flat or multi-day tariffs. A slot no returned rate covers is left absent (uncached) so a future read
+    /// requests it again: an uncovered slot can be a future or not-yet-published half-hour whose rate will exist later, so it must stay re-queryable rather
+    /// than be recorded as definitively empty.
     public static TimeSeriesStream<StandardUnitRate> ratesStream(TimeSeriesCache cache,
                                                                  OctopusRegionService regionService,
                                                                  String productCode,
@@ -61,12 +63,13 @@ public final class OctopusStreams {
                 new TypeToken<>() {},
                 slots -> regionService.getStandardUnitRates(productCode, tariffCode, slots.first(), slots.last().plus(HALF_HOUR))
                                       .thenApply(rates -> mapSlotsToCoveringWindow(
-                                              slots, rates, StandardUnitRate::validFrom, StandardUnitRate::validTo)));
+                                              slots, rates, StandardUnitRate::validFrom, StandardUnitRate::validTo, false)));
     }
 
     /// Defines (or returns the existing) `octopus.standing:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandingCharges]. Each daily
     /// slot maps to whichever returned charge's `[validFrom, validTo)` window contains the slot's start instant; slots not covered by any returned charge are
-    /// omitted from the cached result so a future call re-requests them.
+    /// tombstoned (negative-cached) so a future call does not re-request them — this stream is only ever read for settled past days, so an uncovered slot is
+    /// definitively empty.
     public static TimeSeriesStream<StandingCharge> standingChargesStream(TimeSeriesCache cache,
                                                                          OctopusRegionService regionService,
                                                                          String productCode,
@@ -81,11 +84,14 @@ public final class OctopusStreams {
                                              .thenApply(charges -> mapSlotsToCoveringWindow(missingSlots,
                                                                                             charges,
                                                                                             StandingCharge::validFrom,
-                                                                                            charge -> charge.validTo().orElse(null))));
+                                                                                            charge -> charge.validTo().orElse(null),
+                                                                                            true)));
     }
 
     /// Defines (or returns the existing) `octopus.consumption:<mpan>:<meterSerial>` stream backed by [OctopusAccountService#getConsumption]. The stream is
-    /// scoped to the supplied `userId` since consumption data is per-account.
+    /// scoped to the supplied `userId` since consumption data is per-account. Requested slots with no matching consumption row are tombstoned (negative-cached)
+    /// so a future call does not re-request them — this stream is only ever read for settled past days, so a slot with no published reading is definitively
+    /// empty.
     public static TimeSeriesStream<ConsumptionRow> consumptionStream(TimeSeriesCache cache,
                                                                      OctopusAccountService accountService,
                                                                      String userId,
@@ -102,7 +108,7 @@ public final class OctopusStreams {
                 Resolution.halfHourly(),
                 new TypeToken<>() {},
                 slots -> accountService.getConsumption(mpan, meterSerial, slots.first(), slots.last().plus(HALF_HOUR))
-                                       .thenApply(rows -> indexBy(slots, rows, ConsumptionRow::intervalStart)));
+                                       .thenApply(rows -> indexByTombstoningMisses(slots, rows, ConsumptionRow::intervalStart)));
     }
 
     /// Shared precondition prelude for [#ratesStream] / [#standingChargesStream]: validates non-null cache + service and non-blank product/tariff codes, then
@@ -115,15 +121,19 @@ public final class OctopusStreams {
         return tariffCode.charAt(tariffCode.length() - 1);
     }
 
-    /// Builds a `slot → value` map by indexing each returned row by its `slotKeyExtractor`, then intersecting with the requested slot set. Rows whose key falls
-    /// outside `slots` are dropped; slots with no matching row are omitted from the map (so the cache marks them as still-missing).
-    private static <T> Map<Instant, T> indexBy(SortedSet<Instant> slots, List<T> rows, Function<T, Instant> slotKeyExtractor) {
-        var result = HashMap.<Instant, T>newHashMap(rows.size());
+    /// Builds a `slot → Optional<value>` map by indexing each returned row by its `slotKeyExtractor`, then resolving every requested slot: a slot with a
+    /// matching row carries [Optional#of] that row; a requested slot with no matching row carries [Optional#empty] — a negative-cache tombstone, so the slot is
+    /// not re-requested. Rows whose key falls outside `slots` are dropped.
+    private static <T> Map<Instant, Optional<T>> indexByTombstoningMisses(SortedSet<Instant> slots, List<T> rows, Function<T, Instant> slotKeyExtractor) {
+        // Seed every requested slot with a tombstone, then overwrite the slots a row lands on. One map, O(slots + rows): after seeding, the result's keys ARE
+        //  the requested slots, so replace() updates a seeded slot in a single O(1) lookup and no-ops for a row whose key isn't a requested slot — no separate
+        //  index, no per-row O(log) SortedSet membership probe.
+        var result = HashMap.<Instant, Optional<T>>newHashMap(slots.size());
+        for (Instant slot : slots) {
+            result.put(slot, Optional.empty());
+        }
         for (T row : rows) {
-            Instant key = slotKeyExtractor.apply(row);
-            if (slots.contains(key)) {
-                result.put(key, row);
-            }
+            result.replace(slotKeyExtractor.apply(row), Optional.of(row));
         }
         return result;
     }
@@ -131,24 +141,32 @@ public final class OctopusStreams {
     /// Maps each requested slot to the row whose `[validFrom, validTo)` window contains it, where a null `validToExclusive` means "open-ended" (the current
     /// row). Rows are indexed by `validFrom` in a [NavigableMap], so each slot resolves with one floor lookup: an exact match when a window starts on the slot
     /// (half-hourly data), the covering window otherwise (flat or multi-day data). Windows are non-overlapping, so the latest window starting at-or-before the
-    /// slot is the one covering it. Slots no window covers are omitted, so the cache re-requests them later. The `byStart` index is the intermediate that earns
-    /// its keep: it turns the per-slot covering lookup from an O(slots·rows) scan into O(slots·log rows).
-    private static <T> Map<Instant, T> mapSlotsToCoveringWindow(SortedSet<Instant> requestedMissingSlots,
-                                                                List<T> rows,
-                                                                Function<T, Instant> validFrom,
-                                                                Function<T, @Nullable Instant> validToExclusive) {
+    /// slot is the one covering it. A covered slot carries [Optional#of] the row. A slot no window covers carries [Optional#empty] (a negative-cache tombstone,
+    /// so it is not re-requested) when `tombstoneMisses` is true, or is omitted entirely (so the cache re-requests it later) when false. The `byStart` index is
+    /// the intermediate that earns its keep: it turns the per-slot covering lookup from an O(slots·rows) scan into O(slots·log rows).
+    private static <T> Map<Instant, Optional<T>> mapSlotsToCoveringWindow(SortedSet<Instant> requestedMissingSlots,
+                                                                          List<T> rows,
+                                                                          Function<T, Instant> validFrom,
+                                                                          Function<T, @Nullable Instant> validToExclusive,
+                                                                          boolean tombstoneMisses) {
         NavigableMap<Instant, T> byStart = new TreeMap<>();
         for (T row : rows) {
             byStart.put(validFrom.apply(row), row);
         }
-        var result = HashMap.<Instant, T>newHashMap(requestedMissingSlots.size());
+        var result = HashMap.<Instant, Optional<T>>newHashMap(requestedMissingSlots.size());
         for (Instant slot : requestedMissingSlots) {
             Map.Entry<Instant, T> covering = byStart.floorEntry(slot);
+            T value = null;
             if (covering != null) {
                 Instant end = validToExclusive.apply(covering.getValue());
                 if (end == null || slot.isBefore(end)) {
-                    result.put(slot, covering.getValue());
+                    value = covering.getValue();
                 }
+            }
+            if (value != null) {
+                result.put(slot, Optional.of(value));
+            } else if (tombstoneMisses) {
+                result.put(slot, Optional.empty());
             }
         }
         return result;

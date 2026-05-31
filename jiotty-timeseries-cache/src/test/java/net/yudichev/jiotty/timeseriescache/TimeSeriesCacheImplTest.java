@@ -24,8 +24,10 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -88,11 +90,11 @@ class TimeSeriesCacheImplTest {
     /// Wires a stream that fetches missing slots from a fixed `seedRows` map, recording the slot sets handed to the lambda for assertion.
     private TimeSeriesStream<TestRow> defineStreamWithSeed(String streamId, Scope scope, Resolution resolution, Map<Instant, TestRow> seedRows) {
         return service.defineStream(streamId, scope, resolution, ROW_TYPE, missingSlots -> {
-            var out = new HashMap<Instant, TestRow>();
+            var out = new HashMap<Instant, Optional<TestRow>>();
             for (Instant slot : missingSlots) {
                 TestRow row = seedRows.get(slot);
                 if (row != null) {
-                    out.put(slot, row);
+                    out.put(slot, Optional.of(row));
                 }
             }
             return CompletableFuture.completedFuture(out);
@@ -128,6 +130,28 @@ class TimeSeriesCacheImplTest {
 
         var result = compose(stream, SLOT_APR_1, SLOT_APR_1);
         assertThat(result).containsEntry(SLOT_APR_1, new TestRow("2026-04-01", 1, "a"));
+    }
+
+    @Test
+    void emptyOptional_isPersistedAsTombstone_andNotRecomputed() {
+        // A slot resolved to Optional.empty() is written as a tombstone row. A re-compose (even via a freshly-registered stream whose lambda would now return
+        //  a value) must read it back as a known-empty hit — proving the tombstone frame round-trips through Postgres and suppresses recomputation.
+        var firstCallSlots = new AtomicInteger();
+        var tombstoning = service.defineStream(STREAM_A, Scope.user("user-1"), Resolution.daily(), ROW_TYPE, missingSlots -> {
+            firstCallSlots.addAndGet(missingSlots.size());
+            var out = new HashMap<Instant, Optional<TestRow>>();
+            missingSlots.forEach(slot -> out.put(slot, Optional.empty()));
+            return CompletableFuture.completedFuture(out);
+        });
+        assertThat(compose(tombstoning, SLOT_APR_1, SLOT_APR_3)).isEmpty();
+        assertThat(firstCallSlots.get()).isEqualTo(3);
+
+        // Fresh stream registration for the same key after eviction; its lambda would return a value, but every slot is tombstoned so it is never asked.
+        service.deleteAllForStream(STREAM_A).orTimeout(5, SECONDS).join();
+        var reseed = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(),
+                                          Map.of(SLOT_APR_2, new TestRow("2026-04-02", 2, "fresh")));
+        // Cache was cleared, so the fresh lambda runs again and its value for SLOT_APR_2 surfaces — confirms deleteAllForStream evicted the tombstone rows too.
+        assertThat(compose(reseed, SLOT_APR_1, SLOT_APR_3)).containsEntry(SLOT_APR_2, new TestRow("2026-04-02", 2, "fresh"));
     }
 
     @Test
@@ -186,7 +210,7 @@ class TimeSeriesCacheImplTest {
     @Test
     void defineStream_conflictingType_throws() {
         defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of());
-        Function<SortedSet<Instant>, CompletableFuture<Map<Instant, String>>> empty =
+        Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<String>>>> empty =
                 _ -> CompletableFuture.completedFuture(Map.of());
         assertThatThrownBy(() -> service.defineStream(STREAM_A, Scope.user("user-1"), Resolution.daily(), TypeToken.of(String.class), empty))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -414,9 +438,9 @@ class TimeSeriesCacheImplTest {
         try {
             var stream = jsonWriter.defineStream(STREAM_A, Scope.user("user-1"), Resolution.daily(), ROW_TYPE,
                                                  missingSlots -> {
-                                                     var out = new HashMap<Instant, TestRow>();
+                                                     var out = new HashMap<Instant, Optional<TestRow>>();
                                                      for (Instant slot : missingSlots) {
-                                                         out.put(slot, new TestRow("2026-04-02", 9, "json"));
+                                                         out.put(slot, Optional.of(new TestRow("2026-04-02", 9, "json")));
                                                      }
                                                      return CompletableFuture.completedFuture(out);
                                                  });

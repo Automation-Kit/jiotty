@@ -27,10 +27,9 @@ class CodecRegistryTest {
         var registry = new CodecRegistry(writeCodec, List.of(JSON, SMILE));
         var value = new Sample("hello", 42, true);
 
-        byte[] frame = registry.encode(value);
-        Sample back = registry.decode(frame, TypeToken.of(Sample.class));
+        byte[] frame = registry.encode(Optional.of(value));
 
-        assertThat(back).isEqualTo(value);
+        assertThat(registry.decode(frame, TypeToken.of(Sample.class))).hasValue(value);
     }
 
     @ParameterizedTest
@@ -39,10 +38,9 @@ class CodecRegistryTest {
         var registry = new CodecRegistry(writeCodec, List.of(JSON, SMILE));
         var value = new TemporalSample(Optional.of("present"), Optional.empty(), Instant.parse("2026-05-16T12:34:56Z"), LocalDate.of(2026, 5, 16));
 
-        byte[] frame = registry.encode(value);
-        TemporalSample back = registry.decode(frame, TypeToken.of(TemporalSample.class));
+        byte[] frame = registry.encode(Optional.of(value));
 
-        assertThat(back).isEqualTo(value);
+        assertThat(registry.decode(frame, TypeToken.of(TemporalSample.class))).hasValue(value);
     }
 
     @ParameterizedTest
@@ -51,10 +49,9 @@ class CodecRegistryTest {
         var registry = new CodecRegistry(writeCodec, List.of(JSON, SMILE));
         var value = new CollectionSample(ImmutableList.of("a", "b", "c"), ImmutableMap.of("k1", 1, "k2", 2));
 
-        byte[] frame = registry.encode(value);
-        CollectionSample back = registry.decode(frame, TypeToken.of(CollectionSample.class));
+        byte[] frame = registry.encode(Optional.of(value));
 
-        assertThat(back).isEqualTo(value);
+        assertThat(registry.decode(frame, TypeToken.of(CollectionSample.class))).hasValue(value);
     }
 
     @ParameterizedTest
@@ -64,10 +61,9 @@ class CodecRegistryTest {
         var value = Map.of(LocalDate.of(2026, 5, 16), new Sample("a", 1, false),
                            LocalDate.of(2026, 5, 17), new Sample("b", 2, true));
 
-        byte[] frame = registry.encode(value);
-        Map<LocalDate, Sample> back = registry.decode(frame, new TypeToken<>() {});
+        byte[] frame = registry.encode(Optional.of(value));
 
-        assertThat(back).isEqualTo(value);
+        assertThat(registry.<Map<LocalDate, Sample>>decode(frame, new TypeToken<>() {})).hasValue(value);
     }
 
     @Test
@@ -75,8 +71,8 @@ class CodecRegistryTest {
         var jsonRegistry = new CodecRegistry(JSON, List.of(JSON));
         var smileRegistry = new CodecRegistry(SMILE, List.of(SMILE));
 
-        byte[] jsonFrame = jsonRegistry.encode(new Sample("x", 0, false));
-        byte[] smileFrame = smileRegistry.encode(new Sample("x", 0, false));
+        byte[] jsonFrame = jsonRegistry.encode(Optional.of(new Sample("x", 0, false)));
+        byte[] smileFrame = smileRegistry.encode(Optional.of(new Sample("x", 0, false)));
 
         assertThat(jsonFrame[0]).isEqualTo(CodecRegistry.MAGIC);
         assertThat(jsonFrame[1]).isEqualTo(CodecRegistry.FMT_JSON_UTF8);
@@ -87,7 +83,7 @@ class CodecRegistryTest {
     @Test
     void encodeReturnsFramePlusPayloadBytes() {
         var registry = new CodecRegistry(SMILE, List.of(SMILE));
-        byte[] frame = registry.encode(new Sample("x", 0, false));
+        byte[] frame = registry.encode(Optional.of(new Sample("x", 0, false)));
 
         // Framed shape: [MAGIC, FMTID, ...payload]. Header is 2 bytes; payload is non-empty for any non-trivial value.
         assertThat(frame).hasSizeGreaterThan(2);
@@ -99,10 +95,38 @@ class CodecRegistryTest {
         var registry = new CodecRegistry(SMILE, List.of(JSON, SMILE));
         var value = new Sample("mixed", 7, false);
 
-        byte[] jsonRow = new CodecRegistry(JSON, List.of(JSON)).encode(value);
-        Sample back = registry.decode(jsonRow, TypeToken.of(Sample.class));
+        byte[] jsonRow = new CodecRegistry(JSON, List.of(JSON)).encode(Optional.of(value));
 
-        assertThat(back).isEqualTo(value);
+        assertThat(registry.decode(jsonRow, TypeToken.of(Sample.class))).hasValue(value);
+    }
+
+    @Test
+    void encodingEmptyProducesTombstoneFrameWithNoPayload() {
+        var registry = new CodecRegistry(SMILE, List.of(SMILE));
+
+        byte[] frame = registry.encode(Optional.empty());
+
+        assertThat(frame).containsExactly(CodecRegistry.MAGIC, CodecRegistry.FMT_TOMBSTONE);
+    }
+
+    @Test
+    void encodingEmptyReturnsTheSharedTombstoneConstant() {
+        // The tombstone frame is invariant, so it is allocated once and shared — every empty encode returns the very same array, not a fresh copy.
+        var registry = new CodecRegistry(SMILE, List.of(SMILE));
+
+        byte[] first = registry.encode(Optional.empty());
+        byte[] second = registry.encode(Optional.empty());
+
+        assertThat(first).isSameAs(second);
+    }
+
+    @Test
+    void tombstoneFrameDecodesToEmptyWhileValueFrameDecodesToPresent() {
+        var registry = new CodecRegistry(SMILE, List.of(SMILE));
+        var value = new Sample("x", 1, false);
+
+        assertThat(registry.decode(registry.encode(Optional.empty()), TypeToken.of(Sample.class))).isEmpty();
+        assertThat(registry.decode(registry.encode(Optional.of(value)), TypeToken.of(Sample.class))).hasValue(value);
     }
 
     @Test
@@ -113,8 +137,8 @@ class CodecRegistryTest {
         // 50 records with the same field-name set — Smile's shared-string back-references compress these.
         List<Sample> manyRows = Stream.iterate(0, i -> i + 1).limit(50).map(i -> new Sample("row-" + i, i, i % 2 == 0)).toList();
 
-        int jsonSize = jsonRegistry.encode(manyRows).length;
-        int smileSize = smileRegistry.encode(manyRows).length;
+        int jsonSize = jsonRegistry.encode(Optional.of(manyRows)).length;
+        int smileSize = smileRegistry.encode(Optional.of(manyRows)).length;
 
         assertThat(smileSize).isLessThan(jsonSize);
     }
@@ -122,7 +146,8 @@ class CodecRegistryTest {
     @Test
     void rejectsFrameWithWrongMagic() {
         var registry = new CodecRegistry(SMILE, List.of(JSON, SMILE));
-        byte[] corruptFrame = {(byte) 0xFF, CodecRegistry.FMT_SMILE, 0x00, 0x00};
+        // Two bytes (so the tombstone-length check passes) but the wrong magic — must be rejected, not mistaken for a tombstone.
+        byte[] corruptFrame = {(byte) 0xFF, CodecRegistry.FMT_SMILE};
 
         assertThatThrownBy(() -> registry.decode(corruptFrame, TypeToken.of(Sample.class)))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -132,7 +157,8 @@ class CodecRegistryTest {
     @Test
     void rejectsFrameWithUnknownFormatId() {
         var registry = new CodecRegistry(SMILE, List.of(JSON, SMILE));
-        byte[] unknownFormatFrame = {CodecRegistry.MAGIC, (byte) 0x7F, 0x00, 0x00};
+        // Two bytes with the right magic but a format id that is neither a known codec nor the tombstone marker — must be rejected as an unknown format.
+        byte[] unknownFormatFrame = {CodecRegistry.MAGIC, (byte) 0x7F};
 
         assertThatThrownBy(() -> registry.decode(unknownFormatFrame, TypeToken.of(Sample.class)))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -179,9 +205,9 @@ class CodecRegistryTest {
         // Per-row durability: a returned `byte[]` must remain stable across subsequent encode cycles, so batched callers can retain it. The reusable internal
         // buffer is reset between calls, but each encode hands back a fresh `byte[]` snapshot.
         var registry = new CodecRegistry(SMILE, List.of(SMILE));
-        byte[] first = registry.encode(new Sample("x", 0, false));
+        byte[] first = registry.encode(Optional.of(new Sample("x", 0, false)));
         byte[] firstCopy = first.clone();
-        byte[] second = registry.encode(new Sample("y", 1, true));
+        byte[] second = registry.encode(Optional.of(new Sample("y", 1, true)));
 
         assertThat(first).isNotSameAs(second);
         // The first encode's bytes must NOT have been clobbered by the second encode.
@@ -195,18 +221,18 @@ class CodecRegistryTest {
         var v2 = new Sample("two", 2, true);
         var v3 = new Sample("three", 3, false);
 
-        byte[] b1 = registry.encode(v1);
-        Sample back1 = registry.decode(b1, TypeToken.of(Sample.class));
+        byte[] b1 = registry.encode(Optional.of(v1));
+        Optional<Sample> back1 = registry.decode(b1, TypeToken.of(Sample.class));
 
-        byte[] b2 = registry.encode(v2);
-        Sample back2 = registry.decode(b2, TypeToken.of(Sample.class));
+        byte[] b2 = registry.encode(Optional.of(v2));
+        Optional<Sample> back2 = registry.decode(b2, TypeToken.of(Sample.class));
 
-        byte[] b3 = registry.encode(v3);
-        Sample back3 = registry.decode(b3, TypeToken.of(Sample.class));
+        byte[] b3 = registry.encode(Optional.of(v3));
+        Optional<Sample> back3 = registry.decode(b3, TypeToken.of(Sample.class));
 
-        assertThat(back1).isEqualTo(v1);
-        assertThat(back2).isEqualTo(v2);
-        assertThat(back3).isEqualTo(v3);
+        assertThat(back1).hasValue(v1);
+        assertThat(back2).hasValue(v2);
+        assertThat(back3).hasValue(v3);
     }
 
     @Test
@@ -217,15 +243,12 @@ class CodecRegistryTest {
         var smallValue = new Sample("s", 0, false);
         var bigValue = new Sample("x".repeat(4096), 99, true); // forces growth past the 256-byte default
 
-        registry.encode(smallValue);
-        byte[] bigFrame = registry.encode(bigValue);
+        registry.encode(Optional.of(smallValue));
+        byte[] bigFrame = registry.encode(Optional.of(bigValue));
+        byte[] smallFrameAfterGrowth = registry.encode(Optional.of(smallValue));
 
-        Sample backBig = registry.decode(bigFrame, TypeToken.of(Sample.class));
-        byte[] smallFrameAfterGrowth = registry.encode(smallValue);
-        Sample backSmall = registry.decode(smallFrameAfterGrowth, TypeToken.of(Sample.class));
-
-        assertThat(backBig).isEqualTo(bigValue);
-        assertThat(backSmall).isEqualTo(smallValue);
+        assertThat(registry.decode(bigFrame, TypeToken.of(Sample.class))).hasValue(bigValue);
+        assertThat(registry.decode(smallFrameAfterGrowth, TypeToken.of(Sample.class))).hasValue(smallValue);
     }
 
     @Test

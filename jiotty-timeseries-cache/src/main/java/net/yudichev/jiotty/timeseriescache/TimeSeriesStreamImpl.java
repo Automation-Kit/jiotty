@@ -10,6 +10,7 @@ import org.apache.logging.log4j.Logger;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
@@ -26,7 +27,7 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
     private final Scope scope;
     private final Resolution resolution;
     private final TypeToken<T> type;
-    private final Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation;
+    private final Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation;
     private final Duration slotStep;
     private final long resolutionStepSeconds;
     private final String logPrefix;
@@ -36,7 +37,7 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
                          Scope scope,
                          Resolution resolution,
                          TypeToken<T> type,
-                         Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation) {
+                         Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
         this.cache = checkNotNull(cache, "cache");
         this.streamId = checkNotNull(streamId, "streamId");
         this.scope = checkNotNull(scope, "scope");
@@ -73,7 +74,7 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
                     .thenCompose(hits -> fillMisses(fromInclusive, toInclusive, hits));
     }
 
-    private CompletableFuture<ImmutableMap<Instant, T>> fillMisses(Instant fromInclusive, Instant toInclusive, Map<Instant, T> hits) {
+    private CompletableFuture<ImmutableMap<Instant, T>> fillMisses(Instant fromInclusive, Instant toInclusive, Map<Instant, Optional<T>> hits) {
         BitmapSlotSet missingSlots = listMissingSlots(fromInclusive, toInclusive, hits);
         logger.debug("{} readRange {}..{} hits={} misses={}", logPrefix, fromInclusive, toInclusive, hits.size(), missingSlots.size());
         if (missingSlots.isEmpty()) {
@@ -85,21 +86,22 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
 
     private CompletableFuture<ImmutableMap<Instant, T>> writeBackAndMerge(Instant fromInclusive,
                                                                           Instant toInclusive,
-                                                                          Map<Instant, T> hits,
+                                                                          Map<Instant, Optional<T>> hits,
                                                                           BitmapSlotSet missingSlots,
-                                                                          Map<Instant, T> computedSlots) {
+                                                                          Map<Instant, Optional<T>> computedSlots) {
         // Lazy view: filtering happens on iteration / lookup, no copy of the underlying map. `missingSlots.contains(...)` is O(1) on the bitmap, so
         //  over-fetched entries the lambda returned outside the missing set fall out for free — those slots are already cached at known values and we
-        //  don't want surprise overwrites.
-        Map<Instant, T> computedValues = Maps.filterKeys(computedSlots, missingSlots::contains);
-        if (computedValues.isEmpty()) {
+        //  don't want surprise overwrites. Both present values and Optional.empty() tombstones inside the missing set are written back, so a slot the
+        //  computation declared definitively empty is cached as a tombstone and never recomputed; a slot it omitted entirely stays absent and is recomputed.
+        Map<Instant, Optional<T>> computedSlotsInRange = Maps.filterKeys(computedSlots, missingSlots::contains);
+        if (computedSlotsInRange.isEmpty()) {
             return CompletableFuture.completedFuture(buildOrderedMap(fromInclusive, toInclusive, slotStep, hits, Map.of()));
         }
-        return cache.writeBatch(this, computedValues)
-                    .thenApply(_ -> buildOrderedMap(fromInclusive, toInclusive, slotStep, hits, computedValues));
+        return cache.writeBatch(this, computedSlotsInRange)
+                    .thenApply(_ -> buildOrderedMap(fromInclusive, toInclusive, slotStep, hits, computedSlotsInRange));
     }
 
-    private BitmapSlotSet listMissingSlots(Instant fromInclusive, Instant toInclusive, Map<Instant, T> hits) {
+    private BitmapSlotSet listMissingSlots(Instant fromInclusive, Instant toInclusive, Map<Instant, Optional<T>> hits) {
         long deltaSeconds = toInclusive.getEpochSecond() - fromInclusive.getEpochSecond();
         int capacity = Math.toIntExact(deltaSeconds / resolutionStepSeconds + 1);
         var slots = new BitmapSlotSet(fromInclusive, resolutionStepSeconds, capacity);

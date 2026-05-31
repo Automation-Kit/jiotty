@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
@@ -25,7 +26,7 @@ public final class NoOpTimeSeriesCache implements TimeSeriesCache {
                                                              Scope scope,
                                                              Resolution resolution,
                                                              TypeToken<T> type,
-                                                             Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation) {
+                                                             Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
         var key = new StreamKey(streamId, scope);
         NoOpTimeSeriesStream<?> existingStream = streams.get(key);
         if (existingStream != null) {
@@ -57,7 +58,7 @@ public final class NoOpTimeSeriesCache implements TimeSeriesCache {
     /// redefinition of the same `(streamId, scope)` with a different element type.
     private record NoOpTimeSeriesStream<T>(Resolution resolution,
                                            TypeToken<T> type,
-                                           Function<SortedSet<Instant>, CompletableFuture<Map<Instant, T>>> slotsComputation)
+                                           Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation)
             implements TimeSeriesStream<T> {
         @Override
         public CompletableFuture<ImmutableMap<Instant, T>> readRange(Instant fromInclusive, Instant toInclusive) {
