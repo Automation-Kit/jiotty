@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.energy;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
@@ -12,11 +13,17 @@ import net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage;
 import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import net.yudichev.jiotty.connector.octopusenergy.ConsumptionRow;
 import net.yudichev.jiotty.connector.octopusenergy.ElectricityMeter;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountData;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
+import net.yudichev.jiotty.connector.octopusenergy.Product;
+import net.yudichev.jiotty.connector.octopusenergy.ProductDetails;
+import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
+import net.yudichev.jiotty.connector.octopusenergy.StandingCharge;
 import net.yudichev.jiotty.connector.octopusenergy.Tariff;
+import net.yudichev.jiotty.timeseriescache.TimeSeriesCache;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
@@ -24,9 +31,11 @@ import org.jspecify.annotations.Nullable;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -62,6 +71,9 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     private final RetryableOperationExecutor retryExecutor;
     private final OctopusAgilePriceServiceRegistry octopusRegistry;
     private final AgilePredictPriceServiceRegistry agilePredictRegistry;
+    /// App-scoped slot cache backing the `query*` methods. Each query defines (idempotently) its [OctopusStreams] stream and reads the requested range, so a
+    /// past slot is fetched from Octopus at most once across every caller and process restart.
+    private final TimeSeriesCache cache;
     /// The latest price-or-failure result, empty until the first one is produced. New price subscribers receive the present value immediately.
     private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult = ObservableValue.concurrent(Optional.empty());
     /// The latest account-fetch outcome, empty until the first one is produced. New account-details subscribers receive the present value immediately.
@@ -88,7 +100,8 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
                                         @ApiKey String apiKey,
                                         RetryableOperationExecutor retryExecutor,
                                         OctopusAgilePriceServiceRegistry octopusRegistry,
-                                        AgilePredictPriceServiceRegistry agilePredictRegistry) {
+                                        AgilePredictPriceServiceRegistry agilePredictRegistry,
+                                        TimeSeriesCache cache) {
         this.executorProvider = checkNotNull(executorProvider);
         this.timeProvider = checkNotNull(timeProvider);
         this.octopusEnergy = checkNotNull(octopusEnergy);
@@ -97,6 +110,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         this.retryExecutor = checkNotNull(retryExecutor);
         this.octopusRegistry = checkNotNull(octopusRegistry);
         this.agilePredictRegistry = checkNotNull(agilePredictRegistry);
+        this.cache = checkNotNull(cache);
     }
 
     @Override
@@ -129,6 +143,39 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     @Override
     public Closeable subscribeToAccountDetails(Consumer<AccountFetchResult> consumer) {
         return whenStartedAndNotLifecycling(() -> accountResult.subscribe(result -> result.ifPresent(consumer)));
+    }
+
+    @Override
+    public CompletableFuture<ImmutableMap<Instant, ConsumptionRow>> queryConsumption(String userId, String mpan, String meterSerial, Instant from, Instant to) {
+        return whenStartedAndNotLifecycling(
+                () -> OctopusStreams.consumptionStream(cache, accountService, userId, mpan, meterSerial).readRange(from, to));
+    }
+
+    @Override
+    public CompletableFuture<ImmutableMap<Instant, StandardUnitRate>> queryRates(String productCode, String tariffCode, Instant from, Instant to) {
+        return whenStartedAndNotLifecycling(
+                () -> OctopusStreams.ratesStream(cache, octopusEnergy.region(regionOf(tariffCode)), productCode, tariffCode).readRange(from, to));
+    }
+
+    @Override
+    public CompletableFuture<ImmutableMap<Instant, StandingCharge>> queryStandingCharges(String productCode, String tariffCode, Instant from, Instant to) {
+        return whenStartedAndNotLifecycling(
+                () -> OctopusStreams.standingChargesStream(cache, octopusEnergy.region(regionOf(tariffCode)), productCode, tariffCode).readRange(from, to));
+    }
+
+    @Override
+    public CompletableFuture<List<Product>> queryProducts(Instant availableAt) {
+        return whenStartedAndNotLifecycling(() -> octopusEnergy.listProducts(availableAt));
+    }
+
+    @Override
+    public CompletableFuture<ProductDetails> queryProductDetails(String code) {
+        return whenStartedAndNotLifecycling(() -> octopusEnergy.getProductDetails(code));
+    }
+
+    /// The supply region is the trailing letter of an Octopus tariff code (e.g. `E-1R-AGILE-23-12-06-A` → `A`).
+    private static char regionOf(String tariffCode) {
+        return tariffCode.charAt(tariffCode.length() - 1);
     }
 
     private void poll() {

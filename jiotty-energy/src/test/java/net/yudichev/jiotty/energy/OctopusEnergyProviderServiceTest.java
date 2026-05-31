@@ -13,6 +13,7 @@ import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountData;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
 import net.yudichev.jiotty.connector.octopusenergy.Tariff;
+import net.yudichev.jiotty.timeseriescache.InMemoryTimeSeriesCache;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -80,7 +81,8 @@ class OctopusEnergyProviderServiceTest {
         lenient().when(agilePredictRegistry.forRegion('B')).thenReturn(agilePredictRegionB);
 
         service = new OctopusEnergyProviderService(() -> executor, clock, octopusEnergy, ACCOUNT_ID, API_KEY,
-                                                   RetryableOperationExecutor.noRetries(), octopusRegistry, agilePredictRegistry);
+                                                   RetryableOperationExecutor.noRetries(), octopusRegistry, agilePredictRegistry,
+                                                   new InMemoryTimeSeriesCache());
     }
 
     // ---- Price routing ----
