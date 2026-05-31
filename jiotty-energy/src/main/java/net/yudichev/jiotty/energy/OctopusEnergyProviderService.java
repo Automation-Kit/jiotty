@@ -24,6 +24,7 @@ import org.apache.logging.log4j.Logger;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -165,17 +166,18 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     }
 
     private static OctopusAccountDetails toAccountDetails(OctopusAccountData account) {
-        var meterPoints = account.properties().stream()
-                                 .flatMap(property -> property.electricityMeterPoints().stream())
-                                 .map(meterPoint -> new OctopusAccountDetails.MeterPoint(
-                                         meterPoint.mpan(),
-                                         meterPoint.meters().stream().map(ElectricityMeter::serialNumber).toList(),
-                                         meterPoint.tariffs().stream()
-                                                   .map(tariff -> new OctopusAccountDetails.TariffPeriod(tariff.tariffCode(),
-                                                                                                         tariff.validFrom(),
-                                                                                                         tariff.validTo()))
-                                                   .toList()))
-                                 .toList();
+        List<OctopusAccountDetails.MeterPoint> meterPoints =
+                account.properties().stream()
+                       .flatMap(property -> property.electricityMeterPoints().stream())
+                       .map(meterPoint -> new OctopusAccountDetails.MeterPoint(
+                               meterPoint.mpan(),
+                               meterPoint.meters().stream().map(ElectricityMeter::serialNumber).toList(),
+                               meterPoint.tariffs().stream()
+                                         .map(tariff -> new OctopusAccountDetails.TariffPeriod(tariff.tariffCode(),
+                                                                                               tariff.validFrom(),
+                                                                                               tariff.validTo()))
+                                         .toList()))
+                       .toList();
         return new OctopusAccountDetails(meterPoints);
     }
 

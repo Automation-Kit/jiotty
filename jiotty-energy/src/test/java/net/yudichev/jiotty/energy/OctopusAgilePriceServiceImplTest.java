@@ -3,6 +3,7 @@ package net.yudichev.jiotty.energy;
 import net.yudichev.jiotty.common.async.JobSchedulerImpl;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
+import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusRegionService;
 import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
 import net.yudichev.jiotty.timeseriescache.InMemoryTimeSeriesCache;
@@ -109,7 +110,7 @@ class OctopusAgilePriceServiceImplTest {
 
         // problems continue until day 2's regular call — and the retries-overran point lands a `PriceRetrievalError` on the result stream
         clock.setTimeAndTick(time(2, 16, 05));
-        var lastResult = service.getPrices().orElseThrow();
+        Either<Prices, EnergyPriceService.Failure> lastResult = service.getPrices().orElseThrow();
         assertThat(lastResult.getRight()).hasValueSatisfying(failure -> assertThat(failure)
                 .isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
                                         error -> assertThat(error.cause()).hasMessageContaining("oops")));
@@ -123,8 +124,8 @@ class OctopusAgilePriceServiceImplTest {
     }
 
     private void assertPricesAvailable(Instant from, Instant to) {
-        var result = service.getPrices().orElseThrow();
-        var prices = result.getLeft().orElseThrow();
+        Either<Prices, EnergyPriceService.Failure> result = service.getPrices().orElseThrow();
+        Prices prices = result.getLeft().orElseThrow();
         assertThat(prices.profileStart()).describedAs("profile start").isEqualTo(from);
         assertThat(prices.profileEnd()).describedAs("profile end").isEqualTo(to);
     }

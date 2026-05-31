@@ -102,7 +102,7 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
                 }
             }
             if (missingSlots.isEmpty()) {
-                return CompletableFuture.completedFuture(buildOrderedMap(fromInclusive, toInclusive, step, hits, Map.of()));
+                return CompletableFuture.completedFuture(TimeSeriesCacheUtil.buildOrderedMap(fromInclusive, toInclusive, step, hits, Map.of()));
             }
             return slotsComputation.apply(missingSlots).thenApply(computedSlots -> {
                 var computedValues = new HashMap<Instant, T>();
@@ -115,24 +115,8 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
                         }
                     }
                 }
-                return buildOrderedMap(fromInclusive, toInclusive, step, hits, computedValues);
+                return TimeSeriesCacheUtil.buildOrderedMap(fromInclusive, toInclusive, step, hits, computedValues);
             });
-        }
-
-        private static <T> ImmutableMap<Instant, T> buildOrderedMap(Instant from,
-                                                                    Instant to,
-                                                                    Duration step,
-                                                                    Map<Instant, T> hits,
-                                                                    Map<Instant, T> computedValues) {
-            var out = ImmutableMap.<Instant, T>builderWithExpectedSize(hits.size() + computedValues.size());
-            for (Instant slot = from; !slot.isAfter(to); slot = slot.plus(step)) {
-                T hitValue = hits.get(slot);
-                T value = hitValue != null ? hitValue : computedValues.get(slot);
-                if (value != null) {
-                    out.put(slot, value);
-                }
-            }
-            return out.build();
         }
     }
 }

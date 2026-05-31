@@ -16,6 +16,7 @@ import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.timeseriescache.TimeSeriesCacheUtil.buildOrderedMap;
 
 final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
     private static final Logger logger = LogManager.getLogger(TimeSeriesStreamImpl.class);
@@ -76,7 +77,7 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
         BitmapSlotSet missingSlots = listMissingSlots(fromInclusive, toInclusive, hits);
         logger.debug("{} readRange {}..{} hits={} misses={}", logPrefix, fromInclusive, toInclusive, hits.size(), missingSlots.size());
         if (missingSlots.isEmpty()) {
-            return CompletableFuture.completedFuture(buildOrderedMap(fromInclusive, toInclusive, hits, Map.of()));
+            return CompletableFuture.completedFuture(buildOrderedMap(fromInclusive, toInclusive, slotStep, hits, Map.of()));
         }
         return slotsComputation.apply(missingSlots)
                                .thenCompose(computedSlots -> writeBackAndMerge(fromInclusive, toInclusive, hits, missingSlots, computedSlots));
@@ -92,10 +93,10 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
         //  don't want surprise overwrites.
         Map<Instant, T> computedValues = Maps.filterKeys(computedSlots, missingSlots::contains);
         if (computedValues.isEmpty()) {
-            return CompletableFuture.completedFuture(buildOrderedMap(fromInclusive, toInclusive, hits, Map.of()));
+            return CompletableFuture.completedFuture(buildOrderedMap(fromInclusive, toInclusive, slotStep, hits, Map.of()));
         }
         return cache.writeBatch(this, computedValues)
-                    .thenApply(_ -> buildOrderedMap(fromInclusive, toInclusive, hits, computedValues));
+                    .thenApply(_ -> buildOrderedMap(fromInclusive, toInclusive, slotStep, hits, computedValues));
     }
 
     private BitmapSlotSet listMissingSlots(Instant fromInclusive, Instant toInclusive, Map<Instant, T> hits) {
@@ -110,21 +111,6 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
             }
         }
         return slots;
-    }
-
-    private ImmutableMap<Instant, T> buildOrderedMap(Instant fromInclusive,
-                                                     Instant toInclusive,
-                                                     Map<Instant, T> hits,
-                                                     Map<Instant, T> computedValues) {
-        var out = ImmutableMap.<Instant, T>builderWithExpectedSize(hits.size() + computedValues.size());
-        for (Instant slot = fromInclusive; !slot.isAfter(toInclusive); slot = slot.plus(slotStep)) {
-            T hitValue = hits.get(slot);
-            T value = hitValue != null ? hitValue : computedValues.get(slot);
-            if (value != null) {
-                out.put(slot, value);
-            }
-        }
-        return out.build();
     }
 
     /// Alignment guard. A slot Instant must have no sub-second component and sit on a multiple of the configured resolution's step in epoch seconds — the same
