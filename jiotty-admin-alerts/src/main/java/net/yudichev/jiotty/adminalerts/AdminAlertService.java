@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 
@@ -38,6 +39,21 @@ public interface AdminAlertService {
                    },
                    "{}{}", title, noDescription ? "" : ": " + description, e);
         return raise(severity, title, combined);
+    }
+
+    /// Returns a [BiConsumer] for [CompletableFuture#whenComplete] that raises an alert (and logs) when the stage completed exceptionally, and does nothing on
+    /// success. Alert-raising counterpart to `CompletableFutures.logErrorOnFailure`.
+    default <T> BiConsumer<T, Throwable> alertOnFailure(AdminAlertSeverity severity, String title, Logger logger) {
+        return alertOnFailure(severity, title, logger, null);
+    }
+
+    /// [#alertOnFailure(AdminAlertSeverity, String, Logger)] with an explicit description prefix carried into the alert.
+    default <T> BiConsumer<T, Throwable> alertOnFailure(AdminAlertSeverity severity, String title, Logger logger, @Nullable String description) {
+        return (_, e) -> {
+            if (e != null) {
+                raise(severity, title, logger, description, e);
+            }
+        };
     }
 
     /// Simplest convenience overload of [#raise(AdminAlertData)].
