@@ -4,7 +4,6 @@ import net.yudichev.jiotty.common.async.JobSchedulerImpl;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusRegionService;
-import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
 import net.yudichev.jiotty.timeseriescache.InMemoryTimeSeriesCache;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,7 +47,7 @@ class OctopusAgilePriceServiceRegistryTest {
         lenient().when(regionServiceA.getStandardUnitRates(any(), any(), any(), any()))
                  .thenReturn(completedFuture(List.of()));
         // Hand-rolled Factory mirrors what Guice's FactoryModuleBuilder would inject — keeps the test free of Guice setup.
-        OctopusAgilePriceServiceImpl.Factory factory = (regionService, productCode, tariffCode) ->
+        OctopusAgilePriceService.Factory factory = (regionService, productCode, tariffCode) ->
                 new OctopusAgilePriceServiceImpl(() -> executor, clock, cache, jobScheduler, regionService, productCode, tariffCode);
         registry = new OctopusAgilePriceServiceRegistry(octopusEnergy, factory);
         registry.start();

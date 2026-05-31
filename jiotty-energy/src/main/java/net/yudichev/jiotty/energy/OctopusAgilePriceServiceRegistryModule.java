@@ -13,7 +13,7 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 
-/// App-scope module that installs the [OctopusAgilePriceServiceRegistry], its private executor, and the [OctopusAgilePriceServiceImpl.Factory] assisted-inject
+/// App-scope module that installs the [OctopusAgilePriceServiceRegistry], its private executor, and the [OctopusAgilePriceService.Factory] assisted-inject
 /// factory used by the registry to construct per-tariff impls. Requires [OctopusEnergy], [TimeSeriesCache], [JobScheduler] and [CurrentDateTimeProvider] to be
 /// present in the parent injector — install those at app-scope before installing this module.
 public final class OctopusAgilePriceServiceRegistryModule extends BaseLifecycleComponentModule
@@ -27,7 +27,7 @@ public final class OctopusAgilePriceServiceRegistryModule extends BaseLifecycleC
                                                               .build());
         install(new FactoryModuleBuilder()
                         .implement(OctopusAgilePriceService.class, OctopusAgilePriceServiceImpl.class)
-                        .build(OctopusAgilePriceServiceImpl.Factory.class));
+                        .build(OctopusAgilePriceService.Factory.class));
         registerLifecycleComponent(OctopusAgilePriceServiceRegistry.class);
         expose(getExposedKey());
     }

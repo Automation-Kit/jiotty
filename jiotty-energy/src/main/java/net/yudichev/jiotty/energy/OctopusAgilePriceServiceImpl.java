@@ -187,10 +187,4 @@ public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent i
         long sec = t.getEpochSecond();
         return Instant.ofEpochSecond(sec - (sec % PRICE_PERIOD_LENGTH_SEC_L));
     }
-
-    public interface Factory {
-        OctopusAgilePriceService create(OctopusRegionService regionService,
-                                        @Assisted("productCode") String productCode,
-                                        @Assisted("tariffCode") String tariffCode);
-    }
 }

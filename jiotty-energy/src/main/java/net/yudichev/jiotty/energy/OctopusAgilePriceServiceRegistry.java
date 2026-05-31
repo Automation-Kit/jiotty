@@ -17,7 +17,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 
 /// App-scope lazy registry of [OctopusAgilePriceServiceImpl] instances keyed by `tariffCode`. The first [#forTariff] call for a given tariff opens an
 /// [OctopusRegionService] for the tariff's region (or reuses an already-opened one), constructs the per-tariff impl via the injected
-/// [OctopusAgilePriceServiceImpl.Factory], starts it, and caches the result. Repeat calls return the same impl instance.
+/// [OctopusAgilePriceService.Factory], starts it, and caches the result. Repeat calls return the same impl instance.
 ///
 /// Two users on the same Octopus tariff therefore share the same daily 16:05 fetch and the same `octopus.rates:<productCode>:<tariffCode>` rows. Two users on
 /// different AGILE products in the same region get separate impls so each user's tariff resolves to its own rate stream.
@@ -28,14 +28,14 @@ public final class OctopusAgilePriceServiceRegistry extends BaseLifecycleCompone
     private static final String AGILE_PRODUCT_CODE_PREFIX = "AGILE-";
 
     private final OctopusEnergy octopusEnergy;
-    private final OctopusAgilePriceServiceImpl.Factory factory;
+    private final OctopusAgilePriceService.Factory factory;
 
     private final ConcurrentMap<Character, OctopusRegionService> regionServicesByRegion = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, OctopusAgilePriceService> servicesByTariffCode = new ConcurrentHashMap<>();
 
     @Inject
     public OctopusAgilePriceServiceRegistry(OctopusEnergy octopusEnergy,
-                                            OctopusAgilePriceServiceImpl.Factory factory) {
+                                            OctopusAgilePriceService.Factory factory) {
         this.octopusEnergy = checkNotNull(octopusEnergy);
         this.factory = checkNotNull(factory);
     }
