@@ -62,6 +62,8 @@ public final class NoOpTimeSeriesCache implements TimeSeriesCache {
         @Override
         public CompletableFuture<ImmutableMap<Instant, T>> readRange(Instant fromInclusive, Instant toInclusive) {
             Duration step = resolution.step();
+            // The slot set is unavoidable: slotsComputation's contract takes the full SortedSet of slots to compute, and with no cache every slot in the
+            // range is "missing" on every call. Built once and handed straight to the lambda — not copied onward.
             var allSlots = new TreeSet<Instant>();
             for (Instant slot = fromInclusive; !slot.isAfter(toInclusive); slot = slot.plus(step)) {
                 allSlots.add(slot);

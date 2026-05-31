@@ -11,14 +11,16 @@ import net.yudichev.jiotty.timeseriescache.Resolution;
 import net.yudichev.jiotty.timeseriescache.TimeSeriesCache;
 import net.yudichev.jiotty.timeseriescache.TimeSeriesCache.Scope;
 import net.yudichev.jiotty.timeseriescache.TimeSeriesStream;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.NavigableMap;
 import java.util.SortedSet;
+import java.util.TreeMap;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -44,6 +46,9 @@ public final class OctopusStreams {
     }
 
     /// Defines (or returns the existing) `octopus.rates:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandardUnitRates].
+    /// Each half-hour slot maps to whichever returned rate's `[validFrom, validTo)` window contains it: an exact match for half-hourly tariffs (each
+    /// window is one half-hour), the covering window for flat or multi-day tariffs. Slots no returned rate covers are omitted so a future call
+    /// re-requests them.
     public static TimeSeriesStream<StandardUnitRate> ratesStream(TimeSeriesCache cache,
                                                                  OctopusRegionService regionService,
                                                                  String productCode,
@@ -55,7 +60,8 @@ public final class OctopusStreams {
                 Resolution.halfHourly(),
                 new TypeToken<>() {},
                 slots -> regionService.getStandardUnitRates(productCode, tariffCode, slots.first(), slots.last().plus(HALF_HOUR))
-                                      .thenApply(rates -> indexBy(slots, rates, StandardUnitRate::validFrom)));
+                                      .thenApply(rates -> mapSlotsToCoveringWindow(
+                                              slots, rates, StandardUnitRate::validFrom, StandardUnitRate::validTo)));
     }
 
     /// Defines (or returns the existing) `octopus.standing:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandingCharges]. Each daily
@@ -71,8 +77,11 @@ public final class OctopusStreams {
                 Scope.region(String.valueOf(regionLetter)),
                 Resolution.daily(),
                 new TypeToken<>() {},
-                slots -> regionService.getStandingCharges(productCode, tariffCode, slots.first(), slots.last().plus(ONE_DAY))
-                                      .thenApply(charges -> mapDaySlotsToCoveringCharge(slots, charges)));
+                missingSlots -> regionService.getStandingCharges(productCode, tariffCode, missingSlots.first(), missingSlots.last().plus(ONE_DAY))
+                                             .thenApply(charges -> mapSlotsToCoveringWindow(missingSlots,
+                                                                                            charges,
+                                                                                            StandingCharge::validFrom,
+                                                                                            charge -> charge.validTo().orElse(null))));
     }
 
     /// Defines (or returns the existing) `octopus.consumption:<mpan>:<meterSerial>` stream backed by [OctopusAccountService#getConsumption]. The stream is
@@ -119,18 +128,26 @@ public final class OctopusStreams {
         return result;
     }
 
-    /// Standing-charge slots are daily but the underlying charges span arbitrary windows: each charge covers `[validFrom, validTo)`, where `validTo` empty
-    /// means "open-ended" (the current charge). For each requested day-slot, find the charge covering it.
-    private static Map<Instant, StandingCharge> mapDaySlotsToCoveringCharge(SortedSet<Instant> slots, List<StandingCharge> charges) {
-        var result = HashMap.<Instant, StandingCharge>newHashMap(charges.size());
-        for (Instant slot : slots) {
-            // standing charges changes so rarely that the size of <charges> is likely to be a very small number, no point optimising.
-            for (StandingCharge charge : charges) {
-                Instant validFrom = charge.validFrom();
-                Optional<Instant> validTo = charge.validTo();
-                if (!slot.isBefore(validFrom) && validTo.map(slot::isBefore).orElse(true)) {
-                    result.put(slot, charge);
-                    break;
+    /// Maps each requested slot to the row whose `[validFrom, validTo)` window contains it, where a null `validToExclusive` means "open-ended" (the current
+    /// row). Rows are indexed by `validFrom` in a [NavigableMap], so each slot resolves with one floor lookup: an exact match when a window starts on the slot
+    /// (half-hourly data), the covering window otherwise (flat or multi-day data). Windows are non-overlapping, so the latest window starting at-or-before the
+    /// slot is the one covering it. Slots no window covers are omitted, so the cache re-requests them later. The `byStart` index is the intermediate that earns
+    /// its keep: it turns the per-slot covering lookup from an O(slots·rows) scan into O(slots·log rows).
+    private static <T> Map<Instant, T> mapSlotsToCoveringWindow(SortedSet<Instant> requestedMissingSlots,
+                                                                List<T> rows,
+                                                                Function<T, Instant> validFrom,
+                                                                Function<T, @Nullable Instant> validToExclusive) {
+        NavigableMap<Instant, T> byStart = new TreeMap<>();
+        for (T row : rows) {
+            byStart.put(validFrom.apply(row), row);
+        }
+        var result = HashMap.<Instant, T>newHashMap(requestedMissingSlots.size());
+        for (Instant slot : requestedMissingSlots) {
+            Map.Entry<Instant, T> covering = byStart.floorEntry(slot);
+            if (covering != null) {
+                Instant end = validToExclusive.apply(covering.getValue());
+                if (end == null || slot.isBefore(end)) {
+                    result.put(slot, covering.getValue());
                 }
             }
         }

@@ -48,7 +48,7 @@ class OctopusStreamsTest {
     }
 
     @Test
-    void ratesStream_readRange_fetchesAndIndexesByValidFrom() {
+    void ratesStream_halfHourlyRates_mapEachSlotToItsWindow() {
         // readRange is inclusive both ends; from=00:00, to=00:30 requests two half-hour slots: 00:00 + 00:30.
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T00:30:00Z");
@@ -56,7 +56,7 @@ class OctopusStreamsTest {
                 .thenReturn(CompletableFuture.completedFuture(List.of(
                         rate("2024-01-15T00:00:00Z", "2024-01-15T00:30:00Z", 14.0),
                         rate("2024-01-15T00:30:00Z", "2024-01-15T01:00:00Z", 15.0),
-                        // Row outside the requested slots — verifies the indexer filters by slot membership.
+                        // Row whose window covers no requested slot — must not appear in the result.
                         rate("2024-01-15T01:00:00Z", "2024-01-15T01:30:00Z", 16.0))));
 
         TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
@@ -66,6 +66,26 @@ class OctopusStreamsTest {
                 .hasEntrySatisfying(Instant.parse("2024-01-15T00:00:00Z"), rate -> assertThat(rate.valueIncVat()).isEqualTo(14.0))
                 .hasEntrySatisfying(Instant.parse("2024-01-15T00:30:00Z"), rate -> assertThat(rate.valueIncVat()).isEqualTo(15.0))
                 .hasSize(2);
+    }
+
+    @Test
+    void ratesStream_flatTariff_mapsEverySlotToTheCoveringWindow() {
+        // A non-half-hourly tariff publishes one wide rate window. Every requested half-hour slot must resolve to that covering rate even though the window
+        // starts on none of them — the case the covering-window lookup adds over a plain validFrom index.
+        Instant from = Instant.parse("2024-01-15T00:00:00Z");
+        Instant to = Instant.parse("2024-01-15T01:00:00Z");   // three slots: 00:00, 00:30, 01:00
+        when(regionService.getStandardUnitRates(eq(PRODUCT), eq(TARIFF), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(
+                        rate("2024-01-01T00:00:00Z", "2024-02-01T00:00:00Z", 24.5))));
+
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
+        ImmutableMap<Instant, StandardUnitRate> result = stream.readRange(from, to).join();
+
+        assertThat(result)
+                .containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"),
+                                  Instant.parse("2024-01-15T00:30:00Z"),
+                                  Instant.parse("2024-01-15T01:00:00Z"))
+                .allSatisfy((_, rate) -> assertThat(rate.valueIncVat()).isEqualTo(24.5));
     }
 
     @Test
