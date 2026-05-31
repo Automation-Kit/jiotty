@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.common.graph.server;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.graph.Node;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Objects;
 import java.util.function.Function;
@@ -14,8 +14,7 @@ public abstract class MappingNode<TN extends BaseServerNode, SN extends Node, U>
     private final Function<SN, U> mapper;
     private final ChangeDetector<TN, U> changeDetector;
 
-    @Nullable
-    private U value;
+    private @Nullable U value;
 
     protected MappingNode(GraphRunner runner, String valueName, SN sourceNode, Function<SN, U> mapper) {
         this(runner, valueName, sourceNode, mapper, (thisNode, oldValue, newValue) -> !Objects.equals(oldValue, newValue));
@@ -29,8 +28,7 @@ public abstract class MappingNode<TN extends BaseServerNode, SN extends Node, U>
         this.changeDetector = checkNotNull(changeDetector);
     }
 
-    @Nullable
-    public final U getValue() {
+    public final @Nullable U getValue() {
         return value;
     }
 
@@ -41,7 +39,7 @@ public abstract class MappingNode<TN extends BaseServerNode, SN extends Node, U>
 
     @Override
     protected final boolean doWave() {
-        @Nullable U newValue = mapper.apply(sourceNode);
+        U newValue = mapper.apply(sourceNode);
         //noinspection unchecked
         if (changeDetector.isValueChanged((TN) this, value, newValue)) {
             logger.debug("{} {} -> {}", valueName, value, newValue);

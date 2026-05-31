@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.persistence.recording;
 
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -15,6 +14,7 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomainService;
 import net.yudichev.jiotty.persistence.recording.RecordingModule.PsqlExecutor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.user.ui;
 
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import jakarta.annotation.Nullable;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -9,6 +8,7 @@ import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import org.immutables.value.Value;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
 import java.util.ArrayList;

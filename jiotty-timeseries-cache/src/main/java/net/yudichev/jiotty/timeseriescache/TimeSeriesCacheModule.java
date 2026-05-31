@@ -3,7 +3,6 @@ package net.yudichev.jiotty.timeseriescache;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
@@ -16,6 +15,7 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomainModule;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.timeseriescache.cleanup.ActiveUserIdsSupplier;
 import net.yudichev.jiotty.timeseriescache.cleanup.TimeSeriesCacheCleanupJob;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;

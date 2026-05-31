@@ -20,6 +20,7 @@ import static java.lang.annotation.RetentionPolicy.CLASS;
         typeAbstract = "Base*",
         typeImmutable = "*",
         visibility = Value.Style.ImplementationVisibility.PACKAGE,
+        optionalAcceptNullable = true,
         redactedMask = "…")
 public @interface PackagePrivateImmutablesStyle {
 }

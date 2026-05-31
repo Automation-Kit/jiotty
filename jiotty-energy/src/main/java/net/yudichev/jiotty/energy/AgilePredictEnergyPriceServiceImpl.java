@@ -2,7 +2,6 @@ package net.yudichev.jiotty.energy;
 
 import com.google.common.collect.ImmutableList;
 import com.google.inject.assistedinject.Assisted;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -14,6 +13,7 @@ import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPric
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPriceService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.time.Instant;

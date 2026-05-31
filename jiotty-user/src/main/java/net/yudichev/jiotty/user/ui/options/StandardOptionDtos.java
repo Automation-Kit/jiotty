@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.user.ui.options;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.geo.LatLon;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import java.util.Map;

@@ -2,7 +2,6 @@ package net.yudichev.jiotty.security;
 
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -10,6 +9,7 @@ import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
 

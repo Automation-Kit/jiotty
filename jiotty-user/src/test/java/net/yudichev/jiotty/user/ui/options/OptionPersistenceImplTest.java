@@ -4,6 +4,7 @@ import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -93,7 +94,7 @@ class OptionPersistenceImplTest {
         assertThat(loadTarget.getValue()).contains("super-secret");
     }
 
-    private TestTextOption createOption(String defaultValue) {
+    private TestTextOption createOption(@Nullable String defaultValue) {
         return new TestTextOption(executor, OptionMeta.<String>builder()
                                                       .setTabName("Tab")
                                                       .setKey(OPTION_KEY)

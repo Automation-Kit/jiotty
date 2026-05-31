@@ -131,6 +131,9 @@
                 <configuration>
                     <source>25</source>
                     <target>25</target>
+                    <!-- incremental mode (true) intermittently skips plugin-generated source roots (e.g. protobuf output), leaving generated .class files
+                         missing at test time; StaleSourceScanner (false) compiles every source whose class is absent, which is deterministic on clean builds -->
+                    <useIncrementalCompilation>false</useIncrementalCompilation>
                     <annotationProcessorPaths>
                         <dependency>
                             <groupId>org.immutables</groupId>
@@ -154,6 +157,10 @@
                             <outputXML>true</outputXML>
                             <ignoreNonCompile>true</ignoreNonCompile>
                             <ignoredUsedUndeclaredDependencies>*</ignoredUsedUndeclaredDependencies>
+                            <ignoredUnusedDeclaredDependencies>
+                                <!-- JSpecify @Nullable is CLASS-retention, so the bytecode analyzer can't see it used -->
+                                <ignoredUnusedDeclaredDependency>org.jspecify:jspecify</ignoredUnusedDeclaredDependency>
+                            </ignoredUnusedDeclaredDependencies>
                         </configuration>
                     </execution>
                 </executions>

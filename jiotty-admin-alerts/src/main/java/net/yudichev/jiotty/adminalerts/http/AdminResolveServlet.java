@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.adminalerts.http;
 
 import com.google.inject.BindingAnnotation;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.http.HttpServlet;
@@ -12,6 +11,7 @@ import net.yudichev.jiotty.adminalerts.AdminAlertService.ResolveByIdOutcome;
 import net.yudichev.jiotty.common.lang.Json;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.NotSerializableException;

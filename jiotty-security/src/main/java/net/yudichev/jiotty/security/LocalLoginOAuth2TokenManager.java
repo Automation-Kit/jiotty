@@ -2,11 +2,11 @@ package net.yudichev.jiotty.security;
 
 import com.google.inject.BindingAnnotation;
 import com.sun.net.httpserver.HttpServer;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import org.jspecify.annotations.Nullable;
 
 import java.io.OutputStream;
 import java.lang.annotation.Retention;
@@ -39,8 +39,7 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
     private final String loginUrl;
 
     /// Non-nullness of this field means we are in the process of obtaining the initial token.
-    @Nullable
-    private HttpServer httpServer;
+    private @Nullable HttpServer httpServer;
 
     @Inject
     public LocalLoginOAuth2TokenManager(ExecutorFactory executorFactory,

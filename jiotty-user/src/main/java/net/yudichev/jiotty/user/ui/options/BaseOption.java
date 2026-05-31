@@ -1,10 +1,10 @@
 package net.yudichev.jiotty.user.ui.options;
 
 import com.google.common.reflect.TypeToken;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -17,7 +17,7 @@ public abstract class BaseOption<T> implements Option<T> {
     private final TaskExecutor executor;
     private final OptionMeta<T> meta;
     private final Listeners<Option<T>> changeListeners = new Listeners<>();
-    private T value;
+    private @Nullable T value;
 
     protected BaseOption(TaskExecutor executor, OptionMeta<T> meta) {
         this.executor = checkNotNull(executor);
@@ -61,15 +61,14 @@ public abstract class BaseOption<T> implements Option<T> {
 
     @Override
     public void applyDefault() {
-        setValueSync(meta.defaultValue());
+        setValueSync(meta.defaultValue().orElse(null));
     }
 
     /// Process value change, validate it and return a new, enriched value
     ///
     /// @return a new updated value
     /// @throws IllegalArgumentException if value validation fails
-    @Nullable
-    public abstract T onChanged();
+    public abstract @Nullable T onChanged();
 
     @Override
     public String toString() {

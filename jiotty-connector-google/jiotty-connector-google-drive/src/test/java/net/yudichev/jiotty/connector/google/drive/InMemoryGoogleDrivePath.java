@@ -1,11 +1,11 @@
 package net.yudichev.jiotty.connector.google.drive;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import net.yudichev.jiotty.connector.google.drive.InMemoryGoogleDriveClient.Behaviour;
 import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.List;
@@ -20,11 +20,9 @@ import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
 
 public final class InMemoryGoogleDrivePath implements GoogleDrivePath {
     private final Behaviour behaviour;
-    @Nullable
-    private final InMemoryGoogleDrivePath parent;
+    private final @Nullable InMemoryGoogleDrivePath parent;
     private final String name;
-    @Nullable
-    private final FileData fileData;
+    private final @Nullable FileData fileData;
 
     private final Map<String, InMemoryGoogleDrivePath> childrenByName = new ConcurrentHashMap<>();
 
@@ -52,8 +50,8 @@ public final class InMemoryGoogleDrivePath implements GoogleDrivePath {
     public CompletableFuture<GoogleDrivePath> createFile(String filename, String mimeType, byte[] fileData) {
         var failOnCreateFileException = behaviour.failOnCreateFileException;
         return failOnCreateFileException != null ?
-                failure(failOnCreateFileException) :
-                completedFuture(new InMemoryGoogleDrivePath(behaviour, this, filename, FileData.of(mimeType, fileData)));
+               failure(failOnCreateFileException) :
+               completedFuture(new InMemoryGoogleDrivePath(behaviour, this, filename, FileData.of(mimeType, fileData)));
     }
 
     @Override

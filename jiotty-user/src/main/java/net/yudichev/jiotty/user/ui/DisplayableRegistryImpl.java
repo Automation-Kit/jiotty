@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.user.ui;
 
 import com.google.common.collect.ImmutableList;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -53,7 +52,7 @@ public final class DisplayableRegistryImpl extends BaseLifecycleComponent implem
             checkArgument(displayablesById.putIfAbsent(displayable.getId(), displayable) == null,
                           "Displayable with id '%s' is already registered", displayable.getId());
             Closeable dataSubscription;
-            @Nullable ThrottlingConsumer<Void> throttle;
+            ThrottlingConsumer<Void> throttle;
             if (displayable.supportsData()) {
                 throttle = new ThrottlingConsumer<>(executor, UPDATE_THROTTLE, _ -> updateListeners.notify(displayable));
                 dataSubscription = displayable.subscribeForUpdates(() -> throttle.accept(null));

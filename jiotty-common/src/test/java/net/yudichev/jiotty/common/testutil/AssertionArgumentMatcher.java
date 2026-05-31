@@ -1,6 +1,6 @@
 package net.yudichev.jiotty.common.testutil;
 
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 import org.mockito.ArgumentMatcher;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -8,8 +8,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 
 public final class AssertionArgumentMatcher<T> implements ArgumentMatcher<T> {
     private final ArgumentAssert<T> argumentAssert;
-    @Nullable
-    private String assertionErrorMessage;
+    private @Nullable String assertionErrorMessage;
 
     private AssertionArgumentMatcher(ArgumentAssert<T> argumentAssert) {
         this.argumentAssert = checkNotNull(argumentAssert);

@@ -1,11 +1,11 @@
 package net.yudichev.jiotty.persistence.recording;
 
 import com.google.common.collect.ImmutableList;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.ThrowingFunction;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
+import org.jspecify.annotations.Nullable;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -34,8 +34,7 @@ public interface PostgresqlDestination extends Destination {
     }
 
     interface QueryStmtColValueGetter<T> {
-        @Nullable
-        T get(Reader.QueryResultRow row, int colIdx) throws SQLException;
+        @Nullable T get(Reader.QueryResultRow row, int colIdx) throws SQLException;
     }
 
     record Column<R, T>(String name,

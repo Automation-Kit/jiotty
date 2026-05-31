@@ -1,8 +1,8 @@
 package net.yudichev.jiotty.common.graph.server;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

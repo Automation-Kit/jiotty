@@ -3,7 +3,6 @@ package net.yudichev.jiotty.connector.shelly;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.BindingAnnotation;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -15,6 +14,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -57,8 +57,7 @@ class ShellyPlugImpl extends BaseLifecycleComponent implements ShellyPlug {
 
     private SchedulingExecutor executor;
 
-    @Nullable
-    private ConsumptionMeasurementImpl activeMeasurement;
+    private @Nullable ConsumptionMeasurementImpl activeMeasurement;
 
     @Inject
     ShellyPlugImpl(@Host String host,
@@ -147,11 +146,9 @@ class ShellyPlugImpl extends BaseLifecycleComponent implements ShellyPlug {
 
         private final Lock lock = new ReentrantLock();
         /// `null` means we are stopped
-        @Nullable
-        private SampleAggregator sampleAggregator = new SampleAggregator();
+        private @Nullable SampleAggregator sampleAggregator = new SampleAggregator();
         private Instant sampleStartTime;
-        @Nullable
-        private Closeable nextSamplingSchedule;
+        private @Nullable Closeable nextSamplingSchedule;
 
         public ConsumptionMeasurementImpl(Consumer<String> errorHandler) {
             this.errorHandler = checkNotNull(errorHandler);

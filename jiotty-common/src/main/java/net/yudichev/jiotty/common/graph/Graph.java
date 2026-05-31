@@ -1,12 +1,12 @@
 package net.yudichev.jiotty.common.graph;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.ThreadContext;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -35,10 +35,8 @@ public class Graph extends BaseIdempotentCloseable {
     private final Set<NodeState> nodesNeedingReRanking = new HashSet<>();
     private final AtomicReference<Thread> callerThread = new AtomicReference<>();
     private int nodeIdGenerator;
-    @Nullable
-    private Instant waveTime;
-    @Nullable
-    private Instant lastWaveTime;
+    private @Nullable Instant waveTime;
+    private @Nullable Instant lastWaveTime;
     private int waveId;
 
     public Graph(CurrentDateTimeProvider timeProvider, Consumer<RuntimeException> exceptionHandler) {

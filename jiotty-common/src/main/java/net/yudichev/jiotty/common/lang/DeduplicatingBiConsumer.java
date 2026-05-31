@@ -1,6 +1,6 @@
 package net.yudichev.jiotty.common.lang;
 
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 import java.util.function.BiConsumer;
 
@@ -8,10 +8,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 public final class DeduplicatingBiConsumer<T, U> implements BiConsumer<T, U> {
     private final BiConsumer<T, U> delegate;
-    @Nullable
-    private T lastValue1;
-    @Nullable
-    private U lastValue2;
+    private @Nullable T lastValue1;
+    private @Nullable U lastValue2;
 
     public DeduplicatingBiConsumer(BiConsumer<T, U> delegate) {
         this.delegate = checkNotNull(delegate);

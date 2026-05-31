@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.connector.mqtt;
 
 import com.google.inject.BindingAnnotation;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.AsyncOperationFailureHandler;
 import net.yudichev.jiotty.common.async.AsyncOperationRetry;
@@ -29,6 +28,7 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.MqttTopic;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;

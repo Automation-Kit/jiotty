@@ -1,9 +1,9 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TInsideTempValue;
+import org.jspecify.annotations.Nullable;
 
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TACChargingEnergyIn;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TACChargingEnergyInValue;

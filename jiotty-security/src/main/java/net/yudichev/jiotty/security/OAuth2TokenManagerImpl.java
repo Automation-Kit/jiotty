@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.security;
 
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -13,6 +12,7 @@ import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
@@ -22,6 +22,7 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.net.URLDecoder;
@@ -180,12 +181,12 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         var future = new CompletableFuture<Either<OauthAccessTokenResponse, OauthErrorResponse>>();
         httpClient.newCall(request).enqueue(new Callback() {
             @Override
-            public void onFailure(okhttp3.Call call, IOException e) {
+            public void onFailure(Call call, IOException e) {
                 future.completeExceptionally(e);
             }
 
             @Override
-            public void onResponse(okhttp3.Call call, Response response) {
+            public void onResponse(Call call, Response response) {
                 try (ResponseBody body = response.body()) {
                     String bodyString = checkNotNull(body).string();
                     if (response.isSuccessful()) {

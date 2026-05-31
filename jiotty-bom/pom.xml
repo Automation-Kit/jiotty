@@ -17,6 +17,8 @@
         <com.google.maps.version>1.65.0</com.google.maps.version>
         <com.google.http-client.version>2.0.2</com.google.http-client.version>
         <com.google.firebase.version>9.8.0</com.google.firebase.version>
+        <!-- WARNING: keep compatible with the io.javalin version; do not bump to a new Jetty major without confirming javalin supports it -->
+        <org.eclipse.jetty.version>12.1.8</org.eclipse.jetty.version>
     </properties>
     <packaging>pom</packaging>
 
@@ -426,7 +428,7 @@
                 <groupId>io.javalin</groupId>
                 <artifactId>javalin</artifactId>
                 <!-- also need to upgrade the version of jetty-bom to the one that is compatible with javalin -->
-                <version>7.1.0</version>
+                <version>7.2.2</version>
             </dependency>
             <dependency>
                 <groupId>io.micrometer</groupId>
@@ -446,9 +448,9 @@
                 <version>3.0.3</version>
             </dependency>
             <dependency>
-                <groupId>jakarta.annotation</groupId>
-                <artifactId>jakarta.annotation-api</artifactId>
-                <version>3.0.0</version>
+                <groupId>org.jspecify</groupId>
+                <artifactId>jspecify</artifactId>
+                <version>1.0.0</version>
                 <optional>true</optional>
             </dependency>
             <dependency>
@@ -468,8 +470,10 @@
             </dependency>
             <dependency>
                 <groupId>org.eclipse.jetty.ee10</groupId>
-                <artifactId>jetty-ee10-servlet</artifactId>
-                <version>12.1.6</version>
+                <artifactId>jetty-ee10-bom</artifactId>
+                <version>${org.eclipse.jetty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
             <dependency>
                 <groupId>org.immutables</groupId>
@@ -502,8 +506,7 @@
             <dependency>
                 <groupId>org.eclipse.jetty</groupId>
                 <artifactId>jetty-bom</artifactId>
-                <!-- WARNING: do not upgrade to a new major ver without ensuring javalin supports it -->
-                <version>12.1.6</version>
+                <version>${org.eclipse.jetty.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

@@ -2,7 +2,6 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -24,6 +23,7 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -69,8 +69,7 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
     private final @Nullable SslCustomisation sslCustomisation;
     private final ObservableValue<AuthState> accessTokenObservable = ObservableValue.concurrent(new AuthState.TransientFailure("Not authenticated yet"));
     private OkHttpClient httpClient;
-    @Nullable
-    private Closeable tokenSubscription;
+    private @Nullable Closeable tokenSubscription;
 
     @Inject
     public TeslaFleetImpl(@Dependency OAuth2TokenManager tokenManager,

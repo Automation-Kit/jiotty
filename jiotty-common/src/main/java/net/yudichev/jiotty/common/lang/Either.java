@@ -1,6 +1,6 @@
 package net.yudichev.jiotty.common.lang;
 
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -8,10 +8,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 public final class Either<L, R> {
-    @Nullable
-    private final L left;
-    @Nullable
-    private final R right;
+    private final @Nullable L left;
+    private final @Nullable R right;
     private final boolean isLeft;
 
     private Either(@Nullable L left, @Nullable R right, boolean isLeft) {

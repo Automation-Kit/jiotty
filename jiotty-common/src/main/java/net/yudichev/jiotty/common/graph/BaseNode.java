@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.graph;
 
-import jakarta.annotation.Nullable;
+
+import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -9,8 +10,7 @@ import java.util.List;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 public abstract class BaseNode implements Node {
-    @Nullable
-    private List<Node> subscriptionBuffer;
+    private @Nullable List<Node> subscriptionBuffer;
     private NodeContext nodeContext;
 
     public final String name() {

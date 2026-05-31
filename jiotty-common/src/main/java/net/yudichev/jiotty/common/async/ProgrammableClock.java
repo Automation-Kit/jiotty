@@ -1,10 +1,10 @@
 package net.yudichev.jiotty.common.async;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import org.apache.logging.log4j.ThreadContext;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -28,8 +28,7 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
     private final NavigableMap<Instant, List<Task>> tasksByTriggerTime = new TreeMap<>();
     private Instant currentTime = Instant.EPOCH;
     private boolean mdc;
-    @Nullable
-    private Instant currentTaskTime;
+    private @Nullable Instant currentTaskTime;
     private ZoneId zoneId = ZoneOffset.UTC;
     private boolean taskSeeingTargetTime;
     private boolean globalMdc;
@@ -174,8 +173,7 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
 
     private abstract class Task extends BaseIdempotentCloseable implements Runnable {
         private final DeterministicExecutor executor;
-        @Nullable
-        protected Instant due;
+        protected @Nullable Instant due;
 
         protected Task(DeterministicExecutor executor) {
             this.executor = checkNotNull(executor);

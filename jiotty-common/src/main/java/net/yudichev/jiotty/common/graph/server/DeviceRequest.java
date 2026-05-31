@@ -1,6 +1,6 @@
 package net.yudichev.jiotty.common.graph.server;
 
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 public record DeviceRequest<T>(String name, boolean sent, @Nullable String failure, @Nullable T payload) {
     public DeviceRequest(String name, T payload) {

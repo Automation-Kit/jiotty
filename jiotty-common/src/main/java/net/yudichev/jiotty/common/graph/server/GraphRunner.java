@@ -1,9 +1,9 @@
 package net.yudichev.jiotty.common.graph.server;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.graph.Graph;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
+import org.jspecify.annotations.Nullable;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 

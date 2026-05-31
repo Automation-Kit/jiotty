@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.common.lang;
 
 import com.google.common.base.Throwables;
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 
@@ -30,8 +30,7 @@ public final class HumanReadableExceptionMessage {
         append(appended, appender, checkNotNull(parent), exceptionMessage(parent));
     }
 
-    @Nullable
-    private static String exceptionMessage(Throwable exception) {
+    private static @Nullable String exceptionMessage(Throwable exception) {
         return exception instanceof InterruptedException ? null : exception.getMessage();
     }
 

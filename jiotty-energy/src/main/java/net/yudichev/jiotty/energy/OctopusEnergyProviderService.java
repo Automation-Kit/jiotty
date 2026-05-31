@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.energy;
 
 import com.google.inject.BindingAnnotation;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -20,6 +19,7 @@ import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
 import net.yudichev.jiotty.connector.octopusenergy.Tariff;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;

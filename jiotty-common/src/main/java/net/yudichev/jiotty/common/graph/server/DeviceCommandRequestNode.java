@@ -1,6 +1,6 @@
 package net.yudichev.jiotty.common.graph.server;
 
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 public interface DeviceCommandRequestNode<R> extends ServerNode {
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
@@ -8,6 +8,5 @@ public interface DeviceCommandRequestNode<R> extends ServerNode {
     boolean requestPending();
 
     @SuppressWarnings("BooleanMethodIsAlwaysInverted") // more readable
-    @Nullable
-    DeviceRequest<R> currentRequest();
+    @Nullable DeviceRequest<R> currentRequest();
 }

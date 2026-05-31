@@ -1,8 +1,8 @@
 package net.yudichev.jiotty.user.ui.options;
 
 import com.google.common.reflect.TypeToken;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.Closeable;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -26,8 +26,7 @@ public interface Option<T> {
         return Optional.ofNullable(value());
     }
 
-    @Nullable
-    T value();
+    @Nullable T value();
 
     default T requireValue() {
         return getValue().orElseThrow(() -> new IllegalStateException(meta().key() + " is required"));

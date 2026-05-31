@@ -1,8 +1,8 @@
 package net.yudichev.jiotty.common.graph.server;
 
 import com.google.errorprone.annotations.OverridingMethodsMustInvokeSuper;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.Closeable;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -22,8 +22,7 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     private boolean retryDue;
     /// `-1` means a trigger based retry is due
     private int retryCount;
-    @Nullable
-    private String lastFailure;
+    private @Nullable String lastFailure;
 
     protected BaseDeviceCommandRequestNode(GraphRunner runner,
                                            String name,
@@ -137,9 +136,8 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     }
 
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    @Nullable
     @Override
-    public final DeviceRequest<R> currentRequest() {
+    public final @Nullable DeviceRequest<R> currentRequest() {
         return request;
     }
 

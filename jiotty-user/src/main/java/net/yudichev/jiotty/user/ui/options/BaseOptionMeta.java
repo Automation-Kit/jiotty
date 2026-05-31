@@ -1,9 +1,10 @@
 package net.yudichev.jiotty.user.ui.options;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
+
+import java.util.Optional;
 
 import static net.yudichev.jiotty.user.ui.options.Option.DEFAULT_FORM_ORDER;
 
@@ -16,7 +17,7 @@ public interface BaseOptionMeta<T> {
 
     String label();
 
-    @Nullable T defaultValue();
+    Optional<T> defaultValue();
 
     /// See [Option#getFormOrder()]. Defaults to [Option#DEFAULT_FORM_ORDER].
     @Value.Default

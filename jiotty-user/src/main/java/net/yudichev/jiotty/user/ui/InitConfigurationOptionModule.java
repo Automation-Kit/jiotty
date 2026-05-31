@@ -30,7 +30,7 @@ public class InitConfigurationOptionModule<T> extends BaseLifecycleComponentModu
         this.optionType = checkNotNull(optionType);
         this.optionMeta = checkNotNull(optionMeta);
         optionValueType = new TypeToken<>(getClass()) {};
-        value = new OptionPersistenceImpl(varStore).load(optionValueType, optionMeta.key()).orElse(optionMeta.defaultValue());
+        value = new OptionPersistenceImpl(varStore).load(optionValueType, optionMeta.key()).or(optionMeta::defaultValue).orElse(null);
     }
 
     public final T optionValue() {

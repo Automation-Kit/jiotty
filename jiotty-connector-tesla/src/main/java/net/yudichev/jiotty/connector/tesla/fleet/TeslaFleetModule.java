@@ -3,7 +3,6 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.TypeLiteral;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -11,6 +10,7 @@ import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.security.OAuth2TokenManagerModule;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
 import java.util.Set;

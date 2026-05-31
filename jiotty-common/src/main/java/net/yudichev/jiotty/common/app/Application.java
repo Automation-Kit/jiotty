@@ -7,7 +7,6 @@ import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
@@ -17,6 +16,7 @@ import net.yudichev.jiotty.common.lang.TypedBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.jul.Log4jBridgeHandler;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;

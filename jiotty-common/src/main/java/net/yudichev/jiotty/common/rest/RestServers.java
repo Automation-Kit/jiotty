@@ -2,7 +2,6 @@ package net.yudichev.jiotty.common.rest;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.base.Throwables;
-import jakarta.annotation.Nullable;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
@@ -40,7 +39,7 @@ public final class RestServers {
                                             Function<Optional<Object>, String> successFactory,
                                             Function<String, String> errorFactory) {
         try {
-            @Nullable Object response = MoreThrowables.getAsUnchecked(() -> handler.get(3, TimeUnit.MINUTES));
+            Object response = MoreThrowables.getAsUnchecked(() -> handler.get(3, TimeUnit.MINUTES));
             return successFactory.apply(Optional.ofNullable(response));
         } catch (RuntimeException e) {
             logger.error("Failed to execute REST handler {}", handlerName, e);

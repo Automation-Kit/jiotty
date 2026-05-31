@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.connector.google.drive;
 
 import com.google.api.services.drive.model.About;
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -25,10 +25,10 @@ public final class InMemoryGoogleDriveClient implements GoogleDriveClient {
     @Override
     public CompletableFuture<About> aboutDrive(Set<String> fields, Executor executor) {
         return CompletableFuture.completedFuture(new About()
-                .setStorageQuota(new About.StorageQuota()
-                        .setLimit(1024L * 1024 * 1024) // 1Gb
-                        .setUsage(usageIn(rootPath) + usageIn(appDataPath))
-                ));
+                                                         .setStorageQuota(new About.StorageQuota()
+                                                                                  .setLimit(1024L * 1024 * 1024) // 1Gb
+                                                                                  .setUsage(usageIn(rootPath) + usageIn(appDataPath))
+                                                         ));
     }
 
     public Behaviour getBehaviour() {
@@ -42,8 +42,7 @@ public final class InMemoryGoogleDriveClient implements GoogleDriveClient {
     }
 
     public static final class Behaviour {
-        @Nullable
-        volatile RuntimeException failOnCreateFileException;
+        volatile @Nullable RuntimeException failOnCreateFileException;
 
         public void reset() {
             failOnCreateFileException = null;

@@ -1,8 +1,8 @@
 package net.yudichev.jiotty.adminalerts;
 
-import jakarta.annotation.Nullable;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.util.Optional;

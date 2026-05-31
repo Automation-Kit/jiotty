@@ -2,7 +2,6 @@ package net.yudichev.jiotty.connector.miele;
 
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -28,6 +27,7 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -76,8 +76,7 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
     private final Consumer<? super OkHttpClient.Builder> streamingClientCustomiser;
     private final int getCallRetryCount;
     private OkHttpClient eventingClient;
-    @Nullable
-    private EventStream activeEventStream;
+    private @Nullable EventStream activeEventStream;
     private int eventStreamListenerRegistrationCount;
     private OkHttpClient commandClient;
     private volatile String accessToken;
@@ -261,8 +260,7 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
         private final Request request;
         private final BackOff reconnectBackoff;
         private final AtomicReference<Closeable> pingMonitor = new AtomicReference<>();
-        @Nullable
-        private Call call;
+        private @Nullable Call call;
         private boolean connected;
         private volatile int streamId;
         private Instant lastPingTime = dateTimeProvider.currentInstant();
@@ -342,7 +340,7 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
             // The SSE stream remains open indefinitely, so read it continuously
             String line;
             try {
-                @Nullable String eventType = null;
+                String eventType = null;
                 while ((line = responseBody.source().readUtf8Line()) != null) {
                     executor.execute(() -> {
                         reconnectBackoff.reset();

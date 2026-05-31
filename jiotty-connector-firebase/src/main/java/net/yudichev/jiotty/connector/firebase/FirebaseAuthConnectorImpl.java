@@ -11,7 +11,6 @@ import com.google.firebase.auth.FirebaseToken;
 import com.google.firebase.auth.UserInfo;
 import com.google.firebase.auth.UserRecord;
 import com.google.inject.BindingAnnotation;
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -19,6 +18,7 @@ import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.user.persistence.UserIdentity;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;

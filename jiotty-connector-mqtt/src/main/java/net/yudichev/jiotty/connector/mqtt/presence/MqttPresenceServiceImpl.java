@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.connector.mqtt.presence;
 
-import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -10,6 +9,7 @@ import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.connector.mqtt.Mqtt;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -34,8 +34,7 @@ final class MqttPresenceServiceImpl extends BaseLifecycleComponent implements Mq
     private final Listeners<Boolean> listeners = new Listeners<>();
     private SchedulingExecutor executor;
     private Closeable mqttSubscription;
-    @Nullable
-    private Closeable timeoutSchedule;
+    private @Nullable Closeable timeoutSchedule;
     private Boolean present;
 
     @Inject

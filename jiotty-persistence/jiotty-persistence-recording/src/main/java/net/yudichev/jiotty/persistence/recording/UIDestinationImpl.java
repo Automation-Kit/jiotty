@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.persistence.recording;
 
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.DateTimeUtils;
 import net.yudichev.jiotty.user.ui.DeviceStatus;
@@ -21,7 +20,7 @@ final class UIDestinationImpl implements UIDestination {
     public <R> Recorder<R> createRecorder(Config<R> destinationConfig) {
         var config = (UIConfig<R>) destinationConfig;
         var rendererSupplier = config.renderer();
-        @Nullable HtmlRenderer<R> renderer = null;
+        HtmlRenderer<R> renderer = null;
         if (rendererSupplier != null) {
             renderer = rendererSupplier.get();
             var dateTimeFormatter = new DateTimeUtils.Formatter(config.zoneId());

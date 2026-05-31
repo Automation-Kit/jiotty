@@ -1,6 +1,6 @@
 package net.yudichev.jiotty.persistence.varstore;
 
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
 

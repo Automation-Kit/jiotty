@@ -1,10 +1,10 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
 import com.google.common.collect.ImmutableSet;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
+import org.jspecify.annotations.Nullable;
 
 import java.util.stream.Stream;
 

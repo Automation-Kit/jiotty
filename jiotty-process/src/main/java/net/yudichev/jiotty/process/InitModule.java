@@ -4,7 +4,6 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
-import jakarta.annotation.Nullable;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
@@ -16,6 +15,7 @@ import net.yudichev.jiotty.logging.PersistingLog4jLevelConfiguratorModule;
 import net.yudichev.jiotty.persistence.db.DbConnectionConfig;
 import net.yudichev.jiotty.persistence.db.psql.PsqlDataSourceFactoryModule;
 import net.yudichev.jiotty.persistence.varstore.VarStoreModule;
+import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
 import java.util.function.Function;

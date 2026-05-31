@@ -63,6 +63,13 @@
         <dependency>
             <groupId>io.javalin</groupId>
             <artifactId>javalin</artifactId>
+            <exclusions>
+                <!-- Jakarta EE webapp annotation scanning (@PostConstruct/@Resource); unused by embedded programmatic Javalin and the only source of jakarta.annotation-api -->
+                <exclusion>
+                    <groupId>org.eclipse.jetty.ee10</groupId>
+                    <artifactId>jetty-ee10-annotations</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
@@ -88,8 +95,8 @@
             <scope>runtime</scope>
         </dependency>
         <dependency>
-            <groupId>jakarta.annotation</groupId>
-            <artifactId>jakarta.annotation-api</artifactId>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
         </dependency>
         <dependency>
             <groupId>com.google.errorprone</groupId>
