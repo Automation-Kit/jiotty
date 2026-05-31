@@ -54,6 +54,11 @@
             <type>test-jar</type>
         </dependency>
         <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-timeseries-cache</artifactId>
+            <type>test-jar</type>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
             <scope>test</scope>
