@@ -7,11 +7,15 @@ import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.connector.octopusenergy.AccountProperty;
+import net.yudichev.jiotty.connector.octopusenergy.ConsumptionRow;
 import net.yudichev.jiotty.connector.octopusenergy.ElectricityMeter;
 import net.yudichev.jiotty.connector.octopusenergy.ElectricityMeterPoint;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountData;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
+import net.yudichev.jiotty.connector.octopusenergy.OctopusRegionService;
+import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
+import net.yudichev.jiotty.connector.octopusenergy.StandingCharge;
 import net.yudichev.jiotty.connector.octopusenergy.Tariff;
 import net.yudichev.jiotty.timeseriescache.InMemoryTimeSeriesCache;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,12 +28,16 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -51,6 +59,8 @@ class OctopusEnergyProviderServiceTest {
     private OctopusEnergy octopusEnergy;
     @Mock
     private OctopusAccountService accountService;
+    @Mock
+    private OctopusRegionService regionService;
     @Mock
     private OctopusAgilePriceServiceRegistry octopusRegistry;
     @Mock
@@ -323,6 +333,89 @@ class OctopusEnergyProviderServiceTest {
 
         assertThat(result).isSameAs(subscription);
         verify(accountService).subscribeToAuthState(consumer);
+    }
+
+    // ---- Caching invariant: a second query over the same historical range is served from the cache, not re-fetched from Octopus ----
+
+    @Test
+    void queryRates_secondReadOfSameRange_doesNotRefetchFromConnector() {
+        Instant from = Instant.parse("2024-01-01T00:00:00Z");
+        Instant to = Instant.parse("2024-01-01T00:30:00Z");   // two half-hour slots
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        when(octopusEnergy.region('A')).thenReturn(regionService);
+        when(regionService.getStandardUnitRates(eq("AGILE-23-12-06"), eq(AGILE_TARIFF_A), any(), any()))
+                .thenReturn(completedFuture(List.of(rate("2024-01-01T00:00:00Z", "2024-01-01T00:30:00Z", 14.0),
+                                                    rate("2024-01-01T00:30:00Z", "2024-01-01T01:00:00Z", 15.0))));
+        service.start();
+
+        readTwice(() -> service.queryRates("AGILE-23-12-06", AGILE_TARIFF_A, from, to));
+
+        verify(regionService, times(1)).getStandardUnitRates(any(), any(), any(), any());
+    }
+
+    @Test
+    void queryStandingCharges_secondReadOfSameRange_doesNotRefetchFromConnector() {
+        Instant day = Instant.parse("2024-01-01T00:00:00Z");   // daily resolution: one day slot
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        when(octopusEnergy.region('A')).thenReturn(regionService);
+        when(regionService.getStandingCharges(eq("AGILE-23-12-06"), eq(AGILE_TARIFF_A), any(), any()))
+                .thenReturn(completedFuture(List.of(standingCharge("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", 47.25))));
+        service.start();
+
+        readTwice(() -> service.queryStandingCharges("AGILE-23-12-06", AGILE_TARIFF_A, day, day));
+
+        verify(regionService, times(1)).getStandingCharges(any(), any(), any(), any());
+    }
+
+    @Test
+    void queryConsumption_secondReadOfSameRange_doesNotRefetchFromConnector() {
+        Instant from = Instant.parse("2024-01-01T00:00:00Z");
+        Instant to = Instant.parse("2024-01-01T00:30:00Z");
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        when(accountService.getConsumption(eq(MPAN), eq(METER_SERIAL), any(), any()))
+                .thenReturn(completedFuture(List.of(consumption("2024-01-01T00:00:00Z", "2024-01-01T00:30:00Z", 0.3),
+                                                    consumption("2024-01-01T00:30:00Z", "2024-01-01T01:00:00Z", 0.4))));
+        service.start();
+
+        readTwice(() -> service.queryConsumption("user-1", MPAN, METER_SERIAL, from, to));
+
+        verify(accountService, times(1)).getConsumption(any(), any(), any(), any());
+    }
+
+    /// Runs a cache-backed query twice over the same range, draining the provider's executor after each so the futures complete deterministically.
+    private void readTwice(Supplier<CompletableFuture<?>> query) {
+        CompletableFuture<?> first = query.get();
+        clock.tick();
+        first.join();
+        CompletableFuture<?> second = query.get();
+        clock.tick();
+        second.join();
+    }
+
+    private static StandardUnitRate rate(String validFrom, String validTo, double valueIncVat) {
+        return StandardUnitRate.builder()
+                               .setValidFrom(Instant.parse(validFrom))
+                               .setValidTo(Instant.parse(validTo))
+                               .setValueExcVat(valueIncVat / 1.05)
+                               .setValueIncVat(valueIncVat)
+                               .build();
+    }
+
+    private static StandingCharge standingCharge(String validFrom, String validTo, double valueIncVat) {
+        return StandingCharge.builder()
+                             .setValidFrom(Instant.parse(validFrom))
+                             .setValidTo(Instant.parse(validTo))
+                             .setValueExcVat(valueIncVat / 1.05)
+                             .setValueIncVat(valueIncVat)
+                             .build();
+    }
+
+    private static ConsumptionRow consumption(String intervalStart, String intervalEnd, double kwh) {
+        return ConsumptionRow.builder()
+                             .setIntervalStart(Instant.parse(intervalStart))
+                             .setIntervalEnd(Instant.parse(intervalEnd))
+                             .setConsumption(kwh)
+                             .build();
     }
 
     private static OctopusAccountData account(String tariffCode) {
