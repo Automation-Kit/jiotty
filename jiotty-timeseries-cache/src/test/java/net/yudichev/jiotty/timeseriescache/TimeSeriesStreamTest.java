@@ -3,6 +3,7 @@ package net.yudichev.jiotty.timeseriescache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
@@ -46,6 +47,7 @@ class TimeSeriesStreamTest {
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
     private final AtomicInteger streamIdSuffix = new AtomicInteger();
+    private final TestAdminAlertService adminAlertService = new TestAdminAlertService();
     private SingleThreadedSchedulingExecutor executor;
     private PersistenceDomainServiceImpl domainService;
     private DataSourceFactory dataSourceFactory;
@@ -315,6 +317,7 @@ class TimeSeriesStreamTest {
                                        domainService,
                                        clock,
                                        codecRegistry,
+                                       adminAlertService,
                                        1,
                                        TimeSeriesCacheSchema.DEFAULT_DOMAIN_NAME,
                                        PersistenceDomainMigrator.FAIL_ON_MIGRATION);

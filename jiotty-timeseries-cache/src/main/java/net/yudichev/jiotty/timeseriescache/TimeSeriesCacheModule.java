@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
 import com.google.inject.multibindings.OptionalBinder;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
@@ -34,6 +35,7 @@ import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotatio
 
 public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TimeSeriesCache> {
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
+    private final BindingSpec<AdminAlertService> alertServiceSpec;
     private final BindingSpec<Integer> schemaVersionSpec;
     private final BindingSpec<String> domainNameSpec;
     private final @Nullable BindingSpec<VarStore> cleanupVarStoreSpec;
@@ -44,6 +46,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
 
     private TimeSeriesCacheModule(SpecifiedAnnotation specifiedAnnotation,
                                   BindingSpec<DataSourceFactory> dataSourceFactorySpec,
+                                  BindingSpec<AdminAlertService> alertServiceSpec,
                                   BindingSpec<Integer> schemaVersionSpec,
                                   BindingSpec<String> domainNameSpec,
                                   @Nullable BindingSpec<VarStore> cleanupVarStoreSpec,
@@ -52,6 +55,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
                                   BindingSpec<Duration> cleanupRetentionSpec) {
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
+        this.alertServiceSpec = checkNotNull(alertServiceSpec, "alertServiceSpec");
         this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
         this.domainNameSpec = checkNotNull(domainNameSpec, "domainNameSpec");
         this.cleanupVarStoreSpec = cleanupVarStoreSpec;
@@ -74,6 +78,9 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
         dataSourceFactorySpec.bind(DataSourceFactory.class)
                              .annotatedWith(Dependency.class)
                              .installedBy(this::installLifecycleComponentModule);
+        alertServiceSpec.bind(AdminAlertService.class)
+                        .annotatedWith(Dependency.class)
+                        .installedBy(this::installLifecycleComponentModule);
         schemaVersionSpec.bind(Integer.class)
                          .annotatedWith(SchemaVersion.class)
                          .installedBy(this::installLifecycleComponentModule);
@@ -162,6 +169,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
 
     public static final class Builder extends BaseModuleBuilder<TimeSeriesCache, Builder> {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec;
+        private BindingSpec<AdminAlertService> alertServiceSpec;
         private BindingSpec<Integer> schemaVersionSpec = literally(1);
         private BindingSpec<String> domainNameSpec = literally(TimeSeriesCacheSchema.DEFAULT_DOMAIN_NAME);
         private @Nullable BindingSpec<VarStore> cleanupVarStoreSpec;
@@ -171,6 +179,13 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
 
         public Builder setDataSourceFactory(BindingSpec<DataSourceFactory> dataSourceFactorySpec) {
             this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
+            return this;
+        }
+
+        /// Required. Undecodable cache rows (genuine corruption, not a routine schema-version mismatch) are wiped and raise a PII-free ERROR alert through this
+        /// service.
+        public Builder setAlertService(BindingSpec<AdminAlertService> alertServiceSpec) {
+            this.alertServiceSpec = checkNotNull(alertServiceSpec, "alertServiceSpec");
             return this;
         }
 
@@ -214,6 +229,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
         public ExposedKeyModule<TimeSeriesCache> build() {
             return new TimeSeriesCacheModule(specifiedAnnotation(),
                                              dataSourceFactorySpec,
+                                             alertServiceSpec,
                                              schemaVersionSpec,
                                              domainNameSpec,
                                              cleanupVarStoreSpec,

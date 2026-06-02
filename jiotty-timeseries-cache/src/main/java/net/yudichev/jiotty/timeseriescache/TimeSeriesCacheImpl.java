@@ -1,8 +1,12 @@
 package net.yudichev.jiotty.timeseriescache;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.adminalerts.AdminAlertData;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
+import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -17,6 +21,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.ByteArrayInputStream;
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -25,7 +30,9 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.SortedSet;
@@ -57,12 +64,14 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
     private final PersistenceDomainService persistenceDomainService;
     private final CurrentDateTimeProvider timeProvider;
     private final CodecRegistry codecRegistry;
+    private final AdminAlertService adminAlertService;
     private final PersistenceDomainConfig domainConfig;
     private final String upsertSql;
     private final String selectRangeSql;
     private final String deleteAllForScopeSql;
     private final String deleteAllForStreamSql;
     private final String deleteOlderThanSql;
+    private final String deleteSlotsSql;
     /// Registry of live stream handles. Keyed by `(streamId, scope)` because the same logical streamId can have N concurrent registrations across different
     /// users / regions / global. [#deleteAllForScope] and [#deleteAllForStream] sweep matching entries so handles bound to a deleted scope don't linger
     /// pointing at empty rows.
@@ -77,6 +86,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
                                PersistenceDomainService persistenceDomainService,
                                CurrentDateTimeProvider timeProvider,
                                CodecRegistry codecRegistry,
+                               @Dependency AdminAlertService adminAlertService,
                                @SchemaVersion int schemaVersion,
                                @DomainName String domainName,
                                @Migrator PersistenceDomainMigrator migrator) {
@@ -85,6 +95,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         this.persistenceDomainService = checkNotNull(persistenceDomainService, "persistenceDomainService");
         this.timeProvider = checkNotNull(timeProvider, "timeProvider");
         this.codecRegistry = checkNotNull(codecRegistry, "codecRegistry");
+        this.adminAlertService = checkNotNull(adminAlertService, "adminAlertService");
         checkArgument(schemaVersion > 0, "schemaVersion must be > 0, was %s", schemaVersion);
         var domain = new PersistenceDomain(checkNotNull(domainName, "domainName"));
         domainConfig = new PersistenceDomainConfig(domain, schemaVersion, TimeSeriesCacheSchema.INIT_STATEMENTS, checkNotNull(migrator, "migrator"));
@@ -103,6 +114,8 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         deleteAllForScopeSql = "DELETE FROM " + entryTable + " WHERE scope_kind=? AND scope_value IS NOT DISTINCT FROM ?";
         deleteAllForStreamSql = "DELETE FROM " + entryTable + " WHERE stream_id=?";
         deleteOlderThanSql = "DELETE FROM " + entryTable + " WHERE slot_start < ?";
+        deleteSlotsSql = "DELETE FROM " + entryTable +
+                         " WHERE scope_kind=? AND scope_value IS NOT DISTINCT FROM ? AND stream_id=? AND slot_start = ANY(?)";
     }
 
     @Override
@@ -179,24 +192,96 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
 
     private <T> Map<Instant, Optional<T>> doReadRange(TimeSeriesStreamImpl<T> stream, Instant fromInclusive, Instant toInclusive) {
         var out = new HashMap<Instant, Optional<T>>();
-        try (Connection connection = dataSource.getConnection();
-             PreparedStatement stmt = connection.prepareStatement(selectRangeSql)) {
-            bindScopeColumns(stmt, stream.scope());
-            stmt.setString(3, stream.streamId());
-            stmt.setObject(4, fromInclusive.atOffset(ZoneOffset.UTC));
-            stmt.setObject(5, toInclusive.atOffset(ZoneOffset.UTC));
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    Instant slotStart = rs.getObject(1, OffsetDateTime.class).toInstant();
-                    // decode yields Optional.empty() for a tombstone row (a known-empty hit that must not be recomputed) and Optional.of(value) otherwise.
-                    out.put(slotStart, codecRegistry.decode(rs.getBytes(2), stream.type()));
+        var slotsToWipe = new ArrayList<Instant>();
+        boolean alarming = false;
+        String firstDiscardReason = null;
+        try (Connection connection = dataSource.getConnection()) {
+            try (PreparedStatement stmt = connection.prepareStatement(selectRangeSql)) {
+                bindScopeColumns(stmt, stream.scope());
+                stmt.setString(3, stream.streamId());
+                stmt.setObject(4, fromInclusive.atOffset(ZoneOffset.UTC));
+                stmt.setObject(5, toInclusive.atOffset(ZoneOffset.UTC));
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        Instant slotStart = rs.getObject(1, OffsetDateTime.class).toInstant();
+                        // Present → cached value; Empty → tombstone (a known-empty hit, not recomputed); Discard → an undecodable row (stale schema version or
+                        //  corruption): omit it so the slot recomputes, and collect it for a batch wipe so the bad bytes don't linger and re-trip every read.
+                        switch (codecRegistry.decode(rs.getBytes(2), stream.type(), stream.schemaVersion())) {
+                            case DecodeOutcome.Present<T>(T value) -> out.put(slotStart, Optional.of(value));
+                            case DecodeOutcome.Empty<T> _ -> out.put(slotStart, Optional.empty());
+                            case DecodeOutcome.Discard<T>(boolean rowAlarming, String reason) -> {
+                                slotsToWipe.add(slotStart);
+                                alarming = alarming || rowAlarming;
+                                if (firstDiscardReason == null) {
+                                    firstDiscardReason = reason;
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+            if (!slotsToWipe.isEmpty()) {
+                wipeSlots(connection, stream, slotsToWipe);
             }
         } catch (SQLException e) {
             throw new RuntimeException("Failed to read time-series cache range", e);
         }
+        if (!slotsToWipe.isEmpty()) {
+            logger.info("[{}][{}] discarded and wiped {} undecodable row(s) (alarming={}); first reason: {}",
+                        stream.scope(), stream.streamId(), slotsToWipe.size(), alarming, firstDiscardReason);
+            if (alarming) {
+                raiseUndecodableRowsAlert(stream, slotsToWipe.size(), firstDiscardReason);
+            }
+        }
         logger.debug("[{}][{}] readRange {}..{} hits={}", stream.scope(), stream.streamId(), fromInclusive, toInclusive, out.size());
         return out;
+    }
+
+    /// Deletes the given slots (undecodable rows) in one round-trip on the read's own connection, so the wipe shares the read's transaction and the bad bytes
+    /// are gone before the stream recomputes them.
+    private void wipeSlots(Connection connection, TimeSeriesStreamImpl<?> stream, List<Instant> slots) throws SQLException {
+        var slotArray = new OffsetDateTime[slots.size()];
+        for (int i = 0; i < slots.size(); i++) {
+            slotArray[i] = slots.get(i).atOffset(ZoneOffset.UTC);
+        }
+        try (PreparedStatement stmt = connection.prepareStatement(deleteSlotsSql)) {
+            bindScopeColumns(stmt, stream.scope());
+            stmt.setString(3, stream.streamId());
+            Array array = connection.createArrayOf("timestamptz", slotArray);
+            stmt.setArray(4, array);
+            stmt.executeUpdate();
+        }
+    }
+
+    /// Raises a single PII-free admin alert for a batch of genuinely-corrupt rows (a stale schema version is *not* alarming and never reaches here). The alert
+    /// carries only the stream *family* (the prefix before the first `:`, which is PII-free even when the full streamId embeds an MPAN / meter serial), the
+    /// scope kind (never the userId / region value), the discarded-row count, and a frame-metadata-only reason — never row contents.
+    private void raiseUndecodableRowsAlert(TimeSeriesStreamImpl<?> stream, int discardedCount, String firstReason) {
+        String family = streamFamily(stream.streamId());
+        String scopeKind = scopeKind(stream.scope());
+        adminAlertService.raise(AdminAlertData.builder()
+                                              .setSeverity(AdminAlertSeverity.ERROR)
+                                              .setTitle("Time-series cache: undecodable rows discarded")
+                                              .setDescription("Discarded " + discardedCount + " undecodable row(s) from stream family '" + family +
+                                                              "' (scope " + scopeKind + "); first failure: " + firstReason +
+                                                              ". Rows were wiped and will be recomputed.")
+                                              .setLabels(ImmutableMap.of("streamFamily", family, "scopeKind", scopeKind))
+                                              .build());
+    }
+
+    private static String scopeKind(Scope scope) {
+        return switch (scope) {
+            case Scope.Global _ -> "global";
+            case Scope.User _ -> "user";
+            case Scope.Region _ -> "region";
+        };
+    }
+
+    /// The PII-free prefix of a streamId — the part before the first `:`, which by convention is the stream family (e.g. `octopus.consumption`,
+    /// `octopus.rates`, `savings`) and never the variant suffix that may embed an MPAN / meter serial / region code.
+    private static String streamFamily(String streamId) {
+        int colon = streamId.indexOf(':');
+        return colon < 0 ? streamId : streamId.substring(0, colon);
     }
 
     private <T> void doWriteBatch(TimeSeriesStreamImpl<T> stream, Map<Instant, Optional<T>> values) {
@@ -209,9 +294,10 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
                 stmt.setString(3, stream.streamId());
                 stmt.setObject(4, entry.getKey().atOffset(ZoneOffset.UTC));
 
-                // encode frames the value, or a tombstone for an empty Optional. setBinaryStream over a ByteArrayInputStream avoids pgjdbc's defensive
-                //  byte[] copy that setBytes(byte[]) performs, so batch memory stays at one byte[] per row; the frame is only read here, never mutated.
-                byte[] payload = codecRegistry.encode(entry.getValue());
+                // encode frames the value at the stream's current schema version, or a tombstone for an empty Optional. setBinaryStream over a
+                //  ByteArrayInputStream avoids pgjdbc's defensive byte[] copy that setBytes(byte[]) performs, so batch memory stays at one byte[] per row; the
+                //  frame is only read here, never mutated.
+                byte[] payload = codecRegistry.encode(entry.getValue(), stream.schemaVersion());
                 stmt.setBinaryStream(5, new ByteArrayInputStream(payload), payload.length);
 
                 stmt.setTimestamp(6, nowTs);

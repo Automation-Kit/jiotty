@@ -3,6 +3,8 @@ package net.yudichev.jiotty.timeseriescache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
+import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
+import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -15,12 +17,17 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import java.io.ByteArrayInputStream;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
@@ -29,10 +36,12 @@ import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class TimeSeriesCacheImplTest {
     private static final Instant T0 = Instant.parse("2026-04-15T10:00:00Z");
@@ -53,6 +62,7 @@ class TimeSeriesCacheImplTest {
     private ProgrammableClock clock;
     private SmileCodec smileCodec;
     private JsonUtf8Codec jsonCodec;
+    private TestAdminAlertService adminAlertService;
     private TimeSeriesCacheImpl service;
 
     @BeforeEach
@@ -65,6 +75,7 @@ class TimeSeriesCacheImplTest {
         domainService.start();
         smileCodec = new SmileCodec();
         jsonCodec = new JsonUtf8Codec();
+        adminAlertService = new TestAdminAlertService(clock);
         service = newCache(new CodecRegistry(smileCodec, ImmutableList.of(smileCodec, jsonCodec)));
         service.start();
     }
@@ -75,6 +86,7 @@ class TimeSeriesCacheImplTest {
                                        domainService,
                                        clock,
                                        codecRegistry,
+                                       adminAlertService,
                                        1,
                                        TimeSeriesCacheSchema.DEFAULT_DOMAIN_NAME,
                                        PersistenceDomainMigrator.FAIL_ON_MIGRATION);
@@ -152,6 +164,89 @@ class TimeSeriesCacheImplTest {
                                           Map.of(SLOT_APR_2, new TestRow("2026-04-02", 2, "fresh")));
         // Cache was cleared, so the fresh lambda runs again and its value for SLOT_APR_2 surfaces — confirms deleteAllForStream evicted the tombstone rows too.
         assertThat(compose(reseed, SLOT_APR_1, SLOT_APR_3)).containsEntry(SLOT_APR_2, new TestRow("2026-04-02", 2, "fresh"));
+    }
+
+    @Test
+    void rowWithStaleSchemaVersion_isWipedAndRecomputed_withoutAlerting() throws Exception {
+        // A row written under an older schema version (here forced to 2 while the stream's type resolves to version 1) is a routine post-deploy mismatch: it
+        //  is discarded so the slot recomputes, the bad row is wiped, and NO admin alert fires (a version bump is expected, not corruption).
+        var staleFrame = new CodecRegistry(smileCodec, ImmutableList.of(smileCodec, jsonCodec))
+                .encode(Optional.of(new TestRow("2026-04-01", 1, "stale")), 2);
+        insertRawRow(Scope.user("user-1"), STREAM_A, SLOT_APR_1, staleFrame);
+
+        var stream = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(),
+                                          Map.of(SLOT_APR_1, new TestRow("2026-04-01", 1, "recomputed")));
+        assertThat(compose(stream, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, new TestRow("2026-04-01", 1, "recomputed"));
+        assertThat(adminAlertService.alertsById()).isEmpty();
+
+        // The wiped slot was rewritten at the current version: a re-read returns the recomputed value without the stale lambda being needed.
+        var reread = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(),
+                                          Map.of(SLOT_APR_1, new TestRow("would-not-be-asked", 0, "lambda")));
+        assertThat(compose(reread, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, new TestRow("2026-04-01", 1, "recomputed"));
+    }
+
+    /// Each case is `(scope, streamId, expectedFamily, expectedScopeKind, mustNotLeak)`: a corrupt row across each scope kind, including a consumption-style
+    /// streamId whose variant suffix embeds an MPAN/serial — the alert must carry only the family prefix and the scope kind, never the suffix or scope value.
+    static Stream<Arguments> corruptRow_isWipedAndRecomputed_andRaisesOnePiiFreeErrorAlert() {
+        return Stream.of(
+                arguments(Scope.user("user-1"), "stream-a", "stream-a", "user", "user-1"),
+                arguments(Scope.region("A"), "octopus.consumption:9999999999999:99XXX99999", "octopus.consumption", "region", "9999999999999"),
+                arguments(Scope.global(), "savings:secret-hash", "savings", "global", "secret-hash"));
+    }
+
+    @ParameterizedTest
+    @MethodSource
+    void corruptRow_isWipedAndRecomputed_andRaisesOnePiiFreeErrorAlert(Scope scope,
+                                                                       String streamId,
+                                                                       String expectedFamily,
+                                                                       String expectedScopeKind,
+                                                                       String mustNotLeak) throws Exception {
+        // A validly-framed row at the current version whose payload cannot be decoded (here a String payload read as a TestRow) is genuine corruption: it is
+        //  discarded + wiped + recomputed, and raises exactly one ERROR alert carrying only the stream family + scope kind (never the scope value or row data).
+        var corruptFrame = new CodecRegistry(smileCodec, ImmutableList.of(smileCodec, jsonCodec))
+                .encode(Optional.of("not a TestRow"), 1);
+        insertRawRow(scope, streamId, SLOT_APR_1, corruptFrame);
+
+        var stream = defineStreamWithSeed(streamId, scope, Resolution.daily(),
+                                          Map.of(SLOT_APR_1, new TestRow("2026-04-01", 1, "recomputed")));
+        assertThat(compose(stream, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, new TestRow("2026-04-01", 1, "recomputed"));
+
+        assertThat(adminAlertService.activeAlertsById().values()).singleElement().satisfies(alert -> {
+            assertThat(alert.severity()).isEqualTo(AdminAlertSeverity.ERROR);
+            assertThat(alert.labels()).containsEntry("streamFamily", expectedFamily).containsEntry("scopeKind", expectedScopeKind);
+            // PII-free: never the scope value / variant suffix, never the corrupt row's payload bytes.
+            String description = adminAlertService.eventsByAlertId(alert.id()).getFirst().description();
+            assertThat(alert.title() + " " + description).doesNotContain(mustNotLeak).doesNotContain("not a TestRow");
+        });
+    }
+
+    /// Inserts a row with an arbitrary (possibly hand-crafted / stale-version / corrupt) frame straight into the table, bypassing the codec, so a read can
+    /// exercise the discard/wipe path against any scope.
+    private void insertRawRow(Scope scope, String streamId, Instant slot, byte[] frame) throws Exception {
+        short scopeKind = switch (scope) {
+            case Scope.Global _ -> 0;
+            case Scope.User _ -> 1;
+            case Scope.Region _ -> 2;
+        };
+        String scopeValue = switch (scope) {
+            case Scope.Global _ -> null;
+            case Scope.User user -> user.userId();
+            case Scope.Region region -> region.code();
+        };
+        try (Connection connection = dataSourceFactory.create().getConnection();
+             PreparedStatement stmt = connection.prepareStatement(
+                     "INSERT INTO " + TimeSeriesCacheSchema.DEFAULT_DOMAIN_NAME + "_entry " +
+                     "(scope_kind, scope_value, stream_id, slot_start, value, created_at, updated_at) VALUES (?,?,?,?,?,?,?)")) {
+            OffsetDateTime now = T0.atOffset(ZoneOffset.UTC);
+            stmt.setShort(1, scopeKind);
+            stmt.setString(2, scopeValue);
+            stmt.setString(3, streamId);
+            stmt.setObject(4, slot.atOffset(ZoneOffset.UTC));
+            stmt.setBinaryStream(5, new ByteArrayInputStream(frame), frame.length);
+            stmt.setObject(6, now);
+            stmt.setObject(7, now);
+            stmt.executeUpdate();
+        }
     }
 
     @Test

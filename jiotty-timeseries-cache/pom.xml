@@ -26,6 +26,10 @@
             <artifactId>jiotty-persistence-varstore</artifactId>
         </dependency>
         <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-admin-alerts</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
@@ -70,6 +74,12 @@
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>jiotty-common</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-admin-alerts</artifactId>
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>

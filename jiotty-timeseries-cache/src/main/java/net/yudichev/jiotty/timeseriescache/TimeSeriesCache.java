@@ -32,6 +32,12 @@ public interface TimeSeriesCache {
     /// previously-registered handle (idempotent). The `slotsComputation` of a re-registration is silently ignored — lambdas are not comparable, so the first
     /// registration's lambda stays in effect.
     ///
+    /// **Schema versioning.** The value `type` may declare a [CacheSchemaVersion]; each cached value records the version it was written under (an unannotated
+    /// type is version 1). When a value is read back under a version different from the type's current one — because [CacheSchemaVersion] was bumped after a
+    /// change to the type's shape that older values can no longer satisfy — it is treated as absent and recomputed rather than reinterpreted. A version bump
+    /// therefore retires values of the old shape instead of mis-decoding them; there is no migration. Bump [CacheSchemaVersion] whenever the type changes in a
+    /// way that an older cached value cannot satisfy (a renamed/removed/retyped field, etc.).
+    ///
     /// @throws IllegalArgumentException if `streamId` is blank, or if re-registration of the same `(streamId, scope)` specifies a different `resolution` or
     /// `type` than the existing registration
     <T> TimeSeriesStream<T> defineStream(String streamId,
