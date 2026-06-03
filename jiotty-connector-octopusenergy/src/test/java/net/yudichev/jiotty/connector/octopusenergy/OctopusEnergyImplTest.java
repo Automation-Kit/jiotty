@@ -407,7 +407,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-01T00:00:00Z");
         Instant to = Instant.parse("2024-12-31T23:59:59Z");
         stubGet(OctopusEnergyImpl.BASE_URL + "/products/AGILE-23-12-06/electricity-tariffs/E-1R-AGILE-23-12-06-A/standing-charges/"
-                + "?period_from=" + from + "&period_to=" + to,
+                + "?page_size=25000&period_from=" + from + "&period_to=" + to,
                 """
                 {
                   "count": 1, "next": null, "previous": null,
@@ -443,7 +443,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T01:00:00Z");
         stubGet(OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                + "?period_from=" + from + "&period_to=" + to,
+                + "?page_size=25000&period_from=" + from + "&period_to=" + to,
                 """
                 {
                   "count": 2, "next": null, "previous": null,
@@ -465,7 +465,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T02:00:00Z");
         String page1 = OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                       + "?period_from=" + from + "&period_to=" + to;
+                       + "?page_size=25000&period_from=" + from + "&period_to=" + to;
         String page2 = "https://api.octopus.energy/v1/.../consumption/?page=2";
         stubGet(page1, """
                        {"count": 4, "next": "%s", "previous": null,
@@ -494,7 +494,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T00:30:00Z");
         String url = OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                     + "?period_from=" + from + "&period_to=" + to;
+                     + "?page_size=25000&period_from=" + from + "&period_to=" + to;
         stubGet(url, """
                      {"count": 0, "next": null, "previous": null, "results": []}
                      """);
@@ -509,6 +509,8 @@ class OctopusEnergyImplTest {
                                                .findFirst()
                                                .orElseThrow();
         assertThat(consumptionRequest.header("Authorization")).startsWith("Basic ");
+        // The max page size is requested so a long range comes back in as few round-trips as possible (a year of half-hourly data in one page, not ~176).
+        assertThat(consumptionRequest.url().toString()).contains("page_size=25000");
     }
 
     @Test
@@ -585,7 +587,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T01:00:00Z");
         String okUrl = OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                       + "?period_from=" + from + "&period_to=" + to;
+                       + "?page_size=25000&period_from=" + from + "&period_to=" + to;
         stubGet(okUrl, """
                        {"count": 0, "next": null, "previous": null, "results": []}
                        """);
@@ -624,7 +626,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T01:00:00Z");
         stubError(OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                  + "?period_from=" + from + "&period_to=" + to,
+                  + "?page_size=25000&period_from=" + from + "&period_to=" + to,
                   401, "{\"detail\":\"revoked\"}");
 
         List<AuthState> observed = new ArrayList<>();

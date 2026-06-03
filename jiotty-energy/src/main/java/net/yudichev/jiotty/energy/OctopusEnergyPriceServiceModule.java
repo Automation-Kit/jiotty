@@ -63,10 +63,29 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
                                          .build();
         installLifecycleComponentModule(
                 RetryableOperationExecutorModule.builder()
+                                                .withAnnotation(forAnnotation(OctopusEnergyProviderService.PollRetry.class))
                                                 .setBackingOffExceptionHandler(exposedBy(
                                                         BackingOffExceptionHandlerModule.builder()
                                                                                         .setRetryableExceptionPredicate(literally(_ -> true))
                                                                                         .withConfig(literally(backoffConfig))
+                                                                                        .build()))
+                                                .build());
+        // Separate, short-window executor for the on-demand query* calls: ride out a momentary Octopus 5xx / network blip, but give up within seconds (an
+        // interactive caller can't be left waiting) and never retry a permanent 4xx — hence the transient-only predicate, unlike the always-true poll
+        // predicate above.
+        var queryBackoffConfig = BackOffConfig.builder()
+                                              .setInitialInterval(Duration.ofSeconds(1))
+                                              .setMaxInterval(Duration.ofSeconds(8))
+                                              .setMaxElapsedTime(Duration.ofSeconds(30))
+                                              .build();
+        installLifecycleComponentModule(
+                RetryableOperationExecutorModule.builder()
+                                                .withAnnotation(forAnnotation(OctopusEnergyProviderService.QueryRetry.class))
+                                                .setBackingOffExceptionHandler(exposedBy(
+                                                        BackingOffExceptionHandlerModule.builder()
+                                                                                        .setRetryableExceptionPredicate(
+                                                                                                literally(OctopusEnergyProviderService::isTransientFailure))
+                                                                                        .withConfig(literally(queryBackoffConfig))
                                                                                         .build()))
                                                 .build());
         octopusApiKeySpec.bind(String.class)

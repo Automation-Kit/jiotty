@@ -44,6 +44,12 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
     private static final int EXPECTED_PRODUCT_COUNT = 265;
     /// Octopus rates / standing charges arrive in half-hour slots, so this is the divisor that converts a `(from, to)` window into a slot count.
     private static final Duration HALF_HOUR = Duration.ofMinutes(30);
+    /// Page size requested on every ranged half-hourly fetch (consumption / rates). Octopus defaults to 100 rows per page, which turns a year of half-hourly
+    /// data (~17 500 rows) into ~176 sequential page requests taking minutes — the long sequential sweep is what eventually catches a transient gateway 502 and
+    /// fails the whole fetch. Requesting the maximum collapses a year of consumption into a single request (~1 s) and a year of rates into ~12 pages (the rates
+    /// endpoint caps each page at 1 500 regardless), so the request count — and the 502 exposure window — shrinks by ~100×. Pagination still follows `next`, so
+    /// multi-year ranges beyond one page are handled normally.
+    private static final int MAX_PAGE_SIZE = 25_000;
     private static final Logger logger = LogManager.getLogger(OctopusEnergyImpl.class);
 
     private final Map<Character, RegionServiceImpl> regionServices = new ConcurrentHashMap<>();
@@ -132,7 +138,8 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
             if (tariffRegionMismatch(tariffCode)) {
                 return CompletableFuture.failedFuture(tariffRegionMismatchError(tariffCode));
             }
-            String url = tariffsUrl(productCode, tariffCode) + "standard-unit-rates/?period_from=" + from + "&period_to=" + to;
+            String url = tariffsUrl(productCode, tariffCode) + "standard-unit-rates/?page_size=" + MAX_PAGE_SIZE
+                         + "&period_from=" + from + "&period_to=" + to;
             // Half-hour slots — one rate per slot. Round up so the hint never undershoots; one slot of headroom is cheap.
             int expectedSlotCount = Math.toIntExact(Duration.between(from, to).plus(HALF_HOUR).dividedBy(HALF_HOUR));
             return paginate(OctopusEnergyImpl.this::openGetCall,
@@ -148,7 +155,8 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
             if (tariffRegionMismatch(tariffCode)) {
                 return CompletableFuture.failedFuture(tariffRegionMismatchError(tariffCode));
             }
-            String url = tariffsUrl(productCode, tariffCode) + "standing-charges/?period_from=" + from + "&period_to=" + to;
+            String url = tariffsUrl(productCode, tariffCode) + "standing-charges/?page_size=" + MAX_PAGE_SIZE
+                         + "&period_from=" + from + "&period_to=" + to;
 
             return paginate(OctopusEnergyImpl.this::openGetCall,
                             url,
@@ -214,7 +222,7 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
             checkArgument(mpan != null && !mpan.isBlank(), "mpan must be non-blank");
             checkArgument(meterSerial != null && !meterSerial.isBlank(), "meterSerial must be non-blank");
             String url = BASE_URL + "/electricity-meter-points/" + mpan + "/meters/" + meterSerial + "/consumption/"
-                         + "?period_from=" + from + "&period_to=" + to;
+                         + "?page_size=" + MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to;
             // Half-hour slots — one row per slot. Round up so the hint never undershoots.
             int expectedSlotCount = Math.toIntExact(Duration.between(from, to).plus(HALF_HOUR).dividedBy(HALF_HOUR));
             CompletableFuture<List<ConsumptionRow>> future = paginate(this::authedGetCall,
