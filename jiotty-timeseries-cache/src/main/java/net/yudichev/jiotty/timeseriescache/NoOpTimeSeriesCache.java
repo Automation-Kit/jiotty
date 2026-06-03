@@ -81,5 +81,11 @@ public final class NoOpTimeSeriesCache implements TimeSeriesCache {
             return slotsComputation.apply(allSlots)
                                    .thenApply(computedSlots -> TimeSeriesCacheUtil.buildOrderedMap(fromInclusive, toInclusive, step, Map.of(), computedSlots));
         }
+
+        @Override
+        public CompletableFuture<Boolean> isCached(Instant slot) {
+            // Retains nothing, so no slot is ever cached.
+            return CompletableFuture.completedFuture(false);
+        }
     }
 }

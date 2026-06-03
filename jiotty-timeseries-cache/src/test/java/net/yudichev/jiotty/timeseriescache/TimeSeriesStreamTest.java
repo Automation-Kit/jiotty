@@ -248,6 +248,34 @@ class TimeSeriesStreamTest {
     }
 
     @Test
+    void isCached_reportsStoredValuesAndTombstones_withoutInvokingLambda() {
+        // Slot 2 gets a value, slot 4 a tombstone; slots 1/3/5 are omitted so they stay uncached. isCached must report true for both the value and the
+        // tombstone, false for the omitted slots, and must never trigger the miss-fill lambda (unlike readRange).
+        var invocations = new AtomicInteger();
+        var stream = cache.defineStream(uniqueStreamId(), SCOPE, Resolution.daily(), TYPE, missingSlots -> {
+            invocations.incrementAndGet();
+            var values = new HashMap<Instant, Optional<TestValue>>();
+            for (Instant slot : missingSlots) {
+                if (slot.equals(SLOT_APR_2)) {
+                    values.put(slot, Optional.of(new TestValue("v-2")));
+                } else if (slot.equals(SLOT_APR_4)) {
+                    values.put(slot, Optional.empty());
+                }
+            }
+            return CompletableFuture.completedFuture(values);
+        });
+        stream.readRange(SLOT_APR_1, SLOT_APR_5).orTimeout(5, SECONDS).join();
+        invocations.set(0);
+
+        assertThat(stream.isCached(SLOT_APR_2).orTimeout(5, SECONDS).join()).isTrue();   // stored value
+        assertThat(stream.isCached(SLOT_APR_4).orTimeout(5, SECONDS).join()).isTrue();   // tombstone counts as cached
+        assertThat(stream.isCached(SLOT_APR_1).orTimeout(5, SECONDS).join()).isFalse();  // omitted → uncached
+        assertThat(stream.isCached(SLOT_APR_3).orTimeout(5, SECONDS).join()).isFalse();
+        // The probe never fills misses, even for the uncached slots above.
+        assertThat(invocations.get()).isZero();
+    }
+
+    @Test
     void singleSlotFilledOthersOmitted_onlyTheFilledSlotIsCached() {
         // Sparse-fill variant of omittedKeysAreTreatedAsNoValue_andNotCached: only one slot in the requested range gets a value, the others are omitted
         // from the lambda's returned map. None of the omitted slots are cached, so a re-compose asks the lambda for them again.

@@ -19,4 +19,11 @@ public interface TimeSeriesStream<T> {
     /// precision), or if `fromInclusive` is after `toInclusive`
     /// @implSpec Implementations MUST enforce the slot-alignment precondition on every call so off-grain rows can never be written into the cache.
     CompletableFuture<ImmutableMap<Instant, T>> readRange(Instant fromInclusive, Instant toInclusive);
+
+    /// Returns a future of whether the cache already holds a frame for `slot` — a stored value **or** a negative-cache tombstone both count as cached. Unlike
+    /// [#readRange] this is a pure coverage probe: it never invokes the `slotsComputation`, never writes back, and never recomputes a miss. Callers use it to
+    /// decide whether a slot is already settled (so an expensive miss-fill or upstream freshness probe can be skipped) without the side effect of filling it.
+    ///
+    /// @throws IllegalArgumentException if `slot` is not on a multiple of the configured resolution's step (including sub-second precision)
+    CompletableFuture<Boolean> isCached(Instant slot);
 }

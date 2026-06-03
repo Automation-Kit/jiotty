@@ -442,6 +442,23 @@ class OctopusEnergyProviderServiceTest {
         };
     }
 
+    @Test
+    void latestConsumptionInstant_returnsLatestPublishedSlot_viaDirectConnectorCall() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        when(accountService.getConsumption(eq(MPAN), eq(METER_SERIAL), any(), any()))
+                .thenReturn(completedFuture(List.of(
+                        consumption("2026-06-01T00:00:00Z", "2026-06-01T00:30:00Z", 0.3),
+                        consumption("2026-06-02T11:30:00Z", "2026-06-02T12:00:00Z", 0.5))));
+        service.start();
+
+        CompletableFuture<Optional<Instant>> result = service.latestConsumptionInstant(MPAN, METER_SERIAL);
+        clock.tick();
+
+        assertThat(result.join()).contains(Instant.parse("2026-06-02T11:30:00Z"));
+        // Direct connector call — the frontier probe must NOT route through the (tombstoning) consumption cache stream.
+        verify(accountService, times(1)).getConsumption(any(), any(), any(), any());
+    }
+
     /// Runs a cache-backed query twice over the same range, draining the provider's executor after each so the futures complete deterministically.
     private void readTwice(Supplier<CompletableFuture<?>> query) {
         CompletableFuture<?> first = query.get();

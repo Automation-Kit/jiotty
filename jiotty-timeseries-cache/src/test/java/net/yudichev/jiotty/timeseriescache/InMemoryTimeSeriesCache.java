@@ -133,6 +133,14 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
             });
         }
 
+        @Override
+        public CompletableFuture<Boolean> isCached(Instant slot) {
+            synchronized (lock) {
+                // rows holds both stored values and Optional.empty() tombstones; either counts as cached.
+                return CompletableFuture.completedFuture(rows.containsKey(slot));
+            }
+        }
+
         int purgeOlderThan(Instant cutoffExclusive) {
             synchronized (lock) {
                 int before = rows.size();

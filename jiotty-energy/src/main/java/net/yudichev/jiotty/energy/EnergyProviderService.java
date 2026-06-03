@@ -11,6 +11,7 @@ import net.yudichev.jiotty.connector.octopusenergy.StandingCharge;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
@@ -57,4 +58,14 @@ public interface EnergyProviderService extends EnergyPriceService {
 
     /// Returns the full per-region tariff details for the product with the given code.
     CompletableFuture<ProductDetails> queryProductDetails(String code);
+
+    /// Returns the start instant of the latest half-hourly consumption slot the provider has *published* for one meter, or empty if none in the recent probe
+    /// window. This is the provider's consumption "publication frontier": smart-meter consumption is published with a variable, undocumented delay (hours to
+    /// 48 h+), so a calendar day being over does not mean its consumption is available yet. Callers use the frontier to decide which days are settled (fully
+    /// published) and therefore safe to compute, cache, and negative-cache — never finalising a day the provider may still be filling in.
+    ///
+    /// @implSpec Unlike the `query*` methods, this MUST be served by a direct, **uncached** provider call: it determines *whether* a slot is final, which is
+    /// the very precondition the slot cache relies on (caching the probe would tombstone not-yet-published slots — the bug this exists to prevent). It returns
+    /// only the frontier instant, never consumption values, so it does not violate the "all consumption reads go through the cache" invariant for actual data.
+    CompletableFuture<Optional<Instant>> latestConsumptionInstant(String mpan, String meterSerial);
 }

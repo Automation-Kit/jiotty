@@ -80,6 +80,13 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
                     .thenCompose(hits -> fillMisses(fromInclusive, toInclusive, hits));
     }
 
+    @Override
+    public CompletableFuture<Boolean> isCached(Instant slot) {
+        checkSlotAligned(slot, "slot");
+        // A single-slot read returns the slot as a key for both a stored value and a tombstone (the read counts tombstones as hits), and runs no miss-fill.
+        return cache.readRange(this, slot, slot).thenApply(hits -> hits.containsKey(slot));
+    }
+
     private CompletableFuture<ImmutableMap<Instant, T>> fillMisses(Instant fromInclusive, Instant toInclusive, Map<Instant, Optional<T>> hits) {
         BitmapSlotSet missingSlots = listMissingSlots(fromInclusive, toInclusive, hits);
         logger.debug("{} readRange {}..{} hits={} misses={}", logPrefix, fromInclusive, toInclusive, hits.size(), missingSlots.size());

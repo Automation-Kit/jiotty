@@ -80,6 +80,21 @@ class NoOpTimeSeriesCacheTest {
     }
 
     @Test
+    void isCached_alwaysFalse_sinceNothingIsRetained() {
+        var stream = cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE, missingSlots -> {
+            var values = new HashMap<Instant, Optional<TestValue>>();
+            for (Instant slot : missingSlots) {
+                values.put(slot, Optional.of(new TestValue("v-" + slot)));
+            }
+            return CompletableFuture.completedFuture(values);
+        });
+        // Even after a read computed the slot, the no-op cache retains nothing, so isCached stays false.
+        stream.readRange(SLOT_APR_1, SLOT_APR_1).join();
+
+        assertThat(stream.isCached(SLOT_APR_1).join()).isFalse();
+    }
+
+    @Test
     void defineStream_sameKey_returnsSameHandle() {
         var first = cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE,
                                        _ -> CompletableFuture.completedFuture(Map.of()));

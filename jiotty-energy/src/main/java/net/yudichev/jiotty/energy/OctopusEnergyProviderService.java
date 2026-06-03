@@ -34,6 +34,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -64,6 +65,9 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     private static final Logger logger = LogManager.getLogger(OctopusEnergyProviderService.class);
     private static final Duration ACCOUNT_POLL_INTERVAL = Duration.ofHours(12);
     private static final String AGILE_PRODUCT_CODE_PREFIX = "AGILE-";
+    /// How far back [#latestConsumptionInstant] looks for the most recent published consumption slot. This bounds the search, not a lag assumption: it
+    /// comfortably exceeds Octopus' worst-case publication delay (hours to ~48 h), so the true frontier is found whenever the meter has reported at all.
+    private static final Duration CONSUMPTION_FRONTIER_PROBE_WINDOW = Duration.ofDays(14);
 
     private final Provider<SchedulingExecutor> executorProvider;
     private final CurrentDateTimeProvider timeProvider;
@@ -188,6 +192,20 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     public CompletableFuture<ProductDetails> queryProductDetails(String code) {
         return whenStartedAndNotLifecycling(
                 () -> queryRetryExecutor.withBackOffAndRetry("octopus.queryProductDetails", () -> octopusEnergy.getProductDetails(code)));
+    }
+
+    @Override
+    public CompletableFuture<Optional<Instant>> latestConsumptionInstant(String mpan, String meterSerial) {
+        // Direct, uncached connector call (NOT OctopusStreams): this determines the publication frontier, the precondition the slot cache relies on, so routing
+        // it through the cache would tombstone the very not-yet-published slots we're checking for. The probe window comfortably exceeds Octopus' worst-case
+        // publication delay; it bounds the search for the latest slot, it is not a lag assumption.
+        return whenStartedAndNotLifecycling(() -> queryRetryExecutor.withBackOffAndRetry(
+                "octopus.latestConsumptionInstant",
+                () -> {
+                    Instant now = timeProvider.currentInstant();
+                    return accountService.getConsumption(mpan, meterSerial, now.minus(CONSUMPTION_FRONTIER_PROBE_WINDOW), now)
+                                         .thenApply(rows -> rows.stream().map(ConsumptionRow::intervalStart).max(Comparator.naturalOrder()));
+                }));
     }
 
     /// The supply region is the trailing letter of an Octopus tariff code (e.g. `E-1R-AGILE-23-12-06-A` → `A`).
