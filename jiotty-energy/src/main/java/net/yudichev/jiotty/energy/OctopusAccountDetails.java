@@ -21,7 +21,9 @@ public record OctopusAccountDetails(List<MeterPoint> meterPoints) {
     /// @param mpan          the Meter Point Administration Number; its supply region is encoded in the trailing letter of each [TariffPeriod#tariffCode]
     /// @param meterSerials  the serial numbers of the physical meters at this point (one per meter; consumption is fetched per `(mpan, serial)`)
     /// @param tariffPeriods the tariff agreements at this point over time, in the order the account reports them
-    public record MeterPoint(String mpan, List<String> meterSerials, List<TariffPeriod> tariffPeriods) {
+    /// @param export        whether this is an export point (energy sent to the grid, e.g. solar / SEG) rather than an import (consumption) point; consumers
+    ///                      accounting for what the user *consumes* should skip export points
+    public record MeterPoint(String mpan, List<String> meterSerials, List<TariffPeriod> tariffPeriods, boolean export) {
         public MeterPoint {
             checkNotNull(mpan, "mpan");
             meterSerials = ImmutableList.copyOf(meterSerials);

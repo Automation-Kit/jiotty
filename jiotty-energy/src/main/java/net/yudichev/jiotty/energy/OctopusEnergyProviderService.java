@@ -258,7 +258,8 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
                                          .map(tariff -> new OctopusAccountDetails.TariffPeriod(tariff.tariffCode(),
                                                                                                tariff.validFrom(),
                                                                                                tariff.validTo()))
-                                         .toList()))
+                                         .toList(),
+                               meterPoint.isExport()))
                        .toList();
         return new OctopusAccountDetails(meterPoints);
     }
@@ -351,7 +352,8 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
 
     private Tariff extractCurrentTariff(OctopusAccountData account) {
         return account.properties().stream().findFirst()
-                      .flatMap(accountProperty -> accountProperty.electricityMeterPoints().stream().findFirst())
+                      // Prefer an import (consumption) meter point — an export point carries the SEG/export tariff, not the tariff the user pays to consume.
+                      .flatMap(accountProperty -> accountProperty.electricityMeterPoints().stream().filter(meterPoint -> !meterPoint.isExport()).findFirst())
                       .flatMap(electricityMeterPoint -> electricityMeterPoint.tariffs().stream().filter(this::isCurrent).findFirst())
                       .orElseThrow(() -> new RuntimeException("Unable to extract current tariff from " + account));
     }

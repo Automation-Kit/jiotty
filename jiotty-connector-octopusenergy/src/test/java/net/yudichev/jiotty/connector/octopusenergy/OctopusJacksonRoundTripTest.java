@@ -226,5 +226,20 @@ class OctopusJacksonRoundTripTest {
         assertThat(mp.meters()).singleElement().satisfies(m -> assertThat(m.serialNumber()).isEqualTo("99XXX99999"));
         assertThat(mp.tariffs()).singleElement().satisfies(t -> assertThat(t.tariffCode()).isEqualTo("E-1R-AGILE-23-12-06-A"));
         assertThat(mp.toString()).doesNotContain("9999999999999");
+        assertThat(mp.isExport()).isFalse();   // absent is_export → default false (a consumption point is never mistaken for export)
+    }
+
+    @Test
+    void electricityMeterPoint_readsIsExportFlag() {
+        ElectricityMeterPoint mp = Json.parse("""
+                                              {
+                                                "mpan": "9999999999999",
+                                                "meters": [{"serial_number": "99XXX99999"}],
+                                                "agreements": [],
+                                                "is_export": true
+                                              }
+                                              """, ElectricityMeterPoint.class);
+
+        assertThat(mp.isExport()).isTrue();
     }
 }

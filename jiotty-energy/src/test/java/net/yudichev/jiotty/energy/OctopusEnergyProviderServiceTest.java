@@ -126,6 +126,21 @@ class OctopusEnergyProviderServiceTest {
     }
 
     @Test
+    void exportMeterPointFirst_tariffTakenFromImportMeter() {
+        // Export meter point listed first (region A), import meter point second (region B). Region/tariff must come from the import meter even though the
+        // export meter is listed first.
+        when(accountService.getAccount()).thenReturn(completedFuture(accountWithExportThenImport(AGILE_TARIFF_A, AGILE_TARIFF_B)));
+
+        service.start();
+        clock.tick();
+
+        assertThat(agileRegionB.subscribers).describedAs("routed to the import meter's tariff/region").hasSize(1);
+        assertThat(agilePredictRegionB.subscribers).hasSize(1);
+        assertThat(agileRegionA.subscribers).describedAs("export meter's tariff/region must be ignored").isEmpty();
+        assertThat(agilePredictRegionA.subscribers).isEmpty();
+    }
+
+    @Test
     void tariffChange_reroutesOctopusDelegate() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
 
@@ -274,7 +289,8 @@ class OctopusEnergyProviderServiceTest {
 
         var expected = new OctopusAccountDetails(List.of(
                 new OctopusAccountDetails.MeterPoint(MPAN, List.of(METER_SERIAL),
-                                                     List.of(new OctopusAccountDetails.TariffPeriod(AGILE_TARIFF_A, TARIFF_VALID_FROM, TARIFF_VALID_TO)))));
+                                                     List.of(new OctopusAccountDetails.TariffPeriod(AGILE_TARIFF_A, TARIFF_VALID_FROM, TARIFF_VALID_TO)),
+                                                     false)));
         assertThat(received).contains(new AccountFetchResult.Loaded(expected));
     }
 
@@ -496,20 +512,31 @@ class OctopusEnergyProviderServiceTest {
     }
 
     private static OctopusAccountData account(String tariffCode) {
-        Tariff tariff = Tariff.builder()
-                              .setTariffCode(tariffCode)
-                              .setValidFrom(TARIFF_VALID_FROM)
-                              .setValidTo(TARIFF_VALID_TO)
-                              .build();
-        ElectricityMeter meter = ElectricityMeter.builder().setSerialNumber(METER_SERIAL).build();
-        ElectricityMeterPoint meterPoint = ElectricityMeterPoint.builder()
-                                                                .setMpan(MPAN)
-                                                                .addMeters(meter)
-                                                                .addTariffs(tariff)
-                                                                .build();
         return OctopusAccountData.builder()
-                                 .addProperties(AccountProperty.builder().addElectricityMeterPoints(meterPoint).build())
+                                 .addProperties(AccountProperty.builder().addElectricityMeterPoints(meterPoint(tariffCode, false)).build())
                                  .build();
+    }
+
+    private static OctopusAccountData accountWithExportThenImport(String exportTariffCode, String importTariffCode) {
+        return OctopusAccountData.builder()
+                                 .addProperties(AccountProperty.builder()
+                                                               .addElectricityMeterPoints(meterPoint(exportTariffCode, true))
+                                                               .addElectricityMeterPoints(meterPoint(importTariffCode, false))
+                                                               .build())
+                                 .build();
+    }
+
+    private static ElectricityMeterPoint meterPoint(String tariffCode, boolean isExport) {
+        return ElectricityMeterPoint.builder()
+                                    .setMpan(MPAN)
+                                    .addMeters(ElectricityMeter.builder().setSerialNumber(METER_SERIAL).build())
+                                    .addTariffs(Tariff.builder()
+                                                      .setTariffCode(tariffCode)
+                                                      .setValidFrom(TARIFF_VALID_FROM)
+                                                      .setValidTo(TARIFF_VALID_TO)
+                                                      .build())
+                                    .setExport(isExport)
+                                    .build();
     }
 
     private static Prices prices(String start, int idxOfPredictedPriceStart, Double... pricesPerSlot) {

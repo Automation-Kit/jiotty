@@ -21,4 +21,12 @@ interface BaseElectricityMeterPoint {
 
     @JsonProperty("meters")
     List<ElectricityMeter> meters();
+
+    /// Whether this is an *export* meter point (energy the property sends back to the grid, e.g. solar / SEG) rather than an import (consumption) point.
+    /// Defaults to `false` when the account payload omits the field, so an absent flag reads as a consumption (import) point.
+    @JsonProperty("is_export")
+    @Value.Default
+    default boolean isExport() {
+        return false;
+    }
 }
