@@ -122,5 +122,6 @@ class NoOpTimeSeriesCacheTest {
         assertThat(cache.deleteOlderThan(SLOT_APR_3).join()).isZero();
     }
 
+    @CacheSchemaVersion(1)
     public record TestValue(String content) {}
 }

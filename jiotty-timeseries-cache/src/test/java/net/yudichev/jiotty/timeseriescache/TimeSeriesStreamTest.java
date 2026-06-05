@@ -351,5 +351,6 @@ class TimeSeriesStreamTest {
                                        PersistenceDomainMigrator.FAIL_ON_MIGRATION);
     }
 
+    @CacheSchemaVersion(1)
     public record TestValue(String content) {}
 }

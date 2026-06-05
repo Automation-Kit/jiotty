@@ -38,6 +38,7 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
                          Scope scope,
                          Resolution resolution,
                          TypeToken<T> type,
+                         int schemaVersion,
                          Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
         this.cache = checkNotNull(cache, "cache");
         this.streamId = checkNotNull(streamId, "streamId");
@@ -45,7 +46,7 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
         this.resolution = checkNotNull(resolution, "resolution");
         this.type = checkNotNull(type, "type");
         this.slotsComputation = checkNotNull(slotsComputation, "slotsComputation");
-        schemaVersion = CacheSchemaVersions.resolve(type);
+        this.schemaVersion = schemaVersion;
         slotStep = resolution.step();
         resolutionStepSeconds = slotStep.toSeconds();
         logPrefix = "[" + scope + "][" + streamId + "]";

@@ -136,15 +136,17 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
                                                 Scope scope,
                                                 Resolution resolution,
                                                 TypeToken<T> type,
+                                                int schemaVersion,
                                                 Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
         checkArgument(streamId != null && !streamId.isBlank(), "streamId must be non-blank");
         checkNotNull(scope, "scope");
         checkNotNull(resolution, "resolution");
         checkNotNull(type, "type");
+        CacheSchemaVersions.checkVersion(schemaVersion);
         checkNotNull(slotsComputation, "slotsComputation");
         TimeSeriesStreamImpl<?> existingStream = streamsByKey.compute(new StreamKey(streamId, scope), (key, currentStream) -> {
             if (currentStream == null) {
-                return new TimeSeriesStreamImpl<>(this, key.streamId(), key.scope(), resolution, type, slotsComputation);
+                return new TimeSeriesStreamImpl<>(this, key.streamId(), key.scope(), resolution, type, schemaVersion, slotsComputation);
             }
             checkArgument(currentStream.resolution().equals(resolution),
                           "stream '%s' for scope %s already defined with resolution %s; conflicting redefinition with %s",

@@ -307,9 +307,28 @@ class TimeSeriesCacheImplTest {
         defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of());
         Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<String>>>> empty =
                 _ -> CompletableFuture.completedFuture(Map.of());
-        assertThatThrownBy(() -> service.defineStream(STREAM_A, Scope.user("user-1"), Resolution.daily(), TypeToken.of(String.class), empty))
+        // String is unannotated, so use the explicit-version overload to reach the type-conflict check (the annotation overload would reject it earlier).
+        assertThatThrownBy(() -> service.defineStream(STREAM_A, Scope.user("user-1"), Resolution.daily(), TypeToken.of(String.class), 1, empty))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("conflicting redefinition");
+    }
+
+    @Test
+    void defineStream_unannotatedTypeViaAnnotationOverload_throws() {
+        Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<String>>>> empty =
+                _ -> CompletableFuture.completedFuture(Map.of());
+        assertThatThrownBy(() -> service.defineStream("unannotated", Scope.global(), Resolution.daily(), TypeToken.of(String.class), empty))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must declare a @CacheSchemaVersion");
+    }
+
+    @Test
+    void defineStream_explicitVersionOutOfRange_throws() {
+        Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<String>>>> empty =
+                _ -> CompletableFuture.completedFuture(Map.of());
+        assertThatThrownBy(() -> service.defineStream("bad-version", Scope.global(), Resolution.daily(), TypeToken.of(String.class), 0, empty))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("schema version must be in");
     }
 
     @Test
@@ -589,5 +608,6 @@ class TimeSeriesCacheImplTest {
                 .containsEntry(SLOT_APR_2, new TestRow("2026-04-02", 9, "json"));
     }
 
+    @CacheSchemaVersion(1)
     public record TestRow(String date, int n, String label) {}
 }

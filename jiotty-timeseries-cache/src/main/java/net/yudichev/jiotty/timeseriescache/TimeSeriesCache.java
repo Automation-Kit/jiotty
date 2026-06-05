@@ -32,19 +32,37 @@ public interface TimeSeriesCache {
     /// previously-registered handle (idempotent). The `slotsComputation` of a re-registration is silently ignored — lambdas are not comparable, so the first
     /// registration's lambda stays in effect.
     ///
-    /// **Schema versioning.** The value `type` may declare a [CacheSchemaVersion]; each cached value records the version it was written under (an unannotated
-    /// type is version 1). When a value is read back under a version different from the type's current one — because [CacheSchemaVersion] was bumped after a
-    /// change to the type's shape that older values can no longer satisfy — it is treated as absent and recomputed rather than reinterpreted. A version bump
-    /// therefore retires values of the old shape instead of mis-decoding them; there is no migration. Bump [CacheSchemaVersion] whenever the type changes in a
-    /// way that an older cached value cannot satisfy (a renamed/removed/retyped field, etc.).
+    /// **Schema versioning.** Every cached value records the schema version it was written under. When a value is read back under a version different from the
+    /// stream's current one — because the version was bumped after a change to the type's shape that older values can no longer satisfy — it is treated as
+    /// absent and recomputed rather than reinterpreted. A version bump therefore retires values of the old shape instead of mis-decoding them; there is no
+    /// migration. Bump it whenever the type changes in a way that an older cached value cannot satisfy (a renamed/removed/retyped field, or a change to how the
+    /// stream's values are computed/selected that makes old values wrong).
     ///
-    /// @throws IllegalArgumentException if `streamId` is blank, or if re-registration of the same `(streamId, scope)` specifies a different `resolution` or
-    /// `type` than the existing registration
+    /// This overload takes the version **explicitly** — use it for value types you cannot annotate, e.g. third-party DTOs whose module must not depend on this
+    /// one. For types you own, prefer the [#defineStream(String, Scope, Resolution, TypeToken, Function)] overload, which reads the version from the type's
+    /// [CacheSchemaVersion]. There is no implicit default: a value type must declare its version one way or the other.
+    ///
+    /// @throws IllegalArgumentException if `streamId` is blank; if `schemaVersion` is outside `[1, 65535]`; or if re-registration of the same `(streamId,
+    /// scope)` specifies a different `resolution` or `type` than the existing registration
     <T> TimeSeriesStream<T> defineStream(String streamId,
                                          Scope scope,
                                          Resolution resolution,
                                          TypeToken<T> type,
+                                         int schemaVersion,
                                          Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation);
+
+    /// Registers a stream whose value `type` declares its schema version via [CacheSchemaVersion]. Equivalent to the explicit-version overload with the
+    /// type's annotated version. See that overload and [#defineStream(String, Scope, Resolution, TypeToken, int, Function)] for the versioning contract.
+    ///
+    /// @throws IllegalArgumentException if `type` is not annotated with [CacheSchemaVersion] (there is no implicit default — annotate the type, or use the
+    /// explicit-version overload), plus the conditions of the explicit-version overload
+    default <T> TimeSeriesStream<T> defineStream(String streamId,
+                                                 Scope scope,
+                                                 Resolution resolution,
+                                                 TypeToken<T> type,
+                                                 Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
+        return defineStream(streamId, scope, resolution, type, CacheSchemaVersions.resolve(type), slotsComputation);
+    }
 
     /// Removes every cached entry whose [Scope] matches the argument exactly, and evicts every registered stream handle with the same scope. Use when the
     /// underlying scope-bearing entity goes away — e.g. a deleted user account ([Scope.User]), a decommissioned region ([Scope.Region]), or a flush of all

@@ -26,7 +26,10 @@ public final class NoOpTimeSeriesCache implements TimeSeriesCache {
                                                              Scope scope,
                                                              Resolution resolution,
                                                              TypeToken<T> type,
+                                                             int schemaVersion,
                                                              Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
+        // Nothing is ever stored, so the version is never used to evict; still validate it so the contract is uniform across implementations.
+        CacheSchemaVersions.checkVersion(schemaVersion);
         var key = new StreamKey(streamId, scope);
         NoOpTimeSeriesStream<?> existingStream = streams.get(key);
         if (existingStream != null) {

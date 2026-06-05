@@ -24,7 +24,10 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
                                                              Scope scope,
                                                              Resolution resolution,
                                                              TypeToken<T> type,
+                                                             int schemaVersion,
                                                              Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
+        // This in-memory cache keys purely by slot and never re-decodes, so it does not evict on version change; validate the version for contract parity.
+        CacheSchemaVersions.checkVersion(schemaVersion);
         var key = new StreamKey(streamId, scope);
         InMemoryTimeSeriesStream<?> existingStream = streams.get(key);
         if (existingStream != null) {

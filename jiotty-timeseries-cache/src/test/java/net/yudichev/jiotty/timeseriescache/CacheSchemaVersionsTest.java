@@ -8,8 +8,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CacheSchemaVersionsTest {
     @Test
-    void unannotatedTypeDefaultsToVersionOne() {
-        assertThat(CacheSchemaVersions.resolve(TypeToken.of(Unannotated.class))).isEqualTo(1);
+    void unannotatedTypeThrows() {
+        assertThatThrownBy(() -> CacheSchemaVersions.resolve(TypeToken.of(Unannotated.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must declare a @CacheSchemaVersion");
     }
 
     @Test
@@ -21,14 +23,14 @@ class CacheSchemaVersionsTest {
     void versionBelowMinimumThrows() {
         assertThatThrownBy(() -> CacheSchemaVersions.resolve(TypeToken.of(ZeroVersion.class)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("CacheSchemaVersion");
+                .hasMessageContaining("schema version must be in");
     }
 
     @Test
     void versionAboveMaximumThrows() {
         assertThatThrownBy(() -> CacheSchemaVersions.resolve(TypeToken.of(TooBigVersion.class)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("CacheSchemaVersion");
+                .hasMessageContaining("schema version must be in");
     }
 
     private record Unannotated(String value) {}

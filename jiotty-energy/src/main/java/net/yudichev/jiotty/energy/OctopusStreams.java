@@ -42,6 +42,12 @@ import static com.google.common.base.Preconditions.checkNotNull;
 public final class OctopusStreams {
     private static final Duration HALF_HOUR = Duration.ofMinutes(30);
     private static final Duration ONE_DAY = Duration.ofDays(1);
+    // Cache schema versions for the Octopus connector DTOs cached by these streams. The DTOs live in jiotty-connector-octopusenergy, which must not depend on
+    //  the cache module to carry a @CacheSchemaVersion, so the version is declared here at stream-definition. Bump the relevant one when that DTO's serialized
+    //  shape changes (a renamed/removed/retyped field) so the old cached rows recompute instead of mis-decoding. They version independently.
+    private static final int RATES_SCHEMA_VERSION = 1;
+    private static final int STANDING_CHARGES_SCHEMA_VERSION = 1;
+    private static final int CONSUMPTION_SCHEMA_VERSION = 1;
 
     private OctopusStreams() {
     }
@@ -61,6 +67,7 @@ public final class OctopusStreams {
                 Scope.region(String.valueOf(regionLetter)),
                 Resolution.halfHourly(),
                 new TypeToken<>() {},
+                RATES_SCHEMA_VERSION,
                 slots -> regionService.getStandardUnitRates(productCode, tariffCode, slots.first(), slots.last().plus(HALF_HOUR))
                                       .thenApply(rates -> mapSlotsToCoveringWindow(
                                               slots, rates, StandardUnitRate::validFrom, StandardUnitRate::validTo, false)));
@@ -80,6 +87,7 @@ public final class OctopusStreams {
                 Scope.region(String.valueOf(regionLetter)),
                 Resolution.daily(),
                 new TypeToken<>() {},
+                STANDING_CHARGES_SCHEMA_VERSION,
                 missingSlots -> regionService.getStandingCharges(productCode, tariffCode, missingSlots.first(), missingSlots.last().plus(ONE_DAY))
                                              .thenApply(charges -> mapSlotsToCoveringWindow(missingSlots,
                                                                                             charges,
@@ -107,6 +115,7 @@ public final class OctopusStreams {
                 Scope.user(userId),
                 Resolution.halfHourly(),
                 new TypeToken<>() {},
+                CONSUMPTION_SCHEMA_VERSION,
                 slots -> accountService.getConsumption(mpan, meterSerial, slots.first(), slots.last().plus(HALF_HOUR))
                                        .thenApply(rows -> indexByTombstoningMisses(slots, rows, ConsumptionRow::intervalStart)));
     }
