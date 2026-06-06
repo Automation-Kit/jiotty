@@ -20,6 +20,7 @@ public final class FakeFirebaseAuthConnector implements FirebaseAuthConnector {
     private final Object lock = new Object();
     private final Map<String, ResponseFactory> responseFactoriesByToken = new HashMap<>();
     private final List<String> requestedTokens = new ArrayList<>();
+    private final List<String> deletedUsers = new ArrayList<>();
 
     public void setVerifiedUserToken(String token, VerifiedUserToken verifiedUserToken) {
         synchronized (lock) {
@@ -45,6 +46,12 @@ public final class FakeFirebaseAuthConnector implements FirebaseAuthConnector {
         }
     }
 
+    public List<String> deletedUsers() {
+        synchronized (lock) {
+            return ImmutableList.copyOf(deletedUsers);
+        }
+    }
+
     @Override
     public CompletableFuture<Either<VerifiedUserToken, VerificationFailure>> verifyUserToken(String idToken) {
         synchronized (lock) {
@@ -53,6 +60,16 @@ public final class FakeFirebaseAuthConnector implements FirebaseAuthConnector {
             ResponseFactory responseFactory = responseFactoriesByToken.get(token);
             checkState(responseFactory != null, "No fake FirebaseAuthConnector response configured for token %s", token);
             return responseFactory.create();
+        }
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteUser(String firebaseUid) {
+        synchronized (lock) {
+            checkNotNull(firebaseUid, "firebaseUid");
+            checkArgument(!firebaseUid.isBlank(), "firebaseUid must not be blank");
+            deletedUsers.add(firebaseUid);
+            return completedFuture(null);
         }
     }
 

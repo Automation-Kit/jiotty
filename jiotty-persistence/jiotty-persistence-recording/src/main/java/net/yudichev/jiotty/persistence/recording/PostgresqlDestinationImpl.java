@@ -37,7 +37,8 @@ import static java.util.stream.Collectors.joining;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.persistence.recording.RecordingModule.Dependency;
 
-@SuppressWarnings({"JDBCPrepareStatementWithNonConstantString", "JDBCExecuteWithNonConstantString"})
+// LoggingSimilarMessage — every SQL-execution helper logs the resolved statement with the same "Executing {}" debug line by convention
+@SuppressWarnings({"JDBCPrepareStatementWithNonConstantString", "JDBCExecuteWithNonConstantString", "LoggingSimilarMessage"})
 class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements PostgresqlDestination {
     private static final Logger logger = LogManager.getLogger(PostgresqlDestinationImpl.class);
 
@@ -82,6 +83,11 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     }
 
     @Override
+    public <R> Deleter createDeleter(Config<R> destinationConfig) {
+        return new DeleterImpl<>((PsqlConfig<R>) destinationConfig);
+    }
+
+    @Override
     protected void doClose() {
         executor.execute(() -> Closeable.closeSafelyIfNotNull(logger, dataSource));
     }
@@ -90,10 +96,12 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
         dataSource = dataSourceFactory.create();
     }
 
-    @SuppressWarnings("LoggingSimilarMessage")
-    private static class SqlBase<R> {
+    private class SqlBase<R> {
         protected static final String TIMESTAMP_COL_NAME = "timestamp";
         protected static final String USER_ID_COL_NAME = "user_id";
+        protected static final Pattern TABLE_NAME_PATTERN = Pattern.compile("%TABLE_NAME%");
+        protected static final Pattern TIMESTAMP_PATTERN = Pattern.compile("%TIMESTAMP%");
+        protected static final Pattern USER_ID_CONDITION_PATTERN = Pattern.compile("%USER_CONDITION%");
         protected final PsqlConfig<R> config;
         protected final String typeName;
         protected final String tableName;
@@ -102,6 +110,14 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
             this.config = checkNotNull(config);
             typeName = config.typeId();
             tableName = "recorder_data_" + config.domainConfig().domain().name(); // not using domain prefix for historical reasons
+        }
+
+        /// Resolves a SQL template against this destination, substituting `%TABLE_NAME%` with the recorder table, `%TIMESTAMP%` with the timestamp column, and
+        /// `%USER_CONDITION%` with the predicate selecting this destination's user (or the NULL-user rows when unscoped).
+        protected final String resolveSql(String template) {
+            var sql = TABLE_NAME_PATTERN.matcher(template).replaceAll(tableName);
+            sql = TIMESTAMP_PATTERN.matcher(sql).replaceAll(TIMESTAMP_COL_NAME);
+            return USER_ID_CONDITION_PATTERN.matcher(sql).replaceAll(USER_ID_COL_NAME + (userId == null ? " IS NULL" : "='" + userId + '\''));
         }
 
         protected static void execute(Connection connection, String sql) throws SQLException {
@@ -128,8 +144,6 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     }
 
     private class RecorderImpl<R> extends SqlBase<R> implements Recorder<R> {
-        protected static final Pattern TABLE_NAME_PATTERN = Pattern.compile("%TABLE_NAME%");
-
         private final String creatTableSql;
         private final String insertSql;
 
@@ -252,9 +266,6 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     }
 
     private class ReaderImpl<R> extends SqlBase<R> implements Reader {
-        protected static final Pattern TIMESTAMP_PATTERN = Pattern.compile("%TIMESTAMP%");
-        protected static final Pattern USER_ID_CONDITION_PATTERN = Pattern.compile("%USER_CONDITION%");
-
         public ReaderImpl(PsqlConfig<R> config) {
             super(config);
         }
@@ -264,9 +275,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                                              QueryStmtParamValueSetter paramValueSetter,
                                              ThrowingConsumer<? super QueryResultRow, ? extends SQLException> rowHandler) {
             return executor.submit(() -> {
-                var sql = RecorderImpl.TABLE_NAME_PATTERN.matcher(queryTemplate).replaceAll(tableName);
-                sql = TIMESTAMP_PATTERN.matcher(sql).replaceAll(TIMESTAMP_COL_NAME);
-                sql = USER_ID_CONDITION_PATTERN.matcher(sql).replaceAll(USER_ID_COL_NAME + (userId == null ? " IS NULL" : "='" + userId + '\''));
+                var sql = resolveSql(queryTemplate);
                 try (var connection = dataSource.getConnection()) {
                     doQuery(connection,
                             sql,
@@ -278,6 +287,31 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                             });
                 } catch (SQLException e) {
                     logger.warn("Failed executing query, sql was {}", sql, e);
+                }
+            });
+        }
+    }
+
+    private class DeleterImpl<R> extends SqlBase<R> implements Deleter {
+        DeleterImpl(PsqlConfig<R> config) {
+            super(config);
+        }
+
+        @Override
+        public CompletableFuture<Integer> delete(String deleteTemplate) {
+            return executor.submit(() -> {
+                var sql = resolveSql(deleteTemplate);
+                try (var connection = dataSource.getConnection();
+                     var statement = connection.createStatement()) {
+                    logger.debug("Executing {}", sql);
+                    return statement.executeUpdate(sql);
+                } catch (SQLException e) {
+                    // undefined_table: nothing was ever recorded for this type, so there is nothing to delete
+                    if ("42P01".equals(e.getSQLState())) {
+                        logger.debug("Table {} does not exist; nothing to delete", tableName);
+                        return 0;
+                    }
+                    throw new RuntimeException("Failed deleting recorded data from " + tableName, e);
                 }
             });
         }

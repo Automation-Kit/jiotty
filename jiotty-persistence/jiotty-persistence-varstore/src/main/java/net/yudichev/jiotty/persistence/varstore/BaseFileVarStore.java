@@ -17,6 +17,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -32,7 +33,7 @@ import static java.nio.file.Files.readAllBytes;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static net.yudichev.jiotty.common.lang.Locks.inLock;
 
-abstract class BaseFileVarStore implements VarStore {
+abstract class BaseFileVarStore implements PrefixClearableVarStore {
     static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
             .registerModule(new Jdk8Module())
             .registerModule(new JavaTimeModule())
@@ -69,6 +70,24 @@ abstract class BaseFileVarStore implements VarStore {
     @Override
     public void clearValue(String key) {
         updateConfig(configNode -> configNode.remove(key));
+    }
+
+    @Override
+    public void clearAll() {
+        updateConfig(ObjectNode::removeAll);
+    }
+
+    @Override
+    public void clearAllWithPrefix(String keyPrefix) {
+        updateConfig(configNode -> {
+            var toRemove = new ArrayList<String>();
+            configNode.fieldNames().forEachRemaining(name -> {
+                if (name.startsWith(keyPrefix)) {
+                    toRemove.add(name);
+                }
+            });
+            configNode.remove(toRemove);
+        });
     }
 
     @Override

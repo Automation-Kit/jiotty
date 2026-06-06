@@ -59,4 +59,10 @@ public interface UserPersistence {
     ///
     /// @param userId internal user id
     CompletableFuture<Void> softDelete(String userId);
+
+    /// Permanently removes the user and all their identity rows in one transaction. Intended for the GDPR erasure cascade after the grace period. Idempotent:
+    /// completes normally even if the rows are already gone.
+    ///
+    /// @param userId internal user id
+    CompletableFuture<Void> hardDelete(String userId);
 }

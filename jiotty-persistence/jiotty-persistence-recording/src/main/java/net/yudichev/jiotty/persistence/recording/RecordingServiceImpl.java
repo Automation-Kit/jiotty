@@ -33,6 +33,11 @@ final class RecordingServiceImpl extends BaseLifecycleComponent implements Recor
     }
 
     @Override
+    public Deleter createDeleter(Destination.Config<?> destinationConfig) {
+        return whenStartedAndNotLifecycling(() -> getDestination(destinationConfig.destinationType()).createDeleter(destinationConfig));
+    }
+
+    @Override
     protected void doStop() {
         Closeable.closeSafelyIfNotNull(logger, destinationsByType.values());
     }

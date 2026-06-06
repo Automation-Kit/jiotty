@@ -36,19 +36,21 @@ final class SqlVarStoreOperations {
     private final String userId;
     private final String upsertSql;
     private final String deleteSql;
+    private final String deleteAllSql;
     private final String selectAllSql;
     private final SchedulingExecutor executor;
     private final @Nullable VarStoreEncryption encryption;
     private final ConcurrentMap<String, Object> cache = new ConcurrentHashMap<>();
 
     public SqlVarStoreOperations(CloseableDataSource dataSource, SchedulingExecutor executor, String userId,
-                                 String upsertSql, String deleteSql, String selectAllSql,
+                                 String upsertSql, String deleteSql, String deleteAllSql, String selectAllSql,
                                  @Nullable VarStoreEncryption encryption) {
         this.dataSource = checkNotNull(dataSource);
         this.executor = checkNotNull(executor);
         this.userId = checkNotNull(userId);
         this.upsertSql = checkNotNull(upsertSql);
         this.deleteSql = checkNotNull(deleteSql);
+        this.deleteAllSql = checkNotNull(deleteAllSql);
         this.selectAllSql = checkNotNull(selectAllSql);
         this.encryption = encryption;
     }
@@ -93,6 +95,18 @@ final class SqlVarStoreOperations {
                 logger.debug("[{}] Cleared {}", userId, key);
             }));
         }
+    }
+
+    public void clearAll() {
+        cache.clear();
+        executor.execute(() -> asUnchecked(() -> {
+            try (var connection = dataSource.getConnection();
+                 var statement = connection.prepareStatement(deleteAllSql)) {
+                statement.setString(1, userId);
+                int rows = statement.executeUpdate();
+                logger.debug("[{}] Cleared all {} entries", userId, rows);
+            }
+        }));
     }
 
     @SuppressWarnings("unchecked")

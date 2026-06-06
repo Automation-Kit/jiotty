@@ -15,4 +15,9 @@ final class MultiUserFileVarStore extends BaseFileVarStore {
         Utils.validateUserId(userId);
         return new UserScopedVarStore(this, userId + '.');
     }
+
+    @Override
+    public void clearAll() {
+        throw new IllegalStateException("clearAll() on the unscoped multi-user store is not supported; use forUser(userId).clearAll()");
+    }
 }

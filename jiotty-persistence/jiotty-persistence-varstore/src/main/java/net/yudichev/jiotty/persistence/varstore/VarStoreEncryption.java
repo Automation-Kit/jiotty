@@ -5,7 +5,7 @@ package net.yudichev.jiotty.persistence.varstore;
 /// Envelope layout (base64 after the `ENC1$` sigil): `magic(3B="ENC") | ver(1B=0x01) | keyId(1B) | nonceLen(1B=12) | nonce(12B) | ciphertext||tag`.
 ///
 /// AAD is `"jiotty-varstore-v1|" + userId + "|" + key`, binding the ciphertext to its row.
-interface VarStoreEncryption {
+public interface VarStoreEncryption {
     String ENVELOPE_PREFIX = "ENC1$";
 
     /// Encrypts `plaintextJson` under `(userId, key)` AAD and returns an `ENC1$…` envelope.

@@ -7,10 +7,10 @@ import java.util.Optional;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 final class UserScopedVarStore implements VarStore {
-    private final VarStore delegate;
+    private final PrefixClearableVarStore delegate;
     private final String keyPrefix;
 
-    UserScopedVarStore(VarStore delegate, String keyPrefix) {
+    UserScopedVarStore(PrefixClearableVarStore delegate, String keyPrefix) {
         this.delegate = checkNotNull(delegate, "delegate");
         this.keyPrefix = checkNotNull(keyPrefix, "keyPrefix");
     }
@@ -28,6 +28,11 @@ final class UserScopedVarStore implements VarStore {
     @Override
     public void clearValue(String key) {
         delegate.clearValue(keyPrefix + key);
+    }
+
+    @Override
+    public void clearAll() {
+        delegate.clearAllWithPrefix(keyPrefix);
     }
 
     @Override

@@ -109,6 +109,22 @@ public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent impl
                                                                                 failure -> CompletableFuture.completedFuture(Either.right(failure)))));
     }
 
+    @Override
+    public CompletableFuture<Void> deleteUser(String firebaseUid) {
+        checkNotNull(firebaseUid, "firebaseUid");
+        checkArgument(!firebaseUid.isBlank(), "firebaseUid must not be blank");
+        return whenStartedAndNotLifecycling(() -> toCompletableFuture(firebaseAuth.deleteUserAsync(firebaseUid))
+                .exceptionally(throwable -> {
+                    Throwable cause = unwrap(throwable);
+                    if (cause instanceof FirebaseAuthException firebaseAuthException
+                        && firebaseAuthException.getAuthErrorCode() == AuthErrorCode.USER_NOT_FOUND) {
+                        logger.debug("Firebase user {} already absent on delete", firebaseUid);
+                        return null;
+                    }
+                    throw new RuntimeException("Failed deleting Firebase user " + firebaseUid, cause);
+                }));
+    }
+
     private CompletableFuture<Either<FirebaseToken, VerificationFailure>> verifyDecodedToken(String idToken) {
         return toCompletableFuture(firebaseAuth.verifyIdTokenAsync(idToken, false))
                 .handle((decodedToken, throwable) -> throwable == null
@@ -129,6 +145,7 @@ public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent impl
         if (userRecord.isDisabled()) {
             return Either.right(new DisabledUser(decodedToken.getUid(), "Firebase user is disabled"));
         }
+        Instant authTime = Instant.ofEpochSecond(tokenInstantClaim(decodedToken, "auth_time"));
         Instant issuedAt = Instant.ofEpochSecond(tokenInstantClaim(decodedToken, "iat"));
         Instant expiresAt = Instant.ofEpochSecond(tokenInstantClaim(decodedToken, "exp"));
         Instant tokensValidAfter = Instant.ofEpochMilli(userRecord.getTokensValidAfterTimestamp());
@@ -139,6 +156,7 @@ public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent impl
                                                  new FirebaseUserProfile(Optional.ofNullable(nonBlankOrNull(userRecord.getEmail())),
                                                                          Optional.ofNullable(nonBlankOrNull(userRecord.getDisplayName()))),
                                                  createLinkedIdentities(userRecord.getProviderData()),
+                                                 authTime,
                                                  issuedAt,
                                                  expiresAt));
     }

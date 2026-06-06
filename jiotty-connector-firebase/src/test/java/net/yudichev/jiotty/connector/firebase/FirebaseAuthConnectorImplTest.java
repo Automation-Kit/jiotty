@@ -37,6 +37,7 @@ import static org.mockito.Mockito.when;
 class FirebaseAuthConnectorImplTest {
     private static final String TOKEN = "token-1";
     private static final String FIREBASE_UID = "firebase-user-1";
+    private static final Instant AUTH_TIME = Instant.parse("2026-03-14T08:55:00Z");
     private static final Instant ISSUED_AT = Instant.parse("2026-03-14T09:00:00Z");
     private static final Instant EXPIRES_AT = Instant.parse("2026-03-14T10:00:00Z");
 
@@ -76,6 +77,7 @@ class FirebaseAuthConnectorImplTest {
             assertThat(token.firebaseProfile().email()).contains("user@example.com");
             assertThat(token.firebaseProfile().displayName()).contains("Alex");
             assertThat(token.linkedIdentities()).containsExactly(new UserIdentity("google.com", "google-user-1"));
+            assertThat(token.authTime()).isEqualTo(AUTH_TIME);
             assertThat(token.issuedAt()).isEqualTo(ISSUED_AT);
             assertThat(token.expiresAt()).isEqualTo(EXPIRES_AT);
         });
@@ -142,6 +144,34 @@ class FirebaseAuthConnectorImplTest {
     }
 
     @Test
+    void deleteUserDelegatesToFirebase() {
+        when(firebaseAuth.deleteUserAsync(FIREBASE_UID)).thenReturn(ApiFutures.immediateFuture(null));
+
+        assertThat(connector.deleteUser(FIREBASE_UID)).succeedsWithin(Duration.ZERO);
+        verify(firebaseAuth).deleteUserAsync(FIREBASE_UID);
+    }
+
+    @Test
+    void deleteUserCompletesNormallyWhenUserAlreadyAbsent() {
+        when(firebaseAuth.deleteUserAsync(FIREBASE_UID)).thenReturn(
+                ApiFutures.immediateFailedFuture(firebaseAuthException(AuthErrorCode.USER_NOT_FOUND, "no such user")));
+
+        assertThat(connector.deleteUser(FIREBASE_UID)).succeedsWithin(Duration.ZERO);
+    }
+
+    @Test
+    void deleteUserFailsForTransientFirebaseFailure() {
+        when(firebaseAuth.deleteUserAsync(FIREBASE_UID)).thenReturn(
+                ApiFutures.immediateFailedFuture(firebaseAuthException(AuthErrorCode.CERTIFICATE_FETCH_FAILED, "firebase unavailable")));
+
+        assertThat(connector.deleteUser(FIREBASE_UID)).failsWithin(Duration.ZERO)
+                                                      .withThrowableThat()
+                                                      .havingCause()
+                                                      .isInstanceOf(RuntimeException.class)
+                                                      .withMessage("Failed deleting Firebase user " + FIREBASE_UID);
+    }
+
+    @Test
     void stopDeletesInjectedFirebaseApp() {
         connector.stop();
 
@@ -151,7 +181,9 @@ class FirebaseAuthConnectorImplTest {
     private void stubDecodedToken() {
         when(firebaseAuth.verifyIdTokenAsync(TOKEN, false)).thenReturn(ApiFutures.immediateFuture(decodedToken));
         when(decodedToken.getUid()).thenReturn(FIREBASE_UID);
-        when(decodedToken.getClaims()).thenReturn(Map.of("iat", ISSUED_AT.getEpochSecond(), "exp", EXPIRES_AT.getEpochSecond()));
+        when(decodedToken.getClaims()).thenReturn(Map.of("auth_time", AUTH_TIME.getEpochSecond(),
+                                                         "iat", ISSUED_AT.getEpochSecond(),
+                                                         "exp", EXPIRES_AT.getEpochSecond()));
     }
 
     private void stubActiveUser(UserInfo googleIdentity, UserInfo passwordIdentity) {

@@ -19,14 +19,21 @@ import static com.google.common.base.Preconditions.checkNotNull;
 public interface FirebaseAuthConnector {
     CompletableFuture<Either<VerifiedUserToken, VerificationFailure>> verifyUserToken(String idToken);
 
+    /// Permanently deletes the Firebase user record. Completes normally if the user is already absent.
+    ///
+    /// The returned [CompletableFuture] fails only for unexpected technical problems such as network failures or backend unavailability.
+    CompletableFuture<Void> deleteUser(String firebaseUid);
+
     sealed interface VerificationFailure permits InvalidToken, DisabledUser {}
 
     /// Verified Firebase user and the linked provider identities returned by Firebase.
     ///
     /// @param linkedIdentities linked identities with distinct [UserIdentity#provider()] values; this connector guarantees it never returns duplicate providers
+    /// @param authTime         when the user last authenticated (the `auth_time` claim), used to enforce recent re-authentication for sensitive operations
     record VerifiedUserToken(String firebaseUid,
                              FirebaseUserProfile firebaseProfile,
                              List<UserIdentity> linkedIdentities,
+                             Instant authTime,
                              Instant issuedAt,
                              Instant expiresAt) {
         public VerifiedUserToken {
@@ -34,6 +41,7 @@ public interface FirebaseAuthConnector {
             checkArgument(!firebaseUid.isBlank(), "firebaseUid must not be blank");
             checkNotNull(firebaseProfile, "firebaseProfile");
             linkedIdentities = ImmutableList.copyOf(checkNotNull(linkedIdentities, "linkedIdentities"));
+            checkNotNull(authTime, "authTime");
             checkNotNull(issuedAt, "issuedAt");
             checkNotNull(expiresAt, "expiresAt");
         }

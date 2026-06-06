@@ -133,6 +133,53 @@ class PostgresqlDestinationImplTest {
     }
 
     @Test
+    void deleterRemovesRowsForGivenUserOnly() throws Exception {
+        initDestination(Optional.of("userId"));
+        var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
+                                                            "sample",
+                                                            1,
+                                                            List.of(),
+                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                            sampleColumns());
+        var recorder = destination.createRecorder(config);
+        flushExecutor(recordingExecutor);
+        flushExecutor(domainExecutor);
+        flushExecutor(recordingExecutor);
+
+        var start = Instant.parse("2024-01-01T00:00:00Z");
+        recorder.record(start, new SampleRecord("a", 1));
+        recorder.record(start.plusSeconds(5), new SampleRecord("b", 2));
+        flushExecutor(recordingExecutor);
+
+        // another user's row in the same table must be preserved
+        insertRow(dataSource, "other", "keep", 9);
+
+        // the deleter targets the user this destination is scoped to ("userId"), leaving "other" untouched
+        var deleter = destination.createDeleter(config);
+        int deleted = deleter.delete("DELETE FROM %TABLE_NAME% WHERE %USER_CONDITION%").get(5, SECONDS);
+
+        assertThat(deleted).isEqualTo(2);
+        assertThat(rowCount(dataSource, "userId")).isZero();
+        assertThat(rowCount(dataSource, "other")).isEqualTo(1);
+    }
+
+    @Test
+    void deleterTreatsMissingTableAsNoRows() throws Exception {
+        initDestination(Optional.of("userId"));
+        var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
+                                                            "neverrecorded",
+                                                            1,
+                                                            List.of(),
+                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                            sampleColumns());
+        var deleter = destination.createDeleter(config);
+
+        int deleted = deleter.delete("DELETE FROM %TABLE_NAME% WHERE %USER_CONDITION%").get(5, SECONDS);
+
+        assertThat(deleted).isZero();
+    }
+
+    @Test
     void runsPostInitStatementsOnFreshInstallOnly() throws Exception {
         initDestination(Optional.of("userId"));
         var postInit = "CREATE INDEX " + SAMPLE_TABLE_NAME + "_label_idx ON %TABLE_NAME% (label);";
@@ -224,6 +271,29 @@ class PostgresqlDestinationImplTest {
             statement.setString(2, columnName);
             try (ResultSet rs = statement.executeQuery()) {
                 return rs.next();
+            }
+        }
+    }
+
+    private static void insertRow(DataSource dataSource, String userId, String label, int amount) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "INSERT INTO " + SAMPLE_TABLE_NAME + " (user_id, timestamp, label, amount) VALUES (?, now(), ?, ?)")) {
+            statement.setString(1, userId);
+            statement.setString(2, label);
+            statement.setInt(3, amount);
+            statement.executeUpdate();
+        }
+    }
+
+    private static int rowCount(DataSource dataSource, String userId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT count(*) FROM " + SAMPLE_TABLE_NAME + " WHERE user_id = ?")) {
+            statement.setString(1, userId);
+            try (ResultSet rs = statement.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                return rs.getInt(1);
             }
         }
     }

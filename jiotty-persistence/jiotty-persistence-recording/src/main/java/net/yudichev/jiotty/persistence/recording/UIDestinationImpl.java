@@ -66,6 +66,11 @@ final class UIDestinationImpl implements UIDestination {
     }
 
     @Override
+    public <R> Deleter createDeleter(Config<R> destinationConfig) {
+        throw new UnsupportedOperationException("createDeleter");
+    }
+
+    @Override
     public void close() {
     }
 }

@@ -229,6 +229,30 @@ class UserPersistenceImplTest {
     }
 
     @Test
+    void hardDeleteRemovesUserAndIdentitiesPermanently() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        userPersistence.hardDelete(created.id()).get(5, SECONDS);
+
+        assertThat(userPersistence.listAllProfiles().get(5, SECONDS)).isEmpty();
+
+        // the identity row is physically gone (not merely soft-deleted), so re-registering the same identity yields a brand-new user
+        var recreated = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        assertThat(recreated.id()).isNotEqualTo(created.id());
+        assertThat(userPersistence.listIdentities(recreated.id()).get(5, SECONDS)).hasSize(1);
+    }
+
+    @Test
+    void hardDeleteIsIdempotentForUnknownUser() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        // completes normally even though no such user exists
+        userPersistence.hardDelete("u-does-not-exist").get(5, SECONDS);
+    }
+
+    @Test
     void rejectsUpdatingIdentityToAnotherUser() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");

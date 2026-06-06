@@ -10,4 +10,6 @@ public interface RecordingService {
     }
 
     Reader createReader(Destination.Config<?> destinationConfig);
+
+    Deleter createDeleter(Destination.Config<?> destinationConfig);
 }

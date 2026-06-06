@@ -30,7 +30,7 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
-class VarStoreEncryptionImpl extends BaseLifecycleComponent implements VarStoreEncryption {
+public class VarStoreEncryptionImpl extends BaseLifecycleComponent implements VarStoreEncryption {
     private static final byte[] MAGIC = {'E', 'N', 'C'};
     private static final byte VERSION = 0x01;
     private static final int NONCE_LEN = 12;

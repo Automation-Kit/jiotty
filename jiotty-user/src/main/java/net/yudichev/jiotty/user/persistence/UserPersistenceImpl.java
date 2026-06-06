@@ -92,6 +92,8 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     private final String listIdentitiesSql;
     private final String softDeleteUserSql;
     private final String softDeleteIdentitiesSql;
+    private final String hardDeleteUserSql;
+    private final String hardDeleteIdentitiesSql;
     private final String updateUserSql;
 
     private SchedulingExecutor executor;
@@ -146,6 +148,8 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         softDeleteUserSql = "UPDATE " + userTable + " SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL";
         softDeleteIdentitiesSql =
                 "UPDATE " + identityTable + " SET deleted_at=?, updated_at=? WHERE user_id=? AND deleted_at IS NULL";
+        hardDeleteIdentitiesSql = "DELETE FROM " + identityTable + " WHERE user_id=?";
+        hardDeleteUserSql = "DELETE FROM " + userTable + " WHERE id=?";
         updateUserSql = "UPDATE " + userTable + " SET email=?, display_name=?, timezone=?, updated_at=? WHERE id=? AND deleted_at IS NULL";
     }
 
@@ -214,6 +218,15 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         validateUserId(userId);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
             doSoftDelete(userId);
+            return null;
+        }));
+    }
+
+    @Override
+    public CompletableFuture<Void> hardDelete(String userId) {
+        validateUserId(userId);
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
+            doHardDelete(userId);
             return null;
         }));
     }
@@ -406,6 +419,27 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
             }
         } catch (SQLException e) {
             throw new RuntimeException("Failed to delete user " + userId, e);
+        }
+    }
+
+    private void doHardDelete(String userId) {
+        try {
+            try (Connection connection = dataSource.getConnection()) {
+                connection.setAutoCommit(false);
+                try {
+                    int identityRows = doUpdate(connection, hardDeleteIdentitiesSql, -1, stmt -> stmt.setString(1, userId));
+                    int userRows = doUpdate(connection, hardDeleteUserSql, -1, stmt -> stmt.setString(1, userId));
+                    connection.commit();
+                    logger.info("Hard-deleted user {}: {} identity row(s), {} user row(s)", userId, identityRows, userRows);
+                } catch (SQLException e) {
+                    rollbackQuietly(connection);
+                    throw new RuntimeException("Failed hard-deleting user " + userId, e);
+                } finally {
+                    resetAutoCommit(connection);
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed hard-deleting user " + userId, e);
         }
     }
 

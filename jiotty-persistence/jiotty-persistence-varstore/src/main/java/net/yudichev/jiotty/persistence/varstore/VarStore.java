@@ -9,6 +9,11 @@ public interface VarStore {
 
     void clearValue(String key);
 
+    /// Deletes every value held in this store's current scope: on a user-scoped view obtained from [#forUser], all of that user's values.
+    ///
+    /// @throws IllegalStateException if called on an unscoped multi-user store — scope to a user via [#forUser] first
+    void clearAll();
+
     <T> Optional<T> readValue(TypeToken<T> type, String key);
 
     /// Persists `value` encrypted at rest. Callers must use [#readValueEncrypted] to read values written via this method.

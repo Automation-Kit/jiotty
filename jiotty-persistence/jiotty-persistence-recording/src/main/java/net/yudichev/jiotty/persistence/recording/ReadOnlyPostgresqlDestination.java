@@ -10,6 +10,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import static net.yudichev.jiotty.persistence.recording.RecordingModule.Dependency;
 import static net.yudichev.jiotty.persistence.recording.RecordingModule.PsqlExecutor;
@@ -39,6 +40,14 @@ final class ReadOnlyPostgresqlDestination extends PostgresqlDestinationImpl {
                     record(timestamp, recordable);
                 }
             }
+        };
+    }
+
+    @Override
+    public <R> Deleter createDeleter(Destination.Config<R> destinationConfig) {
+        return deleteTemplate -> {
+            logger.info("Dummy-deleted from PSQL: {}", deleteTemplate);
+            return CompletableFuture.completedFuture(0);
         };
     }
 }

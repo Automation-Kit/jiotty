@@ -7,6 +7,8 @@ public interface Destination extends Closeable {
 
     <R> Reader createReader(Config<R> destinationConfig);
 
+    <R> Deleter createDeleter(Config<R> destinationConfig);
+
     sealed interface Config<R> permits PostgresqlDestination.PsqlConfig, UIDestination.UIConfig {
         Class<R> recordType();
 

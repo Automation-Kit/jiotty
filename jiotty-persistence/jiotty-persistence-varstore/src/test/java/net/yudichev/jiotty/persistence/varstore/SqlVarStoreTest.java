@@ -125,6 +125,54 @@ class SqlVarStoreTest {
     }
 
     @Test
+    void clearAllOnScopedStoreRemovesAllUserKeysButLeavesOtherUsers() {
+        startVarStore();
+        VarStore alice = varStore.forUser("alice");
+        VarStore bob = varStore.forUser("bob");
+
+        alice.saveValue("colour", "red");
+        alice.saveValue("shape", "square");
+        bob.saveValue("colour", "blue");
+        flushExecutor();
+
+        alice.clearAll();
+        flushExecutor();
+
+        varStore.stop();
+        startVarStore();
+
+        VarStore aliceReloaded = varStore.forUser("alice");
+        assertThat(aliceReloaded.readValue(String.class, "colour")).isEmpty();
+        assertThat(aliceReloaded.readValue(String.class, "shape")).isEmpty();
+        assertThat(varStore.forUser("bob").readValue(String.class, "colour")).contains("blue");
+    }
+
+    @Test
+    void clearAllOnUnscopedMultiUserStoreThrows() {
+        startVarStore();
+        assertThatThrownBy(() -> varStore.clearAll())
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void clearAllOnSingleUserStoreRemovesAllValues() {
+        singleUser = true;
+        startVarStore();
+        varStore.saveValue("key1", "hello");
+        varStore.saveValue("key2", "world");
+        flushExecutor();
+
+        varStore.clearAll();
+        flushExecutor();
+
+        varStore.stop();
+        startVarStore();
+
+        assertThat(varStore.readValue(String.class, "key1")).isEmpty();
+        assertThat(varStore.readValue(String.class, "key2")).isEmpty();
+    }
+
+    @Test
     void singleUserForUserReturnsThis() {
         singleUser = true;
         startVarStore();

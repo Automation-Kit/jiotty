@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 /// In-memory [VarStore] test double.
-public final class InMemoryVarStore implements VarStore {
+public final class InMemoryVarStore implements PrefixClearableVarStore {
     private static final ObjectMapper mapper = new ObjectMapper()
             .registerModule(new Jdk8Module())
             .registerModule(new JavaTimeModule())
@@ -40,6 +40,16 @@ public final class InMemoryVarStore implements VarStore {
     @Override
     public void clearValue(String key) {
         serialisedValuesByKey.remove(key);
+    }
+
+    @Override
+    public void clearAll() {
+        serialisedValuesByKey.clear();
+    }
+
+    @Override
+    public void clearAllWithPrefix(String keyPrefix) {
+        serialisedValuesByKey.keySet().removeIf(key -> key.startsWith(keyPrefix));
     }
 
     @Override

@@ -147,6 +147,18 @@ public final class FakeUserPersistence implements UserPersistence {
         }
     }
 
+    @Override
+    public CompletableFuture<Void> hardDelete(String userId) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            StoredUser removed = usersById.remove(userId);
+            if (removed != null) {
+                activeUserIdsByIdentity.values().removeIf(userId::equals);
+            }
+            return completedFuture(null);
+        }
+    }
+
     public Optional<UserProfile> findActiveProfileByIdentity(UserIdentity identity) {
         synchronized (lock) {
             return findActiveProfileByIdentityLocked(identity);

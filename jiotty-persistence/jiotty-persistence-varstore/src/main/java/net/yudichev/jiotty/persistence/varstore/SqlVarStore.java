@@ -19,6 +19,7 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
@@ -37,6 +38,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     private final String createTableSql;
     private final String upsertSql;
     private final String deleteSql;
+    private final String deleteAllSql;
     private final String selectAllSql;
     private final Optional<Path> legacyPath;
     private final Optional<VarStoreEncryption> encryption;
@@ -58,6 +60,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         checkArgument(tableName.matches("[a-zA-Z0-9_-]+"), "Illegal table name '%s'", tableName);
         upsertSql = createUpsertSql(tableName);
         deleteSql = createDeleteSql(tableName);
+        deleteAllSql = createDeleteAllSql(tableName);
         selectAllSql = createSelectAllSql(tableName);
         this.dataSourceFactory = checkNotNull(dataSourceFactory);
         createTableSql = createCreateTableSql(tableName);
@@ -71,7 +74,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor("varstore-sql-test");
         dataSource = dataSourceFactory.create();
-        operations = new SqlVarStoreOperations(dataSource, executor, "", upsertSql, deleteSql, selectAllSql, encryption.orElse(null));
+        operations = new SqlVarStoreOperations(dataSource, executor, "", upsertSql, deleteSql, deleteAllSql, selectAllSql, encryption.orElse(null));
         createTableIfNeeded();
         legacyPath.ifPresent(path -> FileToSqlVarStoreMigrator.migrate(path, this));
         operations.loadAll();
@@ -105,6 +108,14 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     @Override
     public void clearValue(String key) {
         whenStartedAndNotLifecycling(() -> operations.clearValue(key));
+    }
+
+    @Override
+    public void clearAll() {
+        whenStartedAndNotLifecycling(() -> {
+            checkState(singleUser, "clearAll() on the unscoped multi-user store is not supported; use forUser(userId).clearAll()");
+            operations.clearAll();
+        });
     }
 
     @Override
@@ -160,6 +171,10 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         return "DELETE FROM " + tableName + " WHERE user_id = ? AND key = ?";
     }
 
+    private static String createDeleteAllSql(String tableName) {
+        return "DELETE FROM " + tableName + " WHERE user_id = ?";
+    }
+
     private static String createSelectAllSql(String tableName) {
         return "SELECT key, value FROM " + tableName + " WHERE user_id = ?";
     }
@@ -181,7 +196,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
 
         public UserSqlVarStore(String userId) {
             Utils.validateUserId(userId);
-            userOperations = new SqlVarStoreOperations(dataSource, executor, userId, upsertSql, deleteSql, selectAllSql, encryption.orElse(null));
+            userOperations = new SqlVarStoreOperations(dataSource, executor, userId, upsertSql, deleteSql, deleteAllSql, selectAllSql, encryption.orElse(null));
             userOperations.loadAll();
         }
 
@@ -203,6 +218,11 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         @Override
         public void clearValue(String key) {
             whenStartedAndNotLifecycling(() -> userOperations.clearValue(key));
+        }
+
+        @Override
+        public void clearAll() {
+            whenStartedAndNotLifecycling(userOperations::clearAll);
         }
 
         @Override
