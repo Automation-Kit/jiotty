@@ -275,7 +275,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
             return;
         }
         String tariffCode = tariff.tariffCode();
-        String productCode = tariffCode.substring(5, tariffCode.length() - 2);
+        String productCode = OctopusTariffCode.productCode(tariffCode);
         char regionLetter = tariffCode.charAt(tariffCode.length() - 1);
 
         if (!productCode.startsWith(AGILE_PRODUCT_CODE_PREFIX)) {
