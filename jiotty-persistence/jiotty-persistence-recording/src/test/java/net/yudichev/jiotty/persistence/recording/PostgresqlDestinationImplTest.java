@@ -63,7 +63,7 @@ class PostgresqlDestinationImplTest {
         Provider<SchedulingExecutor> domainExecutorProvider = () -> domainExecutor;
         domainService = new PersistenceDomainServiceImpl(dataSourceFactory, domainExecutorProvider);
         domainService.start();
-        initDestination(Optional.of("userId"));
+        initDestination();
     }
 
     @AfterEach
@@ -90,15 +90,14 @@ class PostgresqlDestinationImplTest {
     @ParameterizedTest
     @MethodSource
     void recordsAndReadsRows(Optional<String> userId) throws Exception {
-        initDestination(userId);
         var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
                                                             "sample",
                                                             1,
                                                             List.of(CREATE_AUX_TABLE_SQL),
                                                             PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                             sampleColumns());
-        var recorder = destination.createRecorder(config);
-        var reader = destination.createReader(config);
+        var recorder = destination.createRecorder(config, userId);
+        var reader = destination.createReader(config, userId);
 
         flushExecutor(recordingExecutor);
         flushExecutor(domainExecutor);
@@ -134,14 +133,13 @@ class PostgresqlDestinationImplTest {
 
     @Test
     void deleterRemovesRowsForGivenUserOnly() throws Exception {
-        initDestination(Optional.of("userId"));
         var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
                                                             "sample",
                                                             1,
                                                             List.of(),
                                                             PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                             sampleColumns());
-        var recorder = destination.createRecorder(config);
+        var recorder = destination.createRecorder(config, Optional.of("userId"));
         flushExecutor(recordingExecutor);
         flushExecutor(domainExecutor);
         flushExecutor(recordingExecutor);
@@ -154,8 +152,8 @@ class PostgresqlDestinationImplTest {
         // another user's row in the same table must be preserved
         insertRow(dataSource, "other", "keep", 9);
 
-        // the deleter targets the user this destination is scoped to ("userId"), leaving "other" untouched
-        var deleter = destination.createDeleter(config);
+        // the deleter targets the given user ("userId"), leaving "other" untouched
+        var deleter = destination.createDeleter(config, Optional.of("userId"));
         int deleted = deleter.delete("DELETE FROM %TABLE_NAME% WHERE %USER_CONDITION%").get(5, SECONDS);
 
         assertThat(deleted).isEqualTo(2);
@@ -165,14 +163,13 @@ class PostgresqlDestinationImplTest {
 
     @Test
     void deleterTreatsMissingTableAsNoRows() throws Exception {
-        initDestination(Optional.of("userId"));
         var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
                                                             "neverrecorded",
                                                             1,
                                                             List.of(),
                                                             PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                             sampleColumns());
-        var deleter = destination.createDeleter(config);
+        var deleter = destination.createDeleter(config, Optional.of("userId"));
 
         int deleted = deleter.delete("DELETE FROM %TABLE_NAME% WHERE %USER_CONDITION%").get(5, SECONDS);
 
@@ -181,7 +178,6 @@ class PostgresqlDestinationImplTest {
 
     @Test
     void runsPostInitStatementsOnFreshInstallOnly() throws Exception {
-        initDestination(Optional.of("userId"));
         var postInit = "CREATE INDEX " + SAMPLE_TABLE_NAME + "_label_idx ON %TABLE_NAME% (label);";
         var configV1 = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
                                                               "sample",
@@ -190,7 +186,7 @@ class PostgresqlDestinationImplTest {
                                                               List.of(postInit),
                                                               PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                               sampleColumns());
-        destination.createRecorder(configV1);
+        destination.createRecorder(configV1, Optional.of("userId"));
         flushExecutor(recordingExecutor);
         flushExecutor(domainExecutor);
         flushExecutor(recordingExecutor);
@@ -198,7 +194,7 @@ class PostgresqlDestinationImplTest {
         assertThat(indexExists(dataSource, SAMPLE_TABLE_NAME + "_label_idx")).isTrue();
 
         // Recreating the recorder against an already-initialised domain must NOT re-run post-init (which would fail on duplicate index).
-        destination.createRecorder(configV1);
+        destination.createRecorder(configV1, Optional.of("userId"));
         flushExecutor(recordingExecutor);
         flushExecutor(domainExecutor);
         flushExecutor(recordingExecutor);
@@ -208,14 +204,13 @@ class PostgresqlDestinationImplTest {
 
     @Test
     void appliesMigrationStatements() throws Exception {
-        initDestination(Optional.of("userId"));
         var configV1 = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
                                                               "sample",
                                                               1,
                                                               List.of(CREATE_AUX_TABLE_SQL),
                                                               PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                               sampleColumns());
-        destination.createRecorder(configV1);
+        destination.createRecorder(configV1, Optional.of("userId"));
         flushExecutor(recordingExecutor);
         flushExecutor(domainExecutor);
         flushExecutor(recordingExecutor);
@@ -229,7 +224,7 @@ class PostgresqlDestinationImplTest {
                                                               List.of(CREATE_AUX_TABLE_SQL),
                                                               migrator,
                                                               sampleColumns());
-        destination.createRecorder(configV2);
+        destination.createRecorder(configV2, Optional.of("userId"));
         flushExecutor(recordingExecutor);
         flushExecutor(domainExecutor);
         flushExecutor(recordingExecutor);
@@ -237,9 +232,9 @@ class PostgresqlDestinationImplTest {
         assertThat(columnExists(dataSource, SAMPLE_AUX_TABLE_NAME, "note")).isTrue();
     }
 
-    private void initDestination(Optional<String> userId) {
+    private void initDestination() {
         Provider<SchedulingExecutor> recordingExecutorProvider = () -> recordingExecutor;
-        destination = new PostgresqlDestinationImpl(recordingExecutorProvider, dataSourceFactory, userId, domainService);
+        destination = new PostgresqlDestinationImpl(recordingExecutorProvider, dataSourceFactory, domainService);
         destination.initialise();
         flushExecutor(recordingExecutor);
     }

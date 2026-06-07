@@ -9,6 +9,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Function;
 
 import static net.yudichev.jiotty.common.lang.EvenMoreObjects.mapIfNotNull;
@@ -17,7 +18,7 @@ final class UIDestinationImpl implements UIDestination {
     private static final Logger logger = LogManager.getLogger(UIDestinationImpl.class);
 
     @Override
-    public <R> Recorder<R> createRecorder(Config<R> destinationConfig) {
+    public <R> Recorder<R> createRecorder(Config<R> destinationConfig, Optional<String> userId) {
         var config = (UIConfig<R>) destinationConfig;
         var rendererSupplier = config.renderer();
         HtmlRenderer<R> renderer = null;
@@ -61,12 +62,12 @@ final class UIDestinationImpl implements UIDestination {
     }
 
     @Override
-    public <R> Reader createReader(Config<R> destinationConfig) {
+    public <R> Reader createReader(Config<R> destinationConfig, Optional<String> userId) {
         throw new UnsupportedOperationException("createReader");
     }
 
     @Override
-    public <R> Deleter createDeleter(Config<R> destinationConfig) {
+    public <R> Deleter createDeleter(Config<R> destinationConfig, Optional<String> userId) {
         throw new UnsupportedOperationException("createDeleter");
     }
 

@@ -21,13 +21,12 @@ final class ReadOnlyPostgresqlDestination extends PostgresqlDestinationImpl {
     @Inject
     public ReadOnlyPostgresqlDestination(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,
                                          @Dependency DataSourceFactory dataSourceFactory,
-                                         @Dependency Optional<String> userId,
                                          PersistenceDomainService persistenceDomainService) {
-        super(executorProvider, dataSourceFactory, userId, persistenceDomainService);
+        super(executorProvider, dataSourceFactory, persistenceDomainService);
     }
 
     @Override
-    public <R> Recorder<R> createRecorder(Destination.Config<R> destinationConfig) {
+    public <R> Recorder<R> createRecorder(Destination.Config<R> destinationConfig, Optional<String> userId) {
         return new Recorder<>() {
             @Override
             public void record(Instant timestamp, R recordable) {
@@ -44,7 +43,7 @@ final class ReadOnlyPostgresqlDestination extends PostgresqlDestinationImpl {
     }
 
     @Override
-    public <R> Deleter createDeleter(Destination.Config<R> destinationConfig) {
+    public <R> Deleter createDeleter(Destination.Config<R> destinationConfig, Optional<String> userId) {
         return deleteTemplate -> {
             logger.info("Dummy-deleted from PSQL: {}", deleteTemplate);
             return CompletableFuture.completedFuture(0);

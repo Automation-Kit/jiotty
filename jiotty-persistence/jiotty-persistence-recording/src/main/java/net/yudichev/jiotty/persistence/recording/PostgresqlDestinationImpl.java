@@ -46,18 +46,15 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     private final Calendar calendar;
     private final DataSourceFactory dataSourceFactory;
     private final PersistenceDomainService persistenceDomainService;
-    private final @Nullable String userId;
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
 
     @Inject
     public PostgresqlDestinationImpl(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,
                                      @Dependency DataSourceFactory dataSourceFactory,
-                                     @Dependency Optional<String> userId,
                                      PersistenceDomainService persistenceDomainService) {
         this.executorProvider = checkNotNull(executorProvider);
         this.dataSourceFactory = checkNotNull(dataSourceFactory);
-        this.userId = userId.orElse(null);
         this.persistenceDomainService = checkNotNull(persistenceDomainService);
         calendar = Calendar.getInstance();
         calendar.setTimeZone(TimeZone.getTimeZone(ZoneOffset.UTC));
@@ -70,21 +67,21 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     }
 
     @Override
-    public <R> Recorder<R> createRecorder(Config<R> destinationConfig) {
+    public <R> Recorder<R> createRecorder(Config<R> destinationConfig, Optional<String> userId) {
         var psqlConfig = (PsqlConfig<R>) destinationConfig;
-        var recorder = new RecorderImpl<>(psqlConfig);
+        var recorder = new RecorderImpl<>(psqlConfig, userId.orElse(null));
         executor.execute(recorder::initialise);
         return recorder;
     }
 
     @Override
-    public <R> Reader createReader(Config<R> destinationConfig) {
-        return new ReaderImpl<>((PsqlConfig<R>) destinationConfig);
+    public <R> Reader createReader(Config<R> destinationConfig, Optional<String> userId) {
+        return new ReaderImpl<>((PsqlConfig<R>) destinationConfig, userId.orElse(null));
     }
 
     @Override
-    public <R> Deleter createDeleter(Config<R> destinationConfig) {
-        return new DeleterImpl<>((PsqlConfig<R>) destinationConfig);
+    public <R> Deleter createDeleter(Config<R> destinationConfig, Optional<String> userId) {
+        return new DeleterImpl<>((PsqlConfig<R>) destinationConfig, userId.orElse(null));
     }
 
     @Override
@@ -96,7 +93,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
         dataSource = dataSourceFactory.create();
     }
 
-    private class SqlBase<R> {
+    private static class SqlBase<R> {
         protected static final String TIMESTAMP_COL_NAME = "timestamp";
         protected static final String USER_ID_COL_NAME = "user_id";
         protected static final Pattern TABLE_NAME_PATTERN = Pattern.compile("%TABLE_NAME%");
@@ -105,15 +102,17 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
         protected final PsqlConfig<R> config;
         protected final String typeName;
         protected final String tableName;
+        protected final @Nullable String userId;
 
-        protected SqlBase(PsqlConfig<R> config) {
+        protected SqlBase(PsqlConfig<R> config, @Nullable String userId) {
             this.config = checkNotNull(config);
+            this.userId = userId;
             typeName = config.typeId();
             tableName = "recorder_data_" + config.domainConfig().domain().name(); // not using domain prefix for historical reasons
         }
 
-        /// Resolves a SQL template against this destination, substituting `%TABLE_NAME%` with the recorder table, `%TIMESTAMP%` with the timestamp column, and
-        /// `%USER_CONDITION%` with the predicate selecting this destination's user (or the NULL-user rows when unscoped).
+        /// Resolves a SQL template for `userId`, substituting `%TABLE_NAME%` with the recorder table, `%TIMESTAMP%` with the timestamp column, and
+        /// `%USER_CONDITION%` with the predicate selecting that user's rows (or the NULL-user rows when no user is given).
         protected final String resolveSql(String template) {
             var sql = TABLE_NAME_PATTERN.matcher(template).replaceAll(tableName);
             sql = TIMESTAMP_PATTERN.matcher(sql).replaceAll(TIMESTAMP_COL_NAME);
@@ -150,8 +149,8 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
         private boolean disabled;
         private R lastRecorded;
 
-        public RecorderImpl(PsqlConfig<R> config) {
-            super(config);
+        public RecorderImpl(PsqlConfig<R> config, @Nullable String userId) {
+            super(config, userId);
             String columnNames = USER_ID_COL_NAME + ", " + TIMESTAMP_COL_NAME + ", " + this.config.columns().stream().map(Column::name).collect(joining(", "));
             String insertPlaceholders = this.config.columns().stream().map(Column::valuePlaceholder).collect(joining(", "));
             String columnsWithTypes = this.config.columns()
@@ -266,8 +265,8 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     }
 
     private class ReaderImpl<R> extends SqlBase<R> implements Reader {
-        public ReaderImpl(PsqlConfig<R> config) {
-            super(config);
+        public ReaderImpl(PsqlConfig<R> config, @Nullable String userId) {
+            super(config, userId);
         }
 
         @Override
@@ -293,8 +292,8 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     }
 
     private class DeleterImpl<R> extends SqlBase<R> implements Deleter {
-        DeleterImpl(PsqlConfig<R> config) {
-            super(config);
+        DeleterImpl(PsqlConfig<R> config, @Nullable String userId) {
+            super(config, userId);
         }
 
         @Override

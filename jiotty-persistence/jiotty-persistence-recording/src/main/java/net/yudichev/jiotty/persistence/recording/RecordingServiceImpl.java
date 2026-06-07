@@ -8,6 +8,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -23,18 +24,18 @@ final class RecordingServiceImpl extends BaseLifecycleComponent implements Recor
     }
 
     @Override
-    public <R> Recorder<R> createRecorder(Destination.Config<R> destinationConfig) {
-        return whenStartedAndNotLifecycling(() -> getDestination(destinationConfig.destinationType()).createRecorder(destinationConfig));
+    public <R> Recorder<R> createRecorder(Destination.Config<R> destinationConfig, Optional<String> userId) {
+        return whenStartedAndNotLifecycling(() -> getDestination(destinationConfig.destinationType()).createRecorder(destinationConfig, userId));
     }
 
     @Override
-    public Reader createReader(Destination.Config<?> destinationConfig) {
-        return whenStartedAndNotLifecycling(() -> getDestination(destinationConfig.destinationType()).createReader(destinationConfig));
+    public Reader createReader(Destination.Config<?> destinationConfig, Optional<String> userId) {
+        return whenStartedAndNotLifecycling(() -> getDestination(destinationConfig.destinationType()).createReader(destinationConfig, userId));
     }
 
     @Override
-    public Deleter createDeleter(Destination.Config<?> destinationConfig) {
-        return whenStartedAndNotLifecycling(() -> getDestination(destinationConfig.destinationType()).createDeleter(destinationConfig));
+    public Deleter createDeleter(Destination.Config<?> destinationConfig, Optional<String> userId) {
+        return whenStartedAndNotLifecycling(() -> getDestination(destinationConfig.destinationType()).createDeleter(destinationConfig, userId));
     }
 
     @Override
