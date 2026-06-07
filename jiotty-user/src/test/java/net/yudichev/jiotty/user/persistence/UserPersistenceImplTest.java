@@ -1,9 +1,11 @@
 package net.yudichev.jiotty.user.persistence;
 
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.common.time.TimeProvider;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
@@ -20,6 +22,7 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
@@ -253,6 +256,48 @@ class UserPersistenceImplTest {
     }
 
     @Test
+    void restoreRevivesOnlyIdentitiesSoftDeletedWithTheAccount() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-01-01T00:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+
+        var firebase = new UserIdentity("firebase", "uid-1");
+        var google = new UserIdentity("google.com", "g-1");
+        var created = userPersistence.getOrCreateByIdentity(firebase, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        userPersistence.updateAllIdentities(created.id(), List.of(firebase, google)).get(5, SECONDS);
+
+        // google is unlinked earlier, at a DIFFERENT timestamp than the later account deletion
+        clock.setTime(Instant.parse("2026-02-01T00:00:00Z"));
+        userPersistence.updateAllIdentities(created.id(), List.of(firebase)).get(5, SECONDS);
+
+        // the account is soft-deleted later: the user and the still-active firebase identity get this later timestamp
+        clock.setTime(Instant.parse("2026-03-01T00:00:00Z"));
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        assertThat(userPersistence.getByIdentity(firebase).get(5, SECONDS)).isEmpty();
+
+        userPersistence.restore(created.id()).get(5, SECONDS);
+
+        // firebase (soft-deleted with the account) is revived; google (removed earlier, different timestamp) stays removed
+        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isPresent();
+        assertThat(userPersistence.getByIdentity(firebase).get(5, SECONDS)).isPresent();
+        assertThat(userPersistence.getByIdentity(google).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.listIdentities(created.id()).get(5, SECONDS))
+                .extracting(record -> record.identity().provider())
+                .containsExactly("firebase");
+    }
+
+    @Test
+    void restoreIsNoOpForActiveUser() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+
+        userPersistence.restore(created.id()).get(5, SECONDS); // not soft-deleted: no-op
+
+        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isPresent();
+    }
+
+    @Test
     void rejectsUpdatingIdentityToAnotherUser() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
@@ -268,10 +313,14 @@ class UserPersistenceImplTest {
     }
 
     private void startUserPersistence(DataSourceFactory factory, List<String> initStatements) {
+        startUserPersistence(factory, initStatements, new TimeProvider());
+    }
+
+    private void startUserPersistence(DataSourceFactory factory, List<String> initStatements, CurrentDateTimeProvider timeProvider) {
         userPersistence = new UserPersistenceImpl(factory,
                                                   executorProvider,
                                                   domainService,
-                                                  new TimeProvider(),
+                                                  timeProvider,
                                                   1,
                                                   domain.name(),
                                                   initStatements,

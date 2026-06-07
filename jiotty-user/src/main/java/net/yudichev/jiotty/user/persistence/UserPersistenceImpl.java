@@ -94,6 +94,9 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     private final String softDeleteIdentitiesSql;
     private final String hardDeleteUserSql;
     private final String hardDeleteIdentitiesSql;
+    private final String selectUserDeletedAtSql;
+    private final String restoreUserSql;
+    private final String restoreIdentitiesSql;
     private final String updateUserSql;
 
     private SchedulingExecutor executor;
@@ -150,6 +153,9 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
                 "UPDATE " + identityTable + " SET deleted_at=?, updated_at=? WHERE user_id=? AND deleted_at IS NULL";
         hardDeleteIdentitiesSql = "DELETE FROM " + identityTable + " WHERE user_id=?";
         hardDeleteUserSql = "DELETE FROM " + userTable + " WHERE id=?";
+        selectUserDeletedAtSql = "SELECT deleted_at FROM " + userTable + " WHERE id=?";
+        restoreUserSql = "UPDATE " + userTable + " SET deleted_at=NULL, updated_at=? WHERE id=? AND deleted_at IS NOT NULL";
+        restoreIdentitiesSql = "UPDATE " + identityTable + " SET deleted_at=NULL, updated_at=? WHERE user_id=? AND deleted_at=?";
         updateUserSql = "UPDATE " + userTable + " SET email=?, display_name=?, timezone=?, updated_at=? WHERE id=? AND deleted_at IS NULL";
     }
 
@@ -227,6 +233,15 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         validateUserId(userId);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
             doHardDelete(userId);
+            return null;
+        }));
+    }
+
+    @Override
+    public CompletableFuture<Void> restore(String userId) {
+        validateUserId(userId);
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
+            doRestore(userId);
             return null;
         }));
     }
@@ -440,6 +455,49 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
             }
         } catch (SQLException e) {
             throw new RuntimeException("Failed hard-deleting user " + userId, e);
+        }
+    }
+
+    private void doRestore(String userId) {
+        try {
+            try (Connection connection = dataSource.getConnection()) {
+                connection.setAutoCommit(false);
+                try {
+                    Timestamp deletedAt = selectUserDeletedAt(connection, userId);
+                    if (deletedAt == null) {
+                        connection.commit(); // not soft-deleted: nothing to restore
+                        return;
+                    }
+                    Instant now = timeProvider.currentInstant();
+                    doUpdate(connection, restoreUserSql, 1, stmt -> {
+                        stmt.setTimestamp(1, Timestamp.from(now));
+                        stmt.setString(2, userId);
+                    });
+                    // Only revive the identities soft-deleted as part of this account deletion (same timestamp as the user), not ones removed earlier.
+                    doUpdate(connection, restoreIdentitiesSql, -1, stmt -> {
+                        stmt.setTimestamp(1, Timestamp.from(now));
+                        stmt.setString(2, userId);
+                        stmt.setTimestamp(3, deletedAt);
+                    });
+                    connection.commit();
+                } catch (SQLException e) {
+                    rollbackQuietly(connection);
+                    throw new RuntimeException("Failed to restore user " + userId, e);
+                } finally {
+                    resetAutoCommit(connection);
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to restore user " + userId, e);
+        }
+    }
+
+    private @Nullable Timestamp selectUserDeletedAt(Connection connection, String userId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(selectUserDeletedAtSql)) {
+            stmt.setString(1, userId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next() ? rs.getTimestamp("deleted_at") : null;
+            }
         }
     }
 

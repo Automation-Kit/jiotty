@@ -159,6 +159,19 @@ public final class FakeUserPersistence implements UserPersistence {
         }
     }
 
+    @Override
+    public CompletableFuture<Void> restore(String userId) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            StoredUser storedUser = usersById.get(userId);
+            if (storedUser != null && !storedUser.active()) {
+                storedUser.restore();
+                storedUser.activeIdentities().forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
+            }
+            return completedFuture(null);
+        }
+    }
+
     public Optional<UserProfile> findActiveProfileByIdentity(UserIdentity identity) {
         synchronized (lock) {
             return findActiveProfileByIdentityLocked(identity);
@@ -247,9 +260,13 @@ public final class FakeUserPersistence implements UserPersistence {
         }
 
         public void softDelete(Instant deletedAt) {
+            // Keep the identity records (marked inactive via the deleted flag) so restore() can revive them, mirroring UserPersistenceImpl.
             deleted = true;
-            activeIdentityRecordsByProvider.clear();
             profile = new UserProfile(profile.id(), profile.email(), profile.displayName(), profile.timezone(), profile.createdAt(), deletedAt);
+        }
+
+        public void restore() {
+            deleted = false;
         }
     }
 }
