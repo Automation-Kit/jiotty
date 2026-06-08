@@ -12,5 +12,6 @@ import org.immutables.value.Value;
 @JsonIgnoreProperties(ignoreUnknown = true)
 interface BaseTokenResponse {
     @JsonProperty("access_token")
+    @Value.Redacted
     String accessToken();
 }

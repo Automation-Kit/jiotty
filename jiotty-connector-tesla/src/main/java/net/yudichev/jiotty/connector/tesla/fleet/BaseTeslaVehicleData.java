@@ -15,8 +15,10 @@ interface BaseTeslaVehicleData {
     String id();
 
     @JsonProperty("vin")
+    @Value.Redacted
     String vin();
 
     @JsonProperty("display_name")
+    @Value.Redacted
     String displayName();
 }

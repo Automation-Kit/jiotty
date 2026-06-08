@@ -3,7 +3,14 @@ package net.yudichev.jiotty.common.security;
 /// Represents a state of authentication.
 public sealed interface AuthState {
 
-    record Success(String authInfo) implements AuthState {}
+    record Success(String authInfo) implements AuthState {
+        @Override
+        public String toString() {
+            var sb = new StringBuilder(16).append("Success[");
+            LogRedaction.redacted(authInfo).formatTo(sb);
+            return sb.append(']').toString();
+        }
+    }
 
     sealed interface Failure extends AuthState {
         String description();

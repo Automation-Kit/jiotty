@@ -12,8 +12,10 @@ import java.time.Instant;
 @JsonDeserialize
 @JsonIgnoreProperties(ignoreUnknown = true)
 interface BaseDriveState {
+    @Value.Redacted
     double latitude();
 
+    @Value.Redacted
     double longitude();
 
     @JsonDeserialize(converter = EpochMillisecondsConverter.class)

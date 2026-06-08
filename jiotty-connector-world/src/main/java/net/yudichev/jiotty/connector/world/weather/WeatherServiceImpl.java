@@ -32,6 +32,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
+import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
 import static okhttp3.HttpUrl.parse;
 
 final class WeatherServiceImpl extends BaseLifecycleComponent implements WeatherService {
@@ -64,7 +65,9 @@ final class WeatherServiceImpl extends BaseLifecycleComponent implements Weather
     public CompletableFuture<Weather> getCurrentWeather(LatLon worldCoordinates) {
         var request = buildGet("/current.json", worldCoordinates, null);
         long reqId = requestIdGenerator.incrementAndGet();
-        logger.debug("[{}] getCurrentWeather for {}", reqId, worldCoordinates);
+        if (logger.isDebugEnabled()) {
+            logger.debug("[{}] getCurrentWeather for {}", reqId, redacted(worldCoordinates));
+        }
         return callApi(request, WeatherResponse.class)
                 .thenApply(WeatherResponse::current)
                 .whenComplete((result, throwable) -> logger.debug("[{}] Response: {}", reqId, result, throwable));
@@ -85,7 +88,9 @@ final class WeatherServiceImpl extends BaseLifecycleComponent implements Weather
         int finalDaysToInclude = daysToInclude;
         var request = buildGet("/forecast.json", worldCoordinates, b -> b.addQueryParameter("days", String.valueOf(finalDaysToInclude)));
         long reqId = requestIdGenerator.incrementAndGet();
-        logger.debug("[{}] getForecastWeather for {} until {} ({} days)", reqId, worldCoordinates, until, finalDaysToInclude);
+        if (logger.isDebugEnabled()) {
+            logger.debug("[{}] getForecastWeather for {} until {} ({} days)", reqId, redacted(worldCoordinates), until, finalDaysToInclude);
+        }
         return callApi(request, ForecastResponse.class)
                 .<List<ForecastHour>>thenApply(resp -> {
                     ImmutableList<ForecastDay> days = resp.forecast().days();

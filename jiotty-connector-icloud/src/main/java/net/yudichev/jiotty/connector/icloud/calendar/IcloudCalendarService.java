@@ -51,6 +51,7 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
+import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
 
 final class IcloudCalendarService extends BaseLifecycleComponent implements CalendarService {
     private static final Logger logger = LogManager.getLogger(IcloudCalendarService.class);
@@ -126,9 +127,9 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
                     DavProperty<?> resourceTypeProp = properties.get(DavConstants.PROPERTY_RESOURCETYPE);
                     DavProperty<?> displayNameProp = properties.get(DavConstants.PROPERTY_DISPLAYNAME);
                     if (displayNameProp != null && isCalendar(resourceTypeProp)) {
-                        Object displayName = displayNameProp.getValue();
-                        resultBuilder.add(new IcloudCalendar(calendarHomeUrl, href, String.valueOf(displayName), executor, httpClientFactory));
-                        logger.info("Retrieved calendar: {} -> {}", href, displayName);
+                        String displayName = String.valueOf(displayNameProp.getValue());
+                        resultBuilder.add(new IcloudCalendar(calendarHomeUrl, href, displayName, executor, httpClientFactory));
+                        logger.info("Retrieved calendar: {} -> {}", href, redacted(displayName));
                     } else {
                         logger.debug("Skipping non-calendar entry: {}", href);
                     }

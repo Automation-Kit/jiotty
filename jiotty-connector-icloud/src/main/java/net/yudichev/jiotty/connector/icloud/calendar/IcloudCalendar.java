@@ -35,12 +35,15 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.security.LogRedaction.redact;
 
 final class IcloudCalendar implements Calendar {
     private static final Logger logger = LogManager.getLogger(IcloudCalendar.class);
 
     private final String id;
     private final String name;
+    /// Redacted form of [#name], computed once: `name` is a calendar title (PII) that would otherwise be re-redacted on every log line.
+    private final String redactedName;
     private final SchedulingExecutor executor;
     private final Supplier<CloseableHttpClient> httpClientFactory;
     private final CalDAVCollection calDAVCollection;
@@ -48,6 +51,7 @@ final class IcloudCalendar implements Calendar {
     IcloudCalendar(String calendarHomerUrl, String href, String name, SchedulingExecutor executor, Supplier<CloseableHttpClient> httpClientFactory) {
         id = checkNotNull(href);
         this.name = checkNotNull(name);
+        redactedName = redact(name);
         this.executor = checkNotNull(executor);
         this.httpClientFactory = checkNotNull(httpClientFactory);
 
@@ -69,7 +73,7 @@ final class IcloudCalendar implements Calendar {
     @Override
     public CompletableFuture<List<CalendarEvent>> fetchEvents(Instant from, Instant to) {
         return executor.submit(() -> {
-            logger.info("Calendar {}: fetching events for {}...{}", name, from, to);
+            logger.info("Calendar {}: fetching events for {}...{}", redactedName, from, to);
             List<net.fortuna.ical4j.model.Calendar> cals;
             try (var httpClient = httpClientFactory.get()) {
 
@@ -120,7 +124,7 @@ final class IcloudCalendar implements Calendar {
                 }
             }
             var result = resultBuilder.build();
-            logger.info("Calendar {}: fetched {} events", name, result.size());
+            logger.info("Calendar {}: fetched {} events", redactedName, result.size());
             return result;
         });
     }
@@ -137,7 +141,7 @@ final class IcloudCalendar implements Calendar {
     @Override
     public String toString() {
         return "IcloudCalendar{" + "id='" + id + '\''
-               + ", name='" + name + '\''
+               + ", name='" + redactedName + '\''
                + '}';
     }
 }

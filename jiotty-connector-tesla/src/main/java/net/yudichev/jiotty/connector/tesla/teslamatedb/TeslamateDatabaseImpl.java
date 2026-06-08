@@ -31,6 +31,7 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
 
 final class TeslamateDatabaseImpl extends BaseLifecycleComponent implements TeslamateDatabase {
 
@@ -89,25 +90,6 @@ final class TeslamateDatabaseImpl extends BaseLifecycleComponent implements Tesl
     @Override
     protected void doStop() {
         Closeable.closeSafelyIfNotNull(logger, executor);
-    }
-
-    @SuppressWarnings("DynamicRegexReplaceableByCompiledPattern") // for trace logging only
-    private static String formatDrivesQuery(long carId,
-                                            Timestamp from,
-                                            Timestamp to,
-                                            LatLonRectangle startRectangle,
-                                            LatLonRectangle endRectangle) {
-        return DRIVES_QUERY_SQL.replaceFirst("\\?", Long.toString(carId))
-                               .replaceFirst("\\?", "'" + from + "'")
-                               .replaceFirst("\\?", "'" + to + "'")
-                               .replaceFirst("\\?", Double.toString(startRectangle.minLat()))
-                               .replaceFirst("\\?", Double.toString(startRectangle.maxLat()))
-                               .replaceFirst("\\?", Double.toString(startRectangle.minLon()))
-                               .replaceFirst("\\?", Double.toString(startRectangle.maxLon()))
-                               .replaceFirst("\\?", Double.toString(endRectangle.minLat()))
-                               .replaceFirst("\\?", Double.toString(endRectangle.maxLat()))
-                               .replaceFirst("\\?", Double.toString(endRectangle.minLon()))
-                               .replaceFirst("\\?", Double.toString(endRectangle.maxLon()));
     }
 
     @BindingAnnotation
@@ -180,12 +162,13 @@ final class TeslamateDatabaseImpl extends BaseLifecycleComponent implements Tesl
                 stmt.setDouble(paramIdx++, endRectangle.maxLat());
                 stmt.setDouble(paramIdx++, endRectangle.minLon());
                 stmt.setDouble(paramIdx, endRectangle.maxLon());
-                logger.debug("[c{}] Querying drives of car ID {} taken between {} and {} starting at {} ({}) and ending at {} ({}), within {}m",
-                             computationId, carId, startInstant, endInstant, startLocation, startRectangle, endLocation, endRectangle, withinMeters);
+                if (logger.isDebugEnabled()) {
+                    logger.debug("[c{}] Querying drives of car ID {} taken between {} and {} starting at {} ({}) and ending at {} ({}), within {}m",
+                                 computationId, carId, startInstant, endInstant,
+                                 redacted(startLocation), redacted(startRectangle), redacted(endLocation), redacted(endRectangle), withinMeters);
+                }
                 if (logger.isTraceEnabled()) {
-                    logger.trace("[c{}] Query: {}",
-                                 computationId,
-                                 formatDrivesQuery(carId, Timestamp.from(startInstant), Timestamp.from(endInstant), startRectangle, endRectangle));
+                    logger.trace("[c{}] Parameterised query: {}", computationId, DRIVES_QUERY_SQL);
                 }
                 try (ResultSet rs = stmt.executeQuery()) {
                     var resultBuilder = ImmutableList.<HistoricalDrive>builder();

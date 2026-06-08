@@ -10,7 +10,9 @@ import org.immutables.value.Value;
 @JsonDeserialize
 @JsonIgnoreProperties(ignoreUnknown = true)
 interface BaseTelemetryLocation {
+    @Value.Redacted
     double latitude();
 
+    @Value.Redacted
     double longitude();
 }
