@@ -337,6 +337,34 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- Guice's default jar shades an old ASM under com.google.inject.internal.asm that cannot read class files from current JDKs
+                 ("Unsupported class file major version"). Depend on the unshaded "classes" classifier (which uses org.objectweb.asm directly) and
+                 supply a current org.ow2.asm:asm ourselves. The guice-bom only manages the default-classifier guice, so the classes variant needs its
+                 own managed version here. See https://github.com/google/guice/issues/1926. -->
+            <dependency>
+                <groupId>com.google.inject</groupId>
+                <artifactId>guice</artifactId>
+                <classifier>classes</classifier>
+                <version>7.0.0</version>
+            </dependency>
+            <dependency>
+                <!-- guice-assistedinject pulls the default (shaded) guice transitively; exclude it so only the classes variant above is on the
+                     classpath (modules that use assistedinject also declare guice:classes directly). -->
+                <groupId>com.google.inject.extensions</groupId>
+                <artifactId>guice-assistedinject</artifactId>
+                <version>7.0.0</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>com.google.inject</groupId>
+                        <artifactId>guice</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.ow2.asm</groupId>
+                <artifactId>asm</artifactId>
+                <version>9.10.1</version>
+            </dependency>
             <dependency>
                 <groupId>com.google.firebase</groupId>
                 <artifactId>firebase-admin</artifactId>
