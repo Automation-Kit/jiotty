@@ -24,6 +24,13 @@ public interface UserPersistence {
     /// @return empty if the identity is not linked or linked to a deleted user
     CompletableFuture<Optional<UserProfile>> getByIdentity(UserIdentity identity);
 
+    /// Resolves a *soft-deleted* user by provider identity, for the account-recovery / pending-deletion flow. The mirror image of [#getByIdentity]: it returns
+    /// the user only when it IS soft-deleted (`deleted_at` set), together with that deletion instant, so the caller can apply its own grace-period policy.
+    ///
+    /// @param identity provider identity used for lookup
+    /// @return empty if the identity is unknown or its user is active
+    CompletableFuture<Optional<SoftDeletedUser>> findSoftDeletedByIdentity(UserIdentity identity);
+
     /// Returns the active user profile by id.
     ///
     /// @param userId internal user id

@@ -79,6 +79,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     private final CurrentDateTimeProvider timeProvider;
     private final PersistenceDomainConfig domainConfig;
     private final String selectUserByIdentitySql;
+    private final String selectSoftDeletedUserByIdentitySql;
     private final String selectUserByIdSql;
     private final String selectAllUsersSql;
     private final String userExistsSql;
@@ -126,6 +127,11 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         selectUserByIdentitySql = "SELECT u.id, u.email, u.display_name, u.timezone, u.created_at, u.updated_at " +
                                   "FROM " + userTable + " u JOIN " + identityTable + " i ON u.id = i.user_id " +
                                   "WHERE i.provider=? AND i.provider_user_id=? AND i.deleted_at IS NULL AND u.deleted_at IS NULL";
+        // Mirror of selectUserByIdentitySql for the recovery path: matches the soft-deleted user. The identity rows are soft-deleted together with the user
+        //  (softDeleteIdentitiesSql), so do NOT filter on i.deleted_at — match on the still-unique (provider, provider_user_id).
+        selectSoftDeletedUserByIdentitySql = "SELECT u.id, u.email, u.display_name, u.timezone, u.created_at, u.updated_at, u.deleted_at " +
+                                             "FROM " + userTable + " u JOIN " + identityTable + " i ON u.id = i.user_id " +
+                                             "WHERE i.provider=? AND i.provider_user_id=? AND u.deleted_at IS NOT NULL";
         selectUserByIdSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable +
                             " WHERE id=? AND deleted_at IS NULL";
         selectAllUsersSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable +
@@ -182,6 +188,12 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     public CompletableFuture<Optional<UserProfile>> getByIdentity(UserIdentity identity) {
         checkNotNull(identity, "identity");
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> Optional.ofNullable(doGetByIdentity(identity))));
+    }
+
+    @Override
+    public CompletableFuture<Optional<SoftDeletedUser>> findSoftDeletedByIdentity(UserIdentity identity) {
+        checkNotNull(identity, "identity");
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> Optional.ofNullable(doFindSoftDeletedByIdentity(identity))));
     }
 
     @Override
@@ -287,6 +299,16 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
             }
         } catch (SQLException e) {
             throw new RuntimeException("Failed to read user for identity " + identity, e);
+        }
+    }
+
+    private @Nullable SoftDeletedUser doFindSoftDeletedByIdentity(UserIdentity identity) {
+        try {
+            try (Connection connection = dataSource.getConnection()) {
+                return selectSoftDeletedUserByIdentity(connection, identity);
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to read soft-deleted user for identity " + identity, e);
         }
     }
 
@@ -508,6 +530,16 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
             stmt.setString(2, identity.providerUserId());
             try (ResultSet rs = stmt.executeQuery()) {
                 return rs.next() ? mapUserProfile(rs) : null;
+            }
+        }
+    }
+
+    private @Nullable SoftDeletedUser selectSoftDeletedUserByIdentity(Connection connection, UserIdentity identity) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(selectSoftDeletedUserByIdentitySql)) {
+            stmt.setString(1, identity.provider());
+            stmt.setString(2, identity.providerUserId());
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next() ? new SoftDeletedUser(mapUserProfile(rs), rs.getTimestamp("deleted_at").toInstant()) : null;
             }
         }
     }
