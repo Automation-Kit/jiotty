@@ -55,7 +55,7 @@ public interface UserPersistence {
     /// @return active identity records (deleted identities are excluded)
     CompletableFuture<List<UserIdentityRecord>> listIdentities(String userId);
 
-    /// Soft-deletes the user and all linked identities.
+    /// Soft-deletes the user and all linked identities. Idempotent: a no-op if the user is already soft-deleted.
     ///
     /// @param userId internal user id
     CompletableFuture<Void> softDelete(String userId);

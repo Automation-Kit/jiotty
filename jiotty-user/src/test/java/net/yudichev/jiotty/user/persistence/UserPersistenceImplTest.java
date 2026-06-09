@@ -131,8 +131,9 @@ class UserPersistenceImplTest {
 
         assertThatThrownBy(() -> userPersistence.updateProfile(created.id(), update).get(5, SECONDS))
                 .hasRootCauseInstanceOf(IllegalStateException.class);
-        assertThatThrownBy(() -> userPersistence.softDelete(created.id()).get(5, SECONDS))
-                .hasRootCauseInstanceOf(IllegalStateException.class);
+        // a second soft-delete is an idempotent no-op (not an error)
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isEmpty();
     }
 
     @Test
@@ -253,6 +254,19 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of());
         // completes normally even though no such user exists
         userPersistence.hardDelete("u-does-not-exist").get(5, SECONDS);
+    }
+
+    @Test
+    void softDeleteIsIdempotent() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        // a second soft-delete on an already-deleted user must be a no-op, not throw
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+
+        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isEmpty();
     }
 
     @Test

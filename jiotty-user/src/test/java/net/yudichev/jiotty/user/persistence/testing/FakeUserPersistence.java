@@ -116,7 +116,7 @@ public final class FakeUserPersistence implements UserPersistence {
             }
             for (UserIdentity oldIdentity : storedUser.activeIdentities()) {
                 String removedUserId = activeUserIdsByIdentity.remove(oldIdentity);
-                assert removedUserId != null && removedUserId.equals(userId);
+                assert userId.equals(removedUserId);
             }
             Instant timestamp = currentInstant();
             storedUser.replaceActiveIdentities(identitiesByProvider.values(), timestamp);
@@ -137,10 +137,14 @@ public final class FakeUserPersistence implements UserPersistence {
     @Override
     public CompletableFuture<Void> softDelete(String userId) {
         synchronized (lock) {
-            StoredUser storedUser = getActiveUser(userId);
+            checkNotNull(userId, "userId");
+            StoredUser storedUser = usersById.get(userId);
+            if (storedUser == null || !storedUser.active()) {
+                return completedFuture(null); // idempotent: already soft-deleted (or unknown) — no-op
+            }
             for (UserIdentity oldIdentity : storedUser.activeIdentities()) {
                 String removedUserId = activeUserIdsByIdentity.remove(oldIdentity);
-                assert removedUserId != null && removedUserId.equals(userId);
+                assert userId.equals(removedUserId);
             }
             storedUser.softDelete(currentInstant());
             return completedFuture(null);

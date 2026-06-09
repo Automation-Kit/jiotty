@@ -407,15 +407,16 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
                 connection.setAutoCommit(false);
                 try {
                     Instant now = timeProvider.currentInstant();
-                    int rows = doUpdate(connection,
-                                        softDeleteUserSql,
-                                        -1,
-                                        stmt -> {
-                                            stmt.setTimestamp(1, Timestamp.from(now));
-                                            stmt.setTimestamp(2, Timestamp.from(now));
-                                            stmt.setString(3, userId);
-                                        });
-                    checkState(rows == 1, "User %s not found or already deleted", userId);
+                    // Idempotent: the WHERE deleted_at IS NULL guard makes a repeat call a no-op (0 rows), mirroring restore/hardDelete — a re-issued
+                    //  soft-delete (e.g. crash-recovery reconciliation) must not fail.
+                    doUpdate(connection,
+                             softDeleteUserSql,
+                             -1,
+                             stmt -> {
+                                 stmt.setTimestamp(1, Timestamp.from(now));
+                                 stmt.setTimestamp(2, Timestamp.from(now));
+                                 stmt.setString(3, userId);
+                             });
                     doUpdate(connection,
                              softDeleteIdentitiesSql,
                              -1,
