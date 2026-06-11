@@ -10,7 +10,7 @@ public interface PriceRetrievalStatusHandler {
     /// Called when price retrieval is in sustained failure.
     ///
     /// @param message human-readable description of the failure
-    /// @param cause the failure
+    /// @param cause   the failure
     void onFailure(String message, Throwable cause);
 
     /// Called when price retrieval succeeds, clearing any outstanding failure.

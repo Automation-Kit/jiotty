@@ -36,11 +36,11 @@ import static net.yudichev.jiotty.energy.Bindings.Dependency;
 /// The region is passed at construction and stays fixed for the instance's lifetime; the user-scope resolver picks the right region's instance when the user's
 /// account resolves to it.
 public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleComponent implements AgilePredictEnergyPriceService {
+    @VisibleForTesting
+    static final Duration RETRIEVAL_PERIOD = Duration.ofMinutes(15);
     private static final Logger logger = LogManager.getLogger(AgilePredictEnergyPriceServiceImpl.class);
     private static final long PRICE_PERIOD_LENGTH_MIN = 30;
     private static final int PRICE_PERIOD_LENGTH_SEC = toIntExact(TimeUnit.MINUTES.toSeconds(PRICE_PERIOD_LENGTH_MIN));
-    @VisibleForTesting
-    static final Duration RETRIEVAL_PERIOD = Duration.ofMinutes(15);
     private static final Duration RETRY_DELAY = Duration.ofMinutes(1);
     private static final Duration ONE_HOUR = Duration.ofHours(1);
     private final Provider<SchedulingExecutor> executorProvider;
