@@ -13,16 +13,16 @@ import net.yudichev.jiotty.user.ui.ServletMount;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-/// Wires the admin-alert HTTP surface and exposes a [ServletMount] that callers plug into [AuthenticatedHttpServerModule] via
+/// Exposes a [ServletMount] for resolving admin alerts that callers plug into [AuthenticatedHttpServerModule] via
 /// [AuthenticatedHttpServerModule.Builder#addServletMount].
-public final class AdminAlertHttpModule extends BaseLifecycleComponentModule implements ExposedKeyModule<ServletMount> {
+public final class AdminAlertResolveHttpModule extends BaseLifecycleComponentModule implements ExposedKeyModule<ServletMount> {
     private final BindingSpec<String> resolveTokenSpec;
     private final BindingSpec<AdminAlertService> alertServiceSpec;
     private final Key<ServletMount> exposedKey;
 
-    private AdminAlertHttpModule(SpecifiedAnnotation specifiedAnnotation,
-                                 BindingSpec<String> resolveTokenSpec,
-                                 BindingSpec<AdminAlertService> alertServiceSpec) {
+    private AdminAlertResolveHttpModule(SpecifiedAnnotation specifiedAnnotation,
+                                        BindingSpec<String> resolveTokenSpec,
+                                        BindingSpec<AdminAlertService> alertServiceSpec) {
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.resolveTokenSpec = checkNotNull(resolveTokenSpec, "resolveTokenSpec");
         this.alertServiceSpec = checkNotNull(alertServiceSpec, "alertServiceSpec");
@@ -43,11 +43,11 @@ public final class AdminAlertHttpModule extends BaseLifecycleComponentModule imp
                         .annotatedWith(AdminBearerAuthFilter.ResolveToken.class)
                         .installedBy(this::installLifecycleComponentModule);
         alertServiceSpec.bind(AdminAlertService.class)
-                        .annotatedWith(AdminResolveServlet.Dependency.class)
+                        .annotatedWith(AdminAlertResolveServlet.Dependency.class)
                         .installedBy(this::installLifecycleComponentModule);
         bind(AdminBearerAuthFilter.class).in(Singleton.class);
-        bind(AdminResolveServlet.class).in(Singleton.class);
-        bind(exposedKey).to(AdminAlertServletMount.class).in(Singleton.class);
+        bind(AdminAlertResolveServlet.class).in(Singleton.class);
+        bind(exposedKey).to(AdminAlertResolveServletMount.class).in(Singleton.class);
         expose(exposedKey);
     }
 
@@ -67,7 +67,7 @@ public final class AdminAlertHttpModule extends BaseLifecycleComponentModule imp
 
         @Override
         public ExposedKeyModule<ServletMount> build() {
-            return new AdminAlertHttpModule(specifiedAnnotation(), resolveTokenSpec, alertServiceSpec);
+            return new AdminAlertResolveHttpModule(specifiedAnnotation(), resolveTokenSpec, alertServiceSpec);
         }
     }
 }

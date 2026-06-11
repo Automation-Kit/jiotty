@@ -36,7 +36,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static org.assertj.core.api.Assertions.assertThat;
 
-class AdminResolveServletTest {
+class AdminAlertResolveServletTest {
     private static final String VALID_TOKEN = "tok-correct";
     private static final String GRAFANA_USER = "alice@example.com";
     private static final String DOMAIN_NAME = "admin_alerts";
@@ -70,7 +70,7 @@ class AdminResolveServletTest {
                                                  100);
         alertService.start();
 
-        var mount = new AdminAlertServletMount(new AdminBearerAuthFilter(VALID_TOKEN), new AdminResolveServlet(alertService));
+        var mount = new AdminAlertResolveServletMount(new AdminBearerAuthFilter(VALID_TOKEN), new AdminAlertResolveServlet(alertService));
         server = new Server();
         var connector = new ServerConnector(server);
         connector.setPort(0);

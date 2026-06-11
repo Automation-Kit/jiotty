@@ -14,16 +14,16 @@ import java.util.EnumSet;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 /// Builds the Jetty handler for the `/admin/api/*` surface. Registered as a [ServletMount] in the host [UIHttpServer].
-public final class AdminAlertServletMount implements ServletMount {
+public final class AdminAlertResolveServletMount implements ServletMount {
     static final String CONTEXT_PATH = "/admin";
     static final String FILTER_PATH_SPEC = "/api/*";
     static final String SERVLET_PATH_SPEC = "/api/alerts/*";
 
     private final AdminBearerAuthFilter authFilter;
-    private final AdminResolveServlet resolveServlet;
+    private final AdminAlertResolveServlet resolveServlet;
 
     @Inject
-    public AdminAlertServletMount(AdminBearerAuthFilter authFilter, AdminResolveServlet resolveServlet) {
+    public AdminAlertResolveServletMount(AdminBearerAuthFilter authFilter, AdminAlertResolveServlet resolveServlet) {
         this.authFilter = checkNotNull(authFilter, "authFilter");
         this.resolveServlet = checkNotNull(resolveServlet, "resolveServlet");
     }

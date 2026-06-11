@@ -17,11 +17,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
-class AgilePredictPriceServiceRegistryTest {
+class AgilePredictPriceServiceRegistryImplTest {
 
     @Mock
     private AgilePredictPriceService priceService;
-    private AgilePredictPriceServiceRegistry registry;
+    private AgilePredictPriceServiceRegistryImpl registry;
 
     @BeforeEach
     void setUp() {
@@ -31,8 +31,8 @@ class AgilePredictPriceServiceRegistryTest {
         lenient().when(priceService.getPrices(any(), any(Integer.class))).thenReturn(completedFuture(List.of()));
         // Hand-rolled Factory mirrors what Guice's FactoryModuleBuilder would inject — keeps the test free of Guice setup.
         AgilePredictEnergyPriceServiceImpl.Factory factory = regionLetter ->
-                new AgilePredictEnergyPriceServiceImpl(() -> executor, priceService, regionLetter);
-        registry = new AgilePredictPriceServiceRegistry(factory);
+                new AgilePredictEnergyPriceServiceImpl(() -> executor, priceService, new NoOpPriceRetrievalStatusHandler(), regionLetter);
+        registry = new AgilePredictPriceServiceRegistryImpl(factory);
         registry.start();
     }
 

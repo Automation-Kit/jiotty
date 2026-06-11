@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.energy;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.assistedinject.Assisted;
 import jakarta.inject.Inject;
@@ -29,6 +30,7 @@ import static java.lang.StrictMath.toIntExact;
 import static java.util.Comparator.comparing;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.energy.Bindings.AgilePredict;
+import static net.yudichev.jiotty.energy.Bindings.Dependency;
 
 /// App-scope per-region AgilePredict forecast service. One instance per region letter, constructed and started lazily by [AgilePredictPriceServiceRegistry].
 /// The region is passed at construction and stays fixed for the instance's lifetime; the user-scope resolver picks the right region's instance when the user's
@@ -37,11 +39,13 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
     private static final Logger logger = LogManager.getLogger(AgilePredictEnergyPriceServiceImpl.class);
     private static final long PRICE_PERIOD_LENGTH_MIN = 30;
     private static final int PRICE_PERIOD_LENGTH_SEC = toIntExact(TimeUnit.MINUTES.toSeconds(PRICE_PERIOD_LENGTH_MIN));
-    private static final Duration RETRIEVAL_PERIOD = Duration.ofMinutes(15);
+    @VisibleForTesting
+    static final Duration RETRIEVAL_PERIOD = Duration.ofMinutes(15);
     private static final Duration RETRY_DELAY = Duration.ofMinutes(1);
     private static final Duration ONE_HOUR = Duration.ofHours(1);
     private final Provider<SchedulingExecutor> executorProvider;
     private final AgilePredictPriceService priceService;
+    private final PriceRetrievalStatusHandler statusHandler;
     private final String region;
     /// The latest price-or-failure result, empty until the first one is produced. New subscribers receive the present value immediately.
     private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult = ObservableValue.concurrent(Optional.empty());
@@ -56,9 +60,11 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
     @Inject
     public AgilePredictEnergyPriceServiceImpl(@AgilePredict Provider<SchedulingExecutor> executorProvider,
                                               AgilePredictPriceService priceService,
+                                              @Dependency PriceRetrievalStatusHandler statusHandler,
                                               @Assisted char regionLetter) {
         this.executorProvider = checkNotNull(executorProvider);
         this.priceService = checkNotNull(priceService);
+        this.statusHandler = checkNotNull(statusHandler);
         region = String.valueOf(regionLetter);
     }
 
@@ -78,9 +84,7 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
         refreshSchedule = executor.scheduleAtFixedRate(Duration.ZERO, RETRIEVAL_PERIOD, () -> {
             // stop retries if they overflow until next refresh period
             if (retrySchedule != null) {
-                // TODO:commerce admin alert needs to be raised here; one thought is to add a STALE flag (with the lastFailure encoded in it) to existing Prices
-                //  and then consumers would raise an admin alert.
-                logger.warn("Retries overran until next refresh period, stopping them", lastFailure);
+                statusHandler.onFailure("Retries overran until next refresh period, stopping them", lastFailure);
                 retrySchedule.close();
                 retrySchedule = null;
                 lastFailure = null;
@@ -101,6 +105,7 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
                     .thenAcceptAsync(prices -> {
                         Either<Prices, Failure> result = Either.left(handleAgilePredictPrices(prices));
                         priceResult.accept(Optional.of(result));
+                        statusHandler.onSuccess();
                     }, executor)
                     .whenCompleteAsync((_, throwable) -> {
                         if (throwable != null) {

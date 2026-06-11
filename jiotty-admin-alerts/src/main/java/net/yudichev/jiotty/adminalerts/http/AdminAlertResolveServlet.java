@@ -33,11 +33,11 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 /// the request attribute the filter set.
 ///
 /// Implemented as an async servlet ([HttpServletRequest#startAsync()]) so the Jetty request thread is released while the alert service does its database work.
-public final class AdminResolveServlet extends HttpServlet {
+public final class AdminAlertResolveServlet extends HttpServlet {
     @Serial
     private static final long serialVersionUID = 1L;
 
-    private static final Logger logger = LogManager.getLogger(AdminResolveServlet.class);
+    private static final Logger logger = LogManager.getLogger(AdminAlertResolveServlet.class);
 
     private static final String RESOLVE_SUFFIX = "/resolve";
     private static final long ASYNC_TIMEOUT_MS = 30_000;
@@ -45,7 +45,7 @@ public final class AdminResolveServlet extends HttpServlet {
     private final AdminAlertService alertService;
 
     @Inject
-    public AdminResolveServlet(@Dependency AdminAlertService alertService) {
+    public AdminAlertResolveServlet(@Dependency AdminAlertService alertService) {
         this.alertService = checkNotNull(alertService, "alertService");
     }
 
