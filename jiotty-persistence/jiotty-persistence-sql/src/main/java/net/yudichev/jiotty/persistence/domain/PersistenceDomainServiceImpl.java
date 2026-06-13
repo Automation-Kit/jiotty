@@ -54,7 +54,11 @@ public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent i
 
     @Override
     public CompletableFuture<Boolean> ensureDomainReady(PersistenceDomainConfig config) {
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> whenStartedAndNotLifecycling(() -> ensureDomainReadySync(config))));
+        // A stopped/stopping service ignores the call by returning a future that never completes, so a task draining off the shared
+        // executor during shutdown is dropped rather than throwing synchronously or running against a closed datasource.
+        return whenNotLifecycling(() -> isStarted()
+                                        ? executor.submit(() -> whenStartedAndNotLifecycling(() -> ensureDomainReadySync(config)))
+                                        : new CompletableFuture<>());
     }
 
     @Override

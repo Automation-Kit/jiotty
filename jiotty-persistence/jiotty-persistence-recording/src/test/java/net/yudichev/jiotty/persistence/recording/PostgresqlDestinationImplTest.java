@@ -232,6 +232,23 @@ class PostgresqlDestinationImplTest {
         assertThat(columnExists(dataSource, SAMPLE_AUX_TABLE_NAME, "note")).isTrue();
     }
 
+    @Test
+    void recorderInitialisationDuringDomainServiceShutdownIsSkippedQuietly() throws Exception {
+        domainService.stop();
+
+        var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
+                                                            "sample",
+                                                            1,
+                                                            List.of(CREATE_AUX_TABLE_SQL),
+                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                            sampleColumns());
+        destination.createRecorder(config, Optional.of("userId"));
+        flushExecutor(recordingExecutor);
+
+        // The domain service declined initialisation because it is stopped, so the recorder table was never created and no error escaped.
+        assertThat(tableExists(dataSource, SAMPLE_TABLE_NAME)).isFalse();
+    }
+
     private void initDestination() {
         Provider<SchedulingExecutor> recordingExecutorProvider = () -> recordingExecutor;
         destination = new PostgresqlDestinationImpl(recordingExecutorProvider, dataSourceFactory, domainService);

@@ -16,6 +16,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -93,6 +94,21 @@ class PersistenceDomainServiceImplTest {
                                                           PersistenceDomainMigrator.FAIL_ON_MIGRATION);
         assertThatThrownBy(() -> service.ensureDomainReady(downgradeConfig).get(5, TimeUnit.SECONDS))
                 .hasRootCauseInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void whenStoppedIgnoresCallAndReturnsNeverCompletingFuture() {
+        service.stop();
+        var config = new PersistenceDomainConfig(new PersistenceDomain("stopped_domain"),
+                                                 1,
+                                                 List.of(CREATE_SAMPLE_TABLE_SQL),
+                                                 PersistenceDomainMigrator.FAIL_ON_MIGRATION);
+
+        // A stopped service ignores the call: the future is returned without throwing on the calling thread and never completes.
+        var future = service.ensureDomainReady(config);
+
+        assertThat(future).isNotDone();
+        assertThatThrownBy(() -> future.get(100, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
     }
 
     @Test
