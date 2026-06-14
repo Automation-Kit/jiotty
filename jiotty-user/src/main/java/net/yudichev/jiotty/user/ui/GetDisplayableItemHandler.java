@@ -5,6 +5,7 @@ import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import org.apache.logging.log4j.LogManager;
@@ -14,7 +15,7 @@ import java.io.IOException;
 import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 
 /// Handles `GET /ui/api/displayables/item?id=...` — returns the named displayable's DTO.
@@ -23,13 +24,17 @@ public final class GetDisplayableItemHandler extends BaseLifecycleComponent impl
     private static final Logger logger = LogManager.getLogger(GetDisplayableItemHandler.class);
 
     private final DisplayableRegistry registry;
+    private final AdminAlertService alertService;
     private final Provider<SchedulingExecutor> executorProvider;
 
     private SchedulingExecutor executor;
 
     @Inject
-    public GetDisplayableItemHandler(DisplayableRegistry registry, @UIExecutor Provider<SchedulingExecutor> executorProvider) {
+    public GetDisplayableItemHandler(DisplayableRegistry registry,
+                                     @UIServerModule.AdminAlert AdminAlertService alertService,
+                                     @UIExecutor Provider<SchedulingExecutor> executorProvider) {
         this.registry = checkNotNull(registry, "registry");
+        this.alertService = checkNotNull(alertService, "alertService");
         this.executorProvider = checkNotNull(executorProvider, "executorProvider");
     }
 
@@ -69,8 +74,8 @@ public final class GetDisplayableItemHandler extends BaseLifecycleComponent impl
                        .whenCompleteAsync((dto, throwable) -> {
                            try {
                                if (throwable != null) {
-                                   logger.warn("Displayable {} failed to generate DTO", id, throwable);
-                                   writeJsonError(response, 500, humanReadableMessage(throwable));
+                                   alertService.raise(WARNING, "Displayable DTO generation failed", logger, throwable);
+                                   writeJsonError(response, 500, "INTERNAL_ERROR");
                                } else {
                                    response.setCharacterEncoding("utf-8");
                                    response.setContentType("application/json");

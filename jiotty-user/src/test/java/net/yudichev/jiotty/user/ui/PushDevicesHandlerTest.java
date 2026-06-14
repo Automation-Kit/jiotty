@@ -5,6 +5,8 @@ import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
+import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.user.push.PushDeviceRecord;
@@ -47,6 +49,7 @@ class PushDevicesHandlerTest {
     @Mock
     private AsyncContext asyncContext;
 
+    private TestAdminAlertService alertService;
     private PushDevicesHandler handler;
 
     @BeforeEach
@@ -54,7 +57,8 @@ class PushDevicesHandlerTest {
         clock = new ProgrammableClock();
         Provider<SchedulingExecutor> executorProvider =
                 () -> clock.createSingleThreadedSchedulingExecutor("test");
-        handler = new PushDevicesHandler(pushDeviceStore, clock, executorProvider);
+        alertService = new TestAdminAlertService();
+        handler = new PushDevicesHandler(pushDeviceStore, clock, alertService, executorProvider);
         handler.start();
         clock.tick();
     }
@@ -135,7 +139,8 @@ class PushDevicesHandlerTest {
 
         verify(response).setStatus(500);
         verify(asyncContext).complete();
-        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().contains("store down");
+        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().isEqualTo("INTERNAL_ERROR");
+        assertRaisedAlert();
     }
 
     @Test
@@ -165,7 +170,18 @@ class PushDevicesHandlerTest {
 
         verify(response).setStatus(500);
         verify(asyncContext).complete();
-        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().contains("store down");
+        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().isEqualTo("INTERNAL_ERROR");
+        assertRaisedAlert();
+    }
+
+    /// A store failure must surface as a WARNING admin alert (recoverable per-request failure), not just an opaque 500.
+    private void assertRaisedAlert() {
+        assertThat(alertService.activeAlertsById().values())
+                .singleElement()
+                .satisfies(alert -> {
+                    assertThat(alert.severity()).isEqualTo(AdminAlertSeverity.WARNING);
+                    assertThat(alert.title()).isEqualTo("Push device request failed");
+                });
     }
 
     private void configureRequest(String method, String pathInfo) {

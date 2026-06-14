@@ -167,7 +167,7 @@ public final class TestAdminAlertService implements AdminAlertService {
         events.add(new TestEvent(occurredAt, description));
     }
 
-    /// Most recent bundle (active or resolved) for the given key, or empty if none. Mirrors [AdminAlertServiceImpl#findByKey(String)] for tests that hold the
+    /// Most recent bundle (active or resolved) for the given key, or empty if none. Mirrors the persistence-backed `findByKey` for tests that hold the
     /// key returned by [#raise(AdminAlertData)].
     public Optional<AdminAlert> findByKey(String key) {
         checkNotNull(key, "key");

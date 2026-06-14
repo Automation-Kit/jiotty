@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.common.rest;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.google.common.base.Throwables;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
@@ -43,8 +42,8 @@ public final class RestServers {
             return successFactory.apply(Optional.ofNullable(response));
         } catch (RuntimeException e) {
             logger.error("Failed to execute REST handler {}", handlerName, e);
-            String message = Throwables.getRootCause(e).getMessage();
-            return errorFactory.apply(message);
+            // Opaque error to the caller — the full cause is in the log above, never echoed to the client (no internal-detail leak).
+            return errorFactory.apply("INTERNAL_ERROR");
         }
     }
 }

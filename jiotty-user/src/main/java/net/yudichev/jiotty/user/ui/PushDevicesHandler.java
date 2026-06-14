@@ -6,6 +6,7 @@ import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
@@ -20,7 +21,7 @@ import java.io.IOException;
 import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 
@@ -35,6 +36,7 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
 
     private final PushDeviceStore pushDeviceStore;
     private final CurrentDateTimeProvider currentDateTimeProvider;
+    private final AdminAlertService alertService;
     private final Provider<SchedulingExecutor> executorProvider;
 
     private SchedulingExecutor executor;
@@ -42,9 +44,11 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
     @Inject
     public PushDevicesHandler(PushDeviceStore pushDeviceStore,
                               CurrentDateTimeProvider currentDateTimeProvider,
+                              @UIServerModule.AdminAlert AdminAlertService alertService,
                               @UIExecutor Provider<SchedulingExecutor> executorProvider) {
         this.pushDeviceStore = checkNotNull(pushDeviceStore, "pushDeviceStore");
         this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider, "currentDateTimeProvider");
+        this.alertService = checkNotNull(alertService, "alertService");
         this.executorProvider = checkNotNull(executorProvider, "executorProvider");
     }
 
@@ -88,7 +92,7 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
             try {
                 body = REQUEST_READER.readValue(request.getReader());
             } catch (IOException e) {
-                writeJsonError(response, 400, "Invalid JSON body: " + humanReadableMessage(e));
+                writeJsonError(response, 400, "Invalid JSON body");
                 asyncContext.complete();
                 return;
             }
@@ -111,11 +115,11 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
         }));
     }
 
-    private static void completeResponse(AsyncContext asyncContext, HttpServletResponse response, @Nullable Throwable throwable) {
+    private void completeResponse(AsyncContext asyncContext, HttpServletResponse response, @Nullable Throwable throwable) {
         try {
             if (throwable != null) {
-                logger.info("Push device request processing failed", throwable);
-                asUnchecked(() -> writeJsonError(response, 500, humanReadableMessage(throwable)));
+                alertService.raise(WARNING, "Push device request failed", logger, throwable);
+                asUnchecked(() -> writeJsonError(response, 500, "INTERNAL_ERROR"));
             } else {
                 response.setStatus(204);
             }

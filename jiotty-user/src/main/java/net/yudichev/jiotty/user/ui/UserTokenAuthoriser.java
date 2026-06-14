@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.ui;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.user.persistence.UserProfile;
 
+import java.util.Optional;
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -12,15 +13,25 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// Subscriptions are token-scoped. If a state is already known for `token`, the handler may be called synchronously from
 /// [#subscribeToTokenState(String,Consumer)]. If the token is still being resolved, the handler is called later when a final state becomes available.
 public interface UserTokenAuthoriser {
+    /// Request attribute carrying [TokenAuthenticated#customData] (when present) to request handlers; the request authoriser sets it on each authenticated
+    /// request before dispatch.
+    String CUSTOM_DATA_REQUEST_ATTRIBUTE = "net.yudichev.jiotty.user.ui.tokenCustomData";
+
     void deliverTokenStateTo(String token, Consumer<? super TokenState> handler);
 
     Closeable subscribeToTokenState(String token, Consumer<? super TokenState> handler);
 
     sealed interface TokenState permits TokenAuthenticated, TokenNotAuthenticated {}
 
-    record TokenAuthenticated(UserProfile profile, UIServer uiServer) implements TokenState {
+    /// @param profile    the authenticated user's profile
+    /// @param uiServer   the per-user UI server that serves this token's requests
+    /// @param customData opaque, application-supplied per-token value delivered to request handlers via [#CUSTOM_DATA_REQUEST_ATTRIBUTE]; empty when the
+    /// application attaches nothing
+    record TokenAuthenticated(UserProfile profile, UIServer uiServer, Optional<Object> customData) implements TokenState {
         public TokenAuthenticated {
             checkNotNull(profile, "profile");
+            checkNotNull(uiServer, "uiServer");
+            checkNotNull(customData, "customData");
         }
     }
 

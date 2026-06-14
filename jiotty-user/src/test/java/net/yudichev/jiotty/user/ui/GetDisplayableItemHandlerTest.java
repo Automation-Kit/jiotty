@@ -5,6 +5,8 @@ import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
+import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import org.junit.jupiter.api.AfterEach;
@@ -36,6 +38,7 @@ class GetDisplayableItemHandlerTest {
 
     private ProgrammableClock clock;
     private DisplayableRegistryImpl registry;
+    private TestAdminAlertService alertService;
     private GetDisplayableItemHandler handler;
 
     @Mock
@@ -51,7 +54,8 @@ class GetDisplayableItemHandlerTest {
         Provider<SchedulingExecutor> executorProvider = () -> clock.createSingleThreadedSchedulingExecutor("test");
         registry = new DisplayableRegistryImpl(executorProvider);
         registry.start();
-        handler = new GetDisplayableItemHandler(registry, executorProvider);
+        alertService = new TestAdminAlertService();
+        handler = new GetDisplayableItemHandler(registry, alertService, executorProvider);
         handler.start();
         clock.tick();
         lenient().when(request.getPathInfo()).thenReturn("/displayables/item");
@@ -118,8 +122,16 @@ class GetDisplayableItemHandlerTest {
 
         verify(asyncContext).complete();
         verify(response).setStatus(500);
+        // The 500 body is a fixed opaque code — the internal exception text ("DTO generation failed") must not reach the client.
         Map<String, Object> parsed = parseJson(writer.toString());
-        assertThat((String) parsed.get("error")).contains("DTO generation failed");
+        assertThat((String) parsed.get("error")).isEqualTo("INTERNAL_ERROR");
+        // ...but the failure IS surfaced to operators as a WARNING admin alert.
+        assertThat(alertService.activeAlertsById().values())
+                .singleElement()
+                .satisfies(alert -> {
+                    assertThat(alert.severity()).isEqualTo(AdminAlertSeverity.WARNING);
+                    assertThat(alert.title()).isEqualTo("Displayable DTO generation failed");
+                });
     }
 
     private static Displayable createDisplayable(String id, String displayName, CompletableFuture<DisplayableDto> dto) {

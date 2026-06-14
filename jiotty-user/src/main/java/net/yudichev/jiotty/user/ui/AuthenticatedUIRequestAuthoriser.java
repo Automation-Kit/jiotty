@@ -63,6 +63,8 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
             switch (state) {
                 case TokenAuthenticated tokenAuthenticated -> {
                     authSample.stop(authenticatedAuthTimer);
+                    tokenAuthenticated.customData()
+                                      .ifPresent(data -> request.setAttribute(UserTokenAuthoriser.CUSTOM_DATA_REQUEST_ATTRIBUTE, data));
                     RequestContextFilter.setRequestContext(request, createRequestContext(token, tokenAuthenticated));
                     asyncContext.dispatch();
                 }

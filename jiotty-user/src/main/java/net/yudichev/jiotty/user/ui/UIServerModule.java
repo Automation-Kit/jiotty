@@ -2,9 +2,11 @@ package net.yudichev.jiotty.user.ui;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
+import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import com.google.inject.multibindings.Multibinder;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
@@ -16,11 +18,17 @@ import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import net.yudichev.jiotty.user.ui.options.OptionPersistenceImpl;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.PARAMETER;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.inject.BindingSpec.boundTo;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
@@ -35,19 +43,25 @@ import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 /// External [ApiPathHandler] contributors plug in via [Builder#addApiPathHandler] — each call accepts a [BindingSpec] that resolves to a contributed handler.
 /// Built-in handlers (`/options`, `/displayables`, `/displayables/item`, `/displayables/stream`, `/displayables/download`, `/push/devices`) are wired
 /// internally and are not contributed by callers.
+///
+/// The [AdminAlertService] supplied via [Builder#setAdminAlertService] is required and is consumed by the built-in handlers to surface internal failures as
+/// admin alerts (rather than only logging them).
 public final class UIServerModule extends BaseLifecycleComponentModule {
     private final BindingSpec<String> threadNameSuffixSpec;
     private final BindingSpec<Duration> optionsThrottlingPeriodSpec;
     private final BindingSpec<VarStore> varStoreSpec;
+    private final BindingSpec<AdminAlertService> adminAlertServiceSpec;
     private final List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs;
 
     private UIServerModule(BindingSpec<String> threadNameSuffixSpec,
                            BindingSpec<Duration> optionsThrottlingPeriodSpec,
                            BindingSpec<VarStore> varStoreSpec,
+                           BindingSpec<AdminAlertService> adminAlertServiceSpec,
                            List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs) {
         this.threadNameSuffixSpec = checkNotNull(threadNameSuffixSpec);
         this.optionsThrottlingPeriodSpec = checkNotNull(optionsThrottlingPeriodSpec);
         this.varStoreSpec = checkNotNull(varStoreSpec);
+        this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec);
         this.apiPathHandlerSpecs = ImmutableList.copyOf(apiPathHandlerSpecs);
     }
 
@@ -55,6 +69,10 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
     protected void configure() {
         varStoreSpec.bind(new TypeLiteral<>() {}).annotatedWith(OptionPersistenceImpl.Dependency.class).installedBy(this::installLifecycleComponentModule);
         bind(OptionPersistence.class).to(OptionPersistenceImpl.class);
+
+        adminAlertServiceSpec.bind(AdminAlertService.class)
+                             .annotatedWith(AdminAlert.class)
+                             .installedBy(this::installLifecycleComponentModule);
 
         installLifecycleComponentModule(PushDeviceModule.builder()
                                                         .withVarStore(varStoreSpec)
@@ -107,13 +125,25 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         return new Builder();
     }
 
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface AdminAlert {
+    }
+
     public static final class Builder implements TypedBuilder<UIServerModule> {
         private final List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs = new ArrayList<>();
         private BindingSpec<String> threadNameSuffixSpec = literally("");
         private BindingSpec<Duration> optionsThrottlingPeriodSpec = literally(Duration.ofMillis(500));
         private BindingSpec<VarStore> varStoreSpec = boundTo(VarStore.class);
+        private BindingSpec<AdminAlertService> adminAlertServiceSpec;
 
         private Builder() {
+        }
+
+        public Builder setAdminAlertService(BindingSpec<AdminAlertService> adminAlertServiceSpec) {
+            this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec);
+            return this;
         }
 
         public Builder withThreadNameSuffix(BindingSpec<String> threadNameSuffixSpec) {
@@ -139,7 +169,11 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
 
         @Override
         public UIServerModule build() {
-            return new UIServerModule(threadNameSuffixSpec, optionsThrottlingPeriodSpec, varStoreSpec, apiPathHandlerSpecs);
+            return new UIServerModule(threadNameSuffixSpec,
+                                      optionsThrottlingPeriodSpec,
+                                      varStoreSpec,
+                                      adminAlertServiceSpec,
+                                      apiPathHandlerSpecs);
         }
     }
 }

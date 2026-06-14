@@ -112,7 +112,7 @@ class AuthenticatedUIRequestAuthoriserTest {
         var tokenStateSubscriptionHandler = new MutableReference<Consumer<? super UserTokenAuthoriser.TokenState>>();
         doAnswer(invocation -> {
             Consumer<? super UserTokenAuthoriser.TokenState> handler = invocation.getArgument(1);
-            handler.accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, uiServer));
+            handler.accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, uiServer, Optional.empty()));
             return null;
         }).when(userTokenAuthoriser).deliverTokenStateTo(eq("token-1"), any());
         when(userTokenAuthoriser.subscribeToTokenState(eq("token-1"), any())).thenAnswer(invocation -> {
@@ -131,7 +131,7 @@ class AuthenticatedUIRequestAuthoriserTest {
 
         var invalidated = new MutableReference<>(false);
         Closeable subscription = RequestContextFilter.requestContext(request).subscribeToInvalidation(() -> invalidated.set(true));
-        tokenStateSubscriptionHandler.get().accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, uiServer));
+        tokenStateSubscriptionHandler.get().accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, uiServer, Optional.empty()));
         assertThat(invalidated.get()).isFalse();
 
         tokenStateSubscriptionHandler.get()
@@ -139,6 +139,24 @@ class AuthenticatedUIRequestAuthoriserTest {
                                                                                            "expired"));
         assertThat(invalidated.get()).isTrue();
         subscription.close();
+    }
+
+    @Test
+    void exposesTokenCustomDataAsRequestAttribute() throws Exception {
+        prepareAsyncContext();
+        prepareRequestContextAttributes();
+        when(request.getHeader("Authorization")).thenReturn("Bearer token-1");
+        var customData = new Object();
+        doAnswer(invocation -> {
+            Consumer<? super UserTokenAuthoriser.TokenState> handler = invocation.getArgument(1);
+            handler.accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, new FakeUIServer(), Optional.of(customData)));
+            return null;
+        }).when(userTokenAuthoriser).deliverTokenStateTo(eq("token-1"), any());
+
+        authoriser.authorise(request, response, chain);
+
+        verify(asyncContext).dispatch();
+        assertThat(request.getAttribute(UserTokenAuthoriser.CUSTOM_DATA_REQUEST_ATTRIBUTE)).isSameAs(customData);
     }
 
     private void prepareAsyncContext() {

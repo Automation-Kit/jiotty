@@ -10,7 +10,7 @@ import java.util.Optional;
 /// A persisted admin alert bundle. [#resolvedAt()], [#resolvedBy()], [#resolutionNote()] are absent for active bundles and present for resolved ones.
 ///
 /// [#eventCount()] is the cumulative count of [AdminAlertService#raise(AdminAlertData)] calls that landed on this bundle. The bundle's retained event history
-/// is bounded by the [AdminAlertServiceModule.MaxEventsPerBundle] cap (sliding window — oldest evicted), so [#eventCount()] can exceed the number of events
+/// is bounded by the persistence layer's max-events-per-bundle cap (sliding window — oldest evicted), so [#eventCount()] can exceed the number of events
 /// actually retained for this bundle.
 @Value.Immutable
 @PublicImmutablesStyle

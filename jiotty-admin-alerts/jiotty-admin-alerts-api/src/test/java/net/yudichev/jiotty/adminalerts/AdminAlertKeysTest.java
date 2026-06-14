@@ -2,6 +2,7 @@ package net.yudichev.jiotty.adminalerts;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -18,10 +19,10 @@ class AdminAlertKeysTest {
 
     @Test
     void derive_ignoresLabelEntryOrder() {
-        Map<String, String> insertionOrderA = new java.util.LinkedHashMap<>();
+        Map<String, String> insertionOrderA = new LinkedHashMap<>();
         insertionOrderA.put("a", "1");
         insertionOrderA.put("b", "2");
-        Map<String, String> insertionOrderB = new java.util.LinkedHashMap<>();
+        Map<String, String> insertionOrderB = new LinkedHashMap<>();
         insertionOrderB.put("b", "2");
         insertionOrderB.put("a", "1");
         Map<String, String> sorted = new TreeMap<>(insertionOrderA);
