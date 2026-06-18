@@ -16,10 +16,6 @@ public interface TeslaFleet {
 
     CompletableFuture<List<TeslaVehicleData>> listVehicles();
 
-    CompletableFuture<PartnerAccount> registerPartnerDomain(String domain);
-
-    CompletableFuture<PartnerPublicKey> getPartnerPublicKey(String domain);
-
     CompletableFuture<TelemetryCreateConfigResponse> telemetryCreateConfig(TelemetryCreateConfigRequest request);
 
     TeslaVehicle vehicle(String vehicleVin);

@@ -85,6 +85,25 @@ final class TeslaFleetManualRunner {
                                                                                          pass -> new TrustStore(Paths.get(args[5]), pass)))
                                                          .build()))
                            .build())
+                   .addModule(() -> TeslaFleetPartnerModule
+                           .builder()
+                           .setClientId(literally(args[1]))
+                           .setClientSecret(literally(args[2]))
+                           .withScope(literally(String.join(" ", "openid",
+                                                            "offline_access",
+                                                            "vehicle_device_data",
+                                                            "vehicle_location",
+                                                            "vehicle_cmds",
+                                                            "vehicle_charging_cmds")))
+                           .withBaseUrl(literally(args[3]))
+                           .withSslCustomisation(exposedBy(
+                                   SslCustomisationModule.builder()
+                                                         .setCertTrustStore(keyStoreEntry(args[6])
+                                                                                    .map(new TypeToken<>() {},
+                                                                                         new TypeToken<>() {},
+                                                                                         pass -> new TrustStore(Paths.get(args[5]), pass)))
+                                                         .build()))
+                           .build())
                    .addModule(() -> new BaseLifecycleComponentModule() {
                        @Override
                        protected void configure() {
@@ -99,10 +118,12 @@ final class TeslaFleetManualRunner {
             "DynamicRegexReplaceableByCompiledPattern"})
     private static class CmdLineTest extends BaseLifecycleComponent {
         private final TeslaFleet teslaFleet;
+        private final TeslaFleetPartner teslaFleetPartner;
 
         @Inject
-        public CmdLineTest(TeslaFleet teslaFleet) {
+        public CmdLineTest(TeslaFleet teslaFleet, TeslaFleetPartner teslaFleetPartner) {
             this.teslaFleet = teslaFleet;
+            this.teslaFleetPartner = teslaFleetPartner;
         }
 
         @Override
@@ -135,7 +156,7 @@ final class TeslaFleetManualRunner {
                         try {
                             String[] cmd = line.split("\\s+");
                             var future = switch (cmd[0]) {
-                                case "regacct" -> teslaFleet.registerPartnerDomain(cmd[1]);
+                                case "regacct" -> teslaFleetPartner.registerPartnerDomain(cmd[1]);
                                 case "setlim" -> car.setChargeLimit(Integer.parseInt(cmd[1]));
                                 case "chstart" -> car.startCharge();
                                 case "chstop" -> car.stopCharge();

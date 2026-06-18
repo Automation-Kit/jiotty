@@ -83,7 +83,7 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
     public static final class Builder implements TypedBuilder<ExposedKeyModule<TeslaFleet>> {
         private BindingSpec<String> clientIdSpec;
         private BindingSpec<String> clientSecretSpec;
-        private BindingSpec<String> baseUrlSpec = literally(TeslaFleetImpl.AUDIENCE + "/api/1");
+        private BindingSpec<String> baseUrlSpec = literally(TeslaHttp.AUDIENCE + "/api/1");
         private BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec = literally(Optional.empty());
         private BindingSpec<Set<String>> oauthScopesSpec = literally(ImmutableSet.of("offline_access"));
         private BindingSpec<VarStore> varStoreSpec;

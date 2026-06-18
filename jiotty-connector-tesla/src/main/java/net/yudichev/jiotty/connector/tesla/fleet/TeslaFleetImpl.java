@@ -9,16 +9,12 @@ import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.net.SslCustomisation;
-import net.yudichev.jiotty.common.rest.ContentTypes;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import okhttp3.Call;
 import okhttp3.Callback;
-import okhttp3.FormBody;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 import org.apache.logging.log4j.LogManager;
@@ -54,9 +50,7 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 public final class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet {
     public static final AuthState.Success SUCCESS = new AuthState.Success("SUCCESS");
-    static final String AUDIENCE = "https://fleet-api.prd.eu.vn.cloud.tesla.com";
     private static final Logger logger = LogManager.getLogger(TeslaFleetImpl.class);
-    private static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
     private static final TypeToken<ResponseWrapper<List<TeslaVehicleData>>> LIST_VEHICLES_RESPONSE_TYPE = new TypeToken<>() {};
     private static final TypeToken<ResponseWrapper<CommandResponse>> CMD_RESPONSE_TYPE = new TypeToken<>() {};
     private final OAuth2TokenManager tokenManager;
@@ -64,8 +58,6 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
     private final AtomicInteger requestIdGenerator = new AtomicInteger();
     private final String listVehiclesUrl;
     private final String telemetryConfigCreateUrl;
-    private final String registerPartnerDomainUrl;
-    private final String partnerPublicKeyUrl;
     private final @Nullable SslCustomisation sslCustomisation;
     private final ObservableValue<AuthState> accessTokenObservable = ObservableValue.concurrent(new AuthState.TransientFailure("Not authenticated yet"));
     private OkHttpClient httpClient;
@@ -80,8 +72,6 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
         this.sslCustomisation = sslCustomisation.orElse(null);
         listVehiclesUrl = baseUrl + "/vehicles";
         telemetryConfigCreateUrl = listVehiclesUrl + "/fleet_telemetry_config";
-        registerPartnerDomainUrl = baseUrl + "/partner_accounts";
-        partnerPublicKeyUrl = baseUrl + "/partner_accounts/public_key";
     }
 
     @Override
@@ -134,68 +124,9 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
     }
 
     @Override
-    public CompletableFuture<PartnerAccount> registerPartnerDomain(String domain) {
-        return acquirePartnerToken()
-                .thenCompose(partnerToken -> executePost(registerPartnerDomainUrl,
-                                                         partnerToken,
-                                                         "{\"domain\": \"" + domain + "\"}",
-                                                         new TypeToken<ResponseWrapper<PartnerAccount>>() {})
-                        .thenApply(unwrapOrFail()));
-    }
-
-    @Override
-    public CompletableFuture<PartnerPublicKey> getPartnerPublicKey(String domain) {
-        return acquirePartnerToken()
-                .thenCompose(partnerToken -> {
-                    String url = partnerPublicKeyUrl + "?domain=" + URLEncoder.encode(domain, UTF_8);
-                    var request = new Request.Builder()
-                            .url(url)
-                            .header("Authorization", "Bearer " + partnerToken)
-                            .get()
-                            .build();
-                    int requestId = requestIdGenerator.incrementAndGet();
-                    logger.debug("[{}] executing GET {}", requestId, url);
-                    return call(httpClient.newCall(request), new TypeToken<ResponseWrapper<PartnerPublicKey>>() {}, 0)
-                            .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
-                            .thenApply(unwrapOrFail());
-                });
-    }
-
-    private CompletableFuture<String> acquirePartnerToken() {
-        RequestBody form = new FormBody.Builder()
-                .add("grant_type", "client_credentials")
-                .add("client_id", tokenManager.clientId())
-                .add("client_secret", tokenManager.clientSecret())
-                .add("scope", tokenManager.scope())
-                .add("audience", AUDIENCE)
-                .build();
-
-        var request = new Request.Builder()
-                .url("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token")
-                .post(form)
-                .build();
-
-        int requestId = requestIdGenerator.incrementAndGet();
-        logger.debug("[{}] executing {}", requestId, request.url());
-        OkHttpClient partnerHttpClient = newClient(); // use non-customised generic client
-        return call(partnerHttpClient.newCall(request), TokenResponse.class, 0)
-                .whenComplete((resp, throwable) -> {
-                    logger.debug("[{}] result {}", requestId, resp, throwable);
-                    shutdown(partnerHttpClient);
-                })
-                .thenApply(TokenResponse::accessToken);
-    }
-
-    @Override
     public CompletableFuture<TelemetryCreateConfigResponse> telemetryCreateConfig(TelemetryCreateConfigRequest request) {
         return executePost(telemetryConfigCreateUrl, Json.stringify(request), new TypeToken<ResponseWrapper<TelemetryCreateConfigResponse>>() {})
-                .thenApply(unwrapOrFail());
-    }
-
-    private static <T> Function<ResponseWrapper<T>, T> unwrapOrFail() {
-        return responseWrapper -> responseWrapper.responseOrError()
-                                                 .map(response -> response,
-                                                      error -> {throw new RuntimeException(error);});
+                .thenApply(TeslaHttp.unwrapOrFail());
     }
 
     @Override
@@ -220,14 +151,14 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
             logger.debug("[{}] executing {}", requestId, url);
             return callAndAllow408(requestId, httpClient.newCall(request), responseType)
                     .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
-                    .thenApply(wrapperOptional -> wrapperOptional.map(unwrapOrFail()));
+                    .thenApply(wrapperOptional -> wrapperOptional.map(TeslaHttp.unwrapOrFail()));
         });
     }
 
     private <T> CompletableFuture<T> executeGet(String url, TypeToken<ResponseWrapper<T>> responseType) {
         return withValidTokenOrFail(accessToken -> {
             var request = new Request.Builder().url(url).header("Authorization", "Bearer " + accessToken).get().build();
-            return call(httpClient.newCall(request), responseType, 0).thenApply(unwrapOrFail());
+            return call(httpClient.newCall(request), responseType, 0).thenApply(TeslaHttp.unwrapOrFail());
         });
     }
 
@@ -296,25 +227,7 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
     private <T> CompletableFuture<ResponseWrapper<T>> executePost(String url,
                                                                   @Nullable String jsonBody,
                                                                   TypeToken<ResponseWrapper<T>> responseType) {
-        return withValidTokenOrFail(accessToken -> executePost(url, accessToken, jsonBody, responseType));
-    }
-
-    private <T> CompletableFuture<ResponseWrapper<T>> executePost(String url,
-                                                                  String accessToken,
-                                                                  @Nullable String jsonBody,
-                                                                  TypeToken<ResponseWrapper<T>> responseType) {
-        Request.Builder builder = new Request.Builder().url(url)
-                                                       .header("Authorization", "Bearer " + accessToken);
-        if (jsonBody == null) {
-            builder.post(RequestBody.create(EMPTY_BYTE_ARRAY, MediaType.get(ContentTypes.CONTENT_TYPE_JSON)));
-        } else {
-            builder.post(RequestBody.create(jsonBody, MediaType.get(ContentTypes.CONTENT_TYPE_JSON)));
-        }
-        Request request = builder.build();
-        int requestId = requestIdGenerator.incrementAndGet();
-        logger.debug("[{}] executing POST {} {}", requestId, url, jsonBody == null ? "" : jsonBody);
-        return call(httpClient.newCall(request), responseType, 0, true)
-                .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable));
+        return withValidTokenOrFail(accessToken -> TeslaHttp.executePost(httpClient, requestIdGenerator, url, accessToken, jsonBody, responseType));
     }
 
     private <T> CompletableFuture<T> executeDelete(String url, TypeToken<ResponseWrapper<T>> responseType) {
@@ -327,7 +240,7 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
             logger.debug("[{}] executing DELETE {}", requestId, url);
             return call(httpClient.newCall(request), responseType, 0, true)
                     .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
-                    .thenApply(unwrapOrFail());
+                    .thenApply(TeslaHttp.unwrapOrFail());
         });
     }
 
@@ -436,7 +349,7 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
             return executePost(telemetryFleetStatusUrl,
                                Json.stringify(TelemetryFleetStatusRequest.of(List.of(vin))),
                                new TypeToken<ResponseWrapper<TelemetryFleetStatus>>() {})
-                    .thenApply(unwrapOrFail());
+                    .thenApply(TeslaHttp.unwrapOrFail());
         }
 
         @Override
