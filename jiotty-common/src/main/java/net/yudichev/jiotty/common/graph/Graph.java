@@ -113,6 +113,7 @@ public class Graph extends BaseIdempotentCloseable {
                 }
                 currentNode = nodesPendingTrigger.higher(currentNode);
             } while (currentNode != null);
+            nodesTriggeredInWave.forEach(nodeState -> nodeState.node.afterWave());
         } catch (RuntimeException e) {
             try {
                 exceptionHandler.accept(e);
@@ -124,13 +125,6 @@ public class Graph extends BaseIdempotentCloseable {
         } finally {
             assert clearWaveIdInMdc();
             waveTime = null;
-            nodesTriggeredInWave.forEach(nodeState -> {
-                try {
-                    nodeState.node.afterWave();
-                } catch (RuntimeException e) {
-                    logger.warn("Exception in {}.afterWave()", nodeState.name(), e);
-                }
-            });
             if (logger.isDebugEnabled()) {
                 logger.debug("Wave {}: nodes triggered: {}, nodes pending: {}",
                              waveId, new ArrayList<>(nodesTriggeredInWave), new ArrayList<>(nodesPendingTrigger));

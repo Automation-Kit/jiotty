@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.graph;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,12 +22,15 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class GraphTest {
     private final Map<String, TestNode> nodesToTriggerByTriggeringNodeName = new HashMap<>();
     private final Map<String, TestNode> nodesToTriggerWithParentsByTriggeringNodeName = new HashMap<>();
     private final List<String> triggeredNodes = new ArrayList<>();
+    private final List<String> afterWaveNodes = new ArrayList<>();
     @Mock
     private Consumer<RuntimeException> exceptionHandler;
     private Graph graph;
@@ -249,6 +253,38 @@ class GraphTest {
         assertThatThrownBy(() -> node3.subscribeTo(node1)).hasMessageContaining("cycle");
     }
 
+    @Test
+    void afterWaveCalledForEveryNodeTriggeredInWave() {
+        createNodes();
+        assertThat(graph.wave()).isFalse();
+        // afterWave is called for every node triggered in the wave, in the same order they were waved
+        assertThat(afterWaveNodes).containsExactlyElementsOf(triggeredNodes);
+        verifyNoInteractions(exceptionHandler);
+    }
+
+    @Test
+    void afterWaveExceptionIsRoutedToExceptionHandlerAndStopsWaves() {
+        createNodes();
+        var failure = new RuntimeException("afterWave failed");
+        node2.afterWaveFailure = failure;
+
+        // an exception in afterWave() is handled exactly like in any other node method: passed to the handler and the waves stop
+        assertThat(graph.wave()).isFalse();
+        verify(exceptionHandler).accept(failure);
+    }
+
+    @Test
+    void afterWaveNotCalledWhenNodeWaveThrows() {
+        createNodes();
+        var failure = new RuntimeException("wave failed");
+        node4.waveFailure = failure;
+
+        assertThat(graph.wave()).isFalse();
+        verify(exceptionHandler).accept(failure);
+        // wave() failed, so the node lifecycle is broken: afterWave() must not be called on any node
+        assertThat(afterWaveNodes).isEmpty();
+    }
+
     private void clearTriggers() {
         nodesToTriggerByTriggeringNodeName.clear();
         nodesToTriggerWithParentsByTriggeringNodeName.clear();
@@ -290,6 +326,8 @@ class GraphTest {
 
     private class TestNode extends BaseNode {
         private final String name;
+        private @Nullable RuntimeException waveFailure;
+        private @Nullable RuntimeException afterWaveFailure;
 
         public TestNode(String name) {
             this.name = name;
@@ -306,6 +344,9 @@ class GraphTest {
         public boolean wave() {
             assertThat(nodeContext().graph().waveTime()).isEqualTo(clock.currentInstant());
             triggeredNodes.add(name);
+            if (waveFailure != null) {
+                throw waveFailure;
+            }
             TestNode nodeToTrigger = nodesToTriggerByTriggeringNodeName.get(name);
             if (nodeToTrigger != null) {
                 assertThat(nodeToTrigger.trigger()).isTrue();
@@ -317,6 +358,14 @@ class GraphTest {
                 assertThat(nodeToTriggerWithParents.triggerMeAndParents()).isFalse();
             }
             return nodeWaveReturnValue;
+        }
+
+        @Override
+        public void afterWave() {
+            afterWaveNodes.add(name);
+            if (afterWaveFailure != null) {
+                throw afterWaveFailure;
+            }
         }
     }
 }

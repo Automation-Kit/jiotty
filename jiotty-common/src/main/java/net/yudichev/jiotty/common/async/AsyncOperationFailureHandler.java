@@ -25,7 +25,7 @@ public interface AsyncOperationFailureHandler {
                     onPermanentFailure.run();
                     return Optional.empty();
                 } else {
-                    logger.warn("Failed '{}', will retry in {}ms", operationName, nextBackoffMillis, e);
+                    logger.info("Failed '{}', will retry in {}ms", operationName, nextBackoffMillis, e);
                     return Optional.of(nextBackoffMillis);
                 }
             }
