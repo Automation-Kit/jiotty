@@ -4,8 +4,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
+import com.google.inject.Singleton;
 import com.google.inject.TypeLiteral;
-import com.google.inject.multibindings.Multibinder;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -18,6 +18,7 @@ import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import net.yudichev.jiotty.user.ui.options.OptionPersistenceImpl;
 
+import java.lang.annotation.Annotation;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
@@ -94,27 +95,31 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         bind(DisplayableRegistry.class).to(registerLifecycleComponent(DisplayableRegistryImpl.class));
         bind(SseService.class).to(registerLifecycleComponent(SseServiceImpl.class));
 
-        Multibinder<ApiPathHandler> handlerBinder = Multibinder.newSetBinder(binder(), ApiPathHandler.class);
-        handlerBinder.addBinding().to(registerLifecycleComponent(OptionsPostHandler.class));
-        handlerBinder.addBinding().to(GetDisplayablesListHandler.class);
-        handlerBinder.addBinding().to(registerLifecycleComponent(GetDisplayableItemHandler.class));
-        handlerBinder.addBinding().to(registerLifecycleComponent(DisplayableDownloadHandler.class));
-        handlerBinder.addBinding().to(DisplayablesSseHandler.class);
-        handlerBinder.addBinding().to(registerLifecycleComponent(PushDevicesHandler.class));
-
-        // External contributors: each spec is bound inside this private module under a unique annotation, then plugged into the same multibinder.
-        for (BindingSpec<ApiPathHandler> spec : apiPathHandlerSpecs) {
-            var handlerAnnotation = uniqueAnnotation();
-            spec.bind(ApiPathHandler.class)
-                .annotatedWith(handlerAnnotation)
-                .installedBy(this::installLifecycleComponentModule);
-            handlerBinder.addBinding().to(Key.get(ApiPathHandler.class, handlerAnnotation));
-        }
-
-        bind(UIServer.class).to(registerLifecycleComponent(UIServerImpl.class));
+        bind(UIServer.class).to(UIServerImpl.class).in(Singleton.class);
         expose(UIServer.class);
-        bind(UIServerRuntime.class).to(UIServerImpl.class);
+
+        // Built-in handlers are constructed in THIS module's scope so they see the registries/executor/SseService/PushDeviceStore/@AdminAlert bound above, then
+        //  contributed to the runtime module as bound-to specs alongside the caller's external handler specs.
+        UIServerRuntimeModule.Builder runtimeModuleBuilder = UIServerRuntimeModule.builder();
+        runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(registerLifecycleComponent(OptionsPostHandler.class)));
+        runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(Key.get(GetDisplayablesListHandler.class)));
+        runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(registerLifecycleComponent(GetDisplayableItemHandler.class)));
+        runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(registerLifecycleComponent(DisplayableDownloadHandler.class)));
+        runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(Key.get(DisplayablesSseHandler.class)));
+        runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(registerLifecycleComponent(PushDevicesHandler.class)));
+        apiPathHandlerSpecs.forEach(runtimeModuleBuilder::addApiPathHandler);
+
+        installLifecycleComponentModule(runtimeModuleBuilder.build());
         expose(UIServerRuntime.class);
+    }
+
+    /// Binds [ApiPathHandler] under a unique annotation in this module's scope to the given built-in handler key and returns a [BindingSpec] resolving to it,
+    /// so the runtime module can gather it via [UIServerRuntimeModule.Builder#addApiPathHandler] while the handler stays constructed in this scope.
+    private BindingSpec<ApiPathHandler> boundToBuiltInHandler(Key<? extends ApiPathHandler> handlerKey) {
+        Annotation handlerAnnotation = uniqueAnnotation();
+        Key<ApiPathHandler> annotatedKey = Key.get(ApiPathHandler.class, handlerAnnotation);
+        bind(annotatedKey).to(handlerKey);
+        return boundTo(annotatedKey);
     }
 
     private static String executorThreadName(String suffix) {

@@ -15,10 +15,9 @@ final class SingleUserUIRequestAuthoriser implements UIRequestAuthoriser {
     private final UIRequestContext requestContext;
 
     @Inject
-    SingleUserUIRequestAuthoriser(UIServer uiServer) {
-        checkNotNull(uiServer, "uiServer");
-        assert uiServer instanceof UIServerRuntime : "Unexpected UI server implementation: " + uiServer;
-        requestContext = new UIRequestContext((UIServerRuntime) uiServer, _ -> Closeable.noop());
+    SingleUserUIRequestAuthoriser(UIServerRuntime uiServerRuntime) {
+        checkNotNull(uiServerRuntime, "uiServerRuntime");
+        requestContext = new UIRequestContext(uiServerRuntime, _ -> Closeable.noop());
     }
 
     @Override

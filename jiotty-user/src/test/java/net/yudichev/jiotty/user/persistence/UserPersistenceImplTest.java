@@ -233,7 +233,7 @@ class UserPersistenceImplTest {
     }
 
     @Test
-    void findsSoftDeletedUserByIdentity() throws Exception {
+    void resolveByIdentityDifferentiatesActiveSoftDeletedAndAbsent() throws Exception {
         var clock = new ProgrammableClock();
         var softDeleteTime = Instant.parse("2026-01-02T03:04:05Z");
         clock.setTime(softDeleteTime);
@@ -241,28 +241,30 @@ class UserPersistenceImplTest {
         var identity = new UserIdentity("firebase", "uid-1");
         var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
 
-        // an active user is not returned by the soft-deleted lookup
-        assertThat(userPersistence.findSoftDeletedByIdentity(identity).get(5, SECONDS)).isEmpty();
+        // an active user resolves to Active
+        assertThat(userPersistence.resolveByIdentity(identity).get(5, SECONDS))
+                .isInstanceOfSatisfying(UserPersistence.IdentityResolution.Active.class,
+                                        active -> assertThat(active.profile().id()).isEqualTo(created.id()));
 
         userPersistence.softDelete(created.id()).get(5, SECONDS);
 
-        // once soft-deleted: getByIdentity no longer sees it, but the recovery lookup returns the profile + the deletion instant
+        // once soft-deleted: getByIdentity no longer sees it, but resolveByIdentity reports SoftDeleted with the profile
         assertThat(userPersistence.getByIdentity(identity).get(5, SECONDS)).isEmpty();
-        assertThat(userPersistence.findSoftDeletedByIdentity(identity).get(5, SECONDS))
-                .hasValueSatisfying(softDeleted -> {
-                    assertThat(softDeleted.profile().id()).isEqualTo(created.id());
-                    assertThat(softDeleted.deletedAt()).isEqualTo(softDeleteTime);
-                });
+        assertThat(userPersistence.resolveByIdentity(identity).get(5, SECONDS))
+                .isInstanceOfSatisfying(UserPersistence.IdentityResolution.SoftDeleted.class,
+                                        softDeleted -> assertThat(softDeleted.profile().id()).isEqualTo(created.id()));
 
-        // after hard-delete the identity row is gone, so the recovery lookup is empty too
+        // after hard-delete the identity row is gone, so resolution is Absent
         userPersistence.hardDelete(created.id()).get(5, SECONDS);
-        assertThat(userPersistence.findSoftDeletedByIdentity(identity).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.resolveByIdentity(identity).get(5, SECONDS))
+                .isInstanceOf(UserPersistence.IdentityResolution.Absent.class);
     }
 
     @Test
-    void findSoftDeletedByIdentityIsEmptyForUnknownIdentity() throws Exception {
+    void resolveByIdentityIsAbsentForUnknownIdentity() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
-        assertThat(userPersistence.findSoftDeletedByIdentity(new UserIdentity("firebase", "no-such-uid")).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.resolveByIdentity(new UserIdentity("firebase", "no-such-uid")).get(5, SECONDS))
+                .isInstanceOf(UserPersistence.IdentityResolution.Absent.class);
     }
 
     @Test

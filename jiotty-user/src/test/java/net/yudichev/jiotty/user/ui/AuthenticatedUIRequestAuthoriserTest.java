@@ -142,6 +142,34 @@ class AuthenticatedUIRequestAuthoriserTest {
     }
 
     @Test
+    void invalidatesStreamWhenAuthenticatedStateCarriesDifferentRuntime() throws Exception {
+        prepareAsyncContext();
+        prepareRequestContextAttributes();
+        when(request.getHeader("Authorization")).thenReturn("Bearer token-1");
+        var boundRuntime = new FakeUIServer();
+        var tokenStateSubscriptionHandler = new MutableReference<Consumer<? super UserTokenAuthoriser.TokenState>>();
+        doAnswer(invocation -> {
+            Consumer<? super UserTokenAuthoriser.TokenState> handler = invocation.getArgument(1);
+            handler.accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, boundRuntime, Optional.empty()));
+            return null;
+        }).when(userTokenAuthoriser).deliverTokenStateTo(eq("token-1"), any());
+        when(userTokenAuthoriser.subscribeToTokenState(eq("token-1"), any())).thenAnswer(invocation -> {
+            tokenStateSubscriptionHandler.set(invocation.getArgument(1));
+            return Closeable.noop();
+        });
+
+        authoriser.authorise(request, response, chain);
+
+        var invalidated = new MutableReference<>(false);
+        Closeable subscription = RequestContextFilter.requestContext(request).subscribeToInvalidation(() -> invalidated.set(true));
+
+        // a later authenticated state carrying a DIFFERENT runtime supersedes the bound one, so the stream must close
+        tokenStateSubscriptionHandler.get().accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, new FakeUIServer(), Optional.empty()));
+        assertThat(invalidated.get()).isTrue();
+        subscription.close();
+    }
+
+    @Test
     void exposesTokenCustomDataAsRequestAttribute() throws Exception {
         prepareAsyncContext();
         prepareRequestContextAttributes();

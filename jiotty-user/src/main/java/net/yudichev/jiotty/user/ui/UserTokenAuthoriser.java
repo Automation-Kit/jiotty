@@ -23,14 +23,14 @@ public interface UserTokenAuthoriser {
 
     sealed interface TokenState permits TokenAuthenticated, TokenNotAuthenticated {}
 
-    /// @param profile    the authenticated user's profile
-    /// @param uiServer   the per-user UI server that serves this token's requests
-    /// @param customData opaque, application-supplied per-token value delivered to request handlers via [#CUSTOM_DATA_REQUEST_ATTRIBUTE]; empty when the
+    /// @param profile         the authenticated user's profile
+    /// @param uiServerRuntime the per-user UI server runtime that dispatches this token's requests
+    /// @param customData      opaque, application-supplied per-token value delivered to request handlers via [#CUSTOM_DATA_REQUEST_ATTRIBUTE]; empty when the
     /// application attaches nothing
-    record TokenAuthenticated(UserProfile profile, UIServer uiServer, Optional<Object> customData) implements TokenState {
+    record TokenAuthenticated(UserProfile profile, UIServerRuntime uiServerRuntime, Optional<Object> customData) implements TokenState {
         public TokenAuthenticated {
             checkNotNull(profile, "profile");
-            checkNotNull(uiServer, "uiServer");
+            checkNotNull(uiServerRuntime, "uiServerRuntime");
             checkNotNull(customData, "customData");
         }
     }

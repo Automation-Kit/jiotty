@@ -79,7 +79,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     private final CurrentDateTimeProvider timeProvider;
     private final PersistenceDomainConfig domainConfig;
     private final String selectUserByIdentitySql;
-    private final String selectSoftDeletedUserByIdentitySql;
+    private final String resolveUserByIdentitySql;
     private final String selectUserByIdSql;
     private final String selectAllUsersSql;
     private final String userExistsSql;
@@ -127,11 +127,12 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         selectUserByIdentitySql = "SELECT u.id, u.email, u.display_name, u.timezone, u.created_at, u.updated_at " +
                                   "FROM " + userTable + " u JOIN " + identityTable + " i ON u.id = i.user_id " +
                                   "WHERE i.provider=? AND i.provider_user_id=? AND i.deleted_at IS NULL AND u.deleted_at IS NULL";
-        // Mirror of selectUserByIdentitySql for the recovery path: matches the soft-deleted user. The identity rows are soft-deleted together with the user
-        //  (softDeleteIdentitiesSql), so do NOT filter on i.deleted_at — match on the still-unique (provider, provider_user_id).
-        selectSoftDeletedUserByIdentitySql = "SELECT u.id, u.email, u.display_name, u.timezone, u.created_at, u.updated_at, u.deleted_at " +
-                                             "FROM " + userTable + " u JOIN " + identityTable + " i ON u.id = i.user_id " +
-                                             "WHERE i.provider=? AND i.provider_user_id=? AND u.deleted_at IS NOT NULL";
+        // Single-query resolution for the recovery / pending-deletion flow: join identity→user WITHOUT the deleted_at filter and return u.deleted_at so the
+        //  caller can tell Active from SoftDeleted. The identity rows are soft-deleted together with the user (softDeleteIdentitiesSql), so do NOT filter on
+        //  i.deleted_at — match on the still-unique (provider, provider_user_id).
+        resolveUserByIdentitySql = "SELECT u.id, u.email, u.display_name, u.timezone, u.created_at, u.updated_at, u.deleted_at " +
+                                   "FROM " + userTable + " u JOIN " + identityTable + " i ON u.id = i.user_id " +
+                                   "WHERE i.provider=? AND i.provider_user_id=?";
         selectUserByIdSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable +
                             " WHERE id=? AND deleted_at IS NULL";
         selectAllUsersSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable +
@@ -191,9 +192,9 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     }
 
     @Override
-    public CompletableFuture<Optional<SoftDeletedUser>> findSoftDeletedByIdentity(UserIdentity identity) {
+    public CompletableFuture<IdentityResolution> resolveByIdentity(UserIdentity identity) {
         checkNotNull(identity, "identity");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> Optional.ofNullable(doFindSoftDeletedByIdentity(identity))));
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doResolveByIdentity(identity)));
     }
 
     @Override
@@ -302,13 +303,13 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         }
     }
 
-    private @Nullable SoftDeletedUser doFindSoftDeletedByIdentity(UserIdentity identity) {
+    private IdentityResolution doResolveByIdentity(UserIdentity identity) {
         try {
             try (Connection connection = dataSource.getConnection()) {
-                return selectSoftDeletedUserByIdentity(connection, identity);
+                return resolveUserByIdentity(connection, identity);
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to read soft-deleted user for identity " + identity, e);
+            throw new RuntimeException("Failed to resolve user for identity " + identity, e);
         }
     }
 
@@ -534,12 +535,18 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         }
     }
 
-    private @Nullable SoftDeletedUser selectSoftDeletedUserByIdentity(Connection connection, UserIdentity identity) throws SQLException {
-        try (PreparedStatement stmt = connection.prepareStatement(selectSoftDeletedUserByIdentitySql)) {
+    private IdentityResolution resolveUserByIdentity(Connection connection, UserIdentity identity) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(resolveUserByIdentitySql)) {
             stmt.setString(1, identity.provider());
             stmt.setString(2, identity.providerUserId());
             try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? new SoftDeletedUser(mapUserProfile(rs), rs.getTimestamp("deleted_at").toInstant()) : null;
+                if (!rs.next()) {
+                    return IdentityResolution.Absent.INSTANCE;
+                }
+                UserProfile profile = mapUserProfile(rs);
+                return rs.getTimestamp("deleted_at") == null
+                       ? new IdentityResolution.Active(profile)
+                       : new IdentityResolution.SoftDeleted(profile);
             }
         }
     }

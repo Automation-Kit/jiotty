@@ -2,7 +2,6 @@ package net.yudichev.jiotty.user.persistence.testing;
 
 import com.google.common.collect.ImmutableList;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import net.yudichev.jiotty.user.persistence.SoftDeletedUser;
 import net.yudichev.jiotty.user.persistence.UserIdentity;
 import net.yudichev.jiotty.user.persistence.UserIdentityRecord;
 import net.yudichev.jiotty.user.persistence.UserPersistence;
@@ -30,6 +29,7 @@ public final class FakeUserPersistence implements UserPersistence {
     private final Map<UserIdentity, String> activeUserIdsByIdentity = new HashMap<>();
 
     private int nextUserNumber = 1;
+    private @Nullable CompletableFuture<Void> nextResolveByIdentityGate;
 
     public FakeUserPersistence(CurrentDateTimeProvider timeProvider) {
         this.timeProvider = checkNotNull(timeProvider, "timeProvider");
@@ -64,16 +64,37 @@ public final class FakeUserPersistence implements UserPersistence {
     }
 
     @Override
-    public CompletableFuture<Optional<SoftDeletedUser>> findSoftDeletedByIdentity(UserIdentity identity) {
+    public CompletableFuture<IdentityResolution> resolveByIdentity(UserIdentity identity) {
         synchronized (lock) {
             checkNotNull(identity, "identity");
-            for (StoredUser user : usersById.values()) {
-                if (!user.active() && user.activeIdentities().contains(identity)) {
-                    return completedFuture(Optional.of(new SoftDeletedUser(user.profile(), user.deletedAt())));
-                }
-            }
-            return completedFuture(Optional.empty());
+            IdentityResolution resolution = resolveByIdentityLocked(identity);
+            CompletableFuture<Void> gate = nextResolveByIdentityGate;
+            nextResolveByIdentityGate = null;
+            return gate == null ? completedFuture(resolution) : gate.thenApply(_ -> resolution);
         }
+    }
+
+    /// Holds the next [#resolveByIdentity] call's result until the returned gate is completed, so a test can keep an identity resolution in flight while it
+    /// delivers other events. One-shot: only the next call is held, and its resolution is still computed from the store state at the time of that call.
+    public CompletableFuture<Void> deferNextResolveByIdentity() {
+        synchronized (lock) {
+            var gate = new CompletableFuture<Void>();
+            nextResolveByIdentityGate = gate;
+            return gate;
+        }
+    }
+
+    private IdentityResolution resolveByIdentityLocked(UserIdentity identity) {
+        String activeUserId = activeUserIdsByIdentity.get(identity);
+        if (activeUserId != null) {
+            return new IdentityResolution.Active(usersById.get(activeUserId).profile());
+        }
+        for (StoredUser user : usersById.values()) {
+            if (!user.active() && user.activeIdentities().contains(identity)) {
+                return new IdentityResolution.SoftDeleted(user.profile());
+            }
+        }
+        return IdentityResolution.Absent.INSTANCE;
     }
 
     @Override
@@ -238,7 +259,6 @@ public final class FakeUserPersistence implements UserPersistence {
 
         private UserProfile profile;
         private boolean deleted;
-        private @Nullable Instant deletedAt;
 
         private StoredUser(UserProfile profile) {
             this.profile = checkNotNull(profile, "profile");
@@ -250,10 +270,6 @@ public final class FakeUserPersistence implements UserPersistence {
 
         public UserProfile profile() {
             return profile;
-        }
-
-        public Instant deletedAt() {
-            return checkNotNull(deletedAt, "deletedAt queried for a non-deleted user");
         }
 
         public List<UserIdentity> activeIdentities() {
@@ -286,13 +302,11 @@ public final class FakeUserPersistence implements UserPersistence {
         public void softDelete(Instant deletedAt) {
             // Keep the identity records (marked inactive via the deleted flag) so restore() can revive them, mirroring UserPersistenceImpl.
             deleted = true;
-            this.deletedAt = deletedAt;
             profile = new UserProfile(profile.id(), profile.email(), profile.displayName(), profile.timezone(), profile.createdAt(), deletedAt);
         }
 
         public void restore() {
             deleted = false;
-            deletedAt = null;
         }
     }
 }

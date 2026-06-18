@@ -40,6 +40,16 @@ public final class FakeFirebaseAuthConnector implements FirebaseAuthConnector {
         }
     }
 
+    /// Configures `token` to return a future that stays pending until the caller completes the returned handle, so a test can exercise the
+    /// validation-in-flight window. Every verification of `token` returns this same future.
+    public CompletableFuture<Either<VerifiedUserToken, VerificationFailure>> deferResponse(String token) {
+        var future = new CompletableFuture<Either<VerifiedUserToken, VerificationFailure>>();
+        synchronized (lock) {
+            responseFactoriesByToken.put(checkToken(token), () -> future);
+        }
+        return future;
+    }
+
     public List<String> requestedTokens() {
         synchronized (lock) {
             return ImmutableList.copyOf(requestedTokens);

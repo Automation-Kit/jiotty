@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 /// Persistence gateway for user profiles and identities.
 ///
 /// - Acts as the golden source for user profile data.
@@ -24,12 +26,14 @@ public interface UserPersistence {
     /// @return empty if the identity is not linked or linked to a deleted user
     CompletableFuture<Optional<UserProfile>> getByIdentity(UserIdentity identity);
 
-    /// Resolves a *soft-deleted* user by provider identity, for the account-recovery / pending-deletion flow. The mirror image of [#getByIdentity]: it returns
-    /// the user only when it IS soft-deleted (`deleted_at` set), together with that deletion instant, so the caller can apply its own grace-period policy.
+    /// Resolves a user by provider identity in a single lookup, reporting whether the linked user is active, soft-deleted, or absent. Unlike [#getByIdentity]
+    /// (which hides soft-deleted users), this differentiates the three outcomes so the caller can drive an account-recovery / pending-deletion flow off one
+    /// query.
     ///
     /// @param identity provider identity used for lookup
-    /// @return empty if the identity is unknown or its user is active
-    CompletableFuture<Optional<SoftDeletedUser>> findSoftDeletedByIdentity(UserIdentity identity);
+    /// @return [IdentityResolution.Active] if the identity links to an active user, [IdentityResolution.SoftDeleted] if it links to a soft-deleted user, or
+    /// [IdentityResolution.Absent] if the identity is unknown
+    CompletableFuture<IdentityResolution> resolveByIdentity(UserIdentity identity);
 
     /// Returns the active user profile by id.
     ///
@@ -78,4 +82,29 @@ public interface UserPersistence {
     ///
     /// @param userId internal user id
     CompletableFuture<Void> restore(String userId);
+
+    /// The outcome of [#resolveByIdentity].
+    sealed interface IdentityResolution permits IdentityResolution.Active, IdentityResolution.SoftDeleted, IdentityResolution.Absent {
+        /// The identity links to an active (not soft-deleted) user.
+        record Active(UserProfile profile) implements IdentityResolution {
+            public Active {
+                checkNotNull(profile, "profile");
+            }
+        }
+
+        /// The identity links to a soft-deleted user (within or beyond any recovery window — the caller applies its own policy).
+        record SoftDeleted(UserProfile profile) implements IdentityResolution {
+            public SoftDeleted {
+                checkNotNull(profile, "profile");
+            }
+        }
+
+        /// The identity is not linked to any user.
+        final class Absent implements IdentityResolution {
+            public static final Absent INSTANCE = new Absent();
+
+            private Absent() {
+            }
+        }
+    }
 }

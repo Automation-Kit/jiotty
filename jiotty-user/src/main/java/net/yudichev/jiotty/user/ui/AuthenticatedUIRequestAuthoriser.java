@@ -78,20 +78,17 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
     }
 
     private UIRequestContext createRequestContext(String token, TokenAuthenticated tokenAuthenticated) {
-        return new UIRequestContext(runtime(tokenAuthenticated),
+        UIServerRuntime boundRuntime = tokenAuthenticated.uiServerRuntime();
+        return new UIRequestContext(boundRuntime,
                                     onInvalidated -> userTokenAuthoriser.subscribeToTokenState(token, state -> {
+                                        // Close the stream when the token is no longer authenticated, or when a later authenticated state carries a different
+                                        //  runtime than the one this request was bound to — the bound runtime is superseded, so the client must reconnect.
                                         switch (state) {
-                                            case TokenAuthenticated _ -> {
+                                            case TokenAuthenticated authenticated when authenticated.uiServerRuntime() == boundRuntime -> {
                                             }
-                                            case TokenNotAuthenticated _ -> onInvalidated.run();
+                                            case TokenAuthenticated _, TokenNotAuthenticated _ -> onInvalidated.run();
                                         }
                                     }));
-    }
-
-    private static UIServerRuntime runtime(TokenAuthenticated tokenAuthenticated) {
-        UIServer uiServer = tokenAuthenticated.uiServer();
-        assert uiServer instanceof UIServerRuntime : "Unexpected UI server implementation: " + uiServer.getClass().getName();
-        return (UIServerRuntime) uiServer;
     }
 
     private static @Nullable String bearerToken(HttpServletRequest request) {
