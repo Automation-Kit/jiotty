@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.adminalerts;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
 import net.yudichev.jiotty.adminalerts.cleanup.AlertHistoryCleanupJob;
@@ -28,6 +29,10 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class AdminAlertServiceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<AdminAlertService> {
+    /// Thread name base of the single-threaded executor this module's persistence work runs on.
+    @VisibleForTesting
+    public static final String EXECUTOR_THREAD_NAME = "AdminAlertService";
+
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
     private final BindingSpec<VarStore> varStoreSpec;
     private final BindingSpec<Integer> schemaVersionSpec;
@@ -98,7 +103,7 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
                               .installedBy(this::installLifecycleComponentModule);
 
         installLifecycleComponentModule(ExecutorProviderModule.builder()
-                                                              .setThreadName(literally("AdminAlertService"))
+                                                              .setThreadName(literally(EXECUTOR_THREAD_NAME))
                                                               .withAnnotation(forAnnotation(Executor.class))
                                                               .build());
         installLifecycleComponentModule(PersistenceDomainModule.builder()
