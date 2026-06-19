@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.varstore;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
@@ -29,6 +30,10 @@ import static net.yudichev.jiotty.persistence.varstore.Bindings.SingleUser;
 import static net.yudichev.jiotty.persistence.varstore.Bindings.ThePath;
 
 public final class SqlVarStore extends BaseLifecycleComponent implements VarStore {
+    /// Thread-name base of the single-threaded executor this store's persistence work runs on.
+    @VisibleForTesting
+    public static final String EXECUTOR_THREAD_NAME = "varstore-sql-test";
+
     private static final Logger logger = LogManager.getLogger(SqlVarStore.class);
 
     private final String tableName;
@@ -72,7 +77,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
 
     @Override
     protected void doStart() {
-        executor = executorFactory.createSingleThreadedSchedulingExecutor("varstore-sql-test");
+        executor = executorFactory.createSingleThreadedSchedulingExecutor(EXECUTOR_THREAD_NAME);
         dataSource = dataSourceFactory.create();
         operations = new SqlVarStoreOperations(dataSource, executor, "", upsertSql, deleteSql, deleteAllSql, selectAllSql, encryption.orElse(null));
         createTableIfNeeded();

@@ -171,6 +171,15 @@ public final class FakeUserPersistence implements UserPersistence {
     }
 
     @Override
+    public CompletableFuture<List<UserIdentityRecord>> listIdentitiesIgnoringDeletion(String userId) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            StoredUser storedUser = usersById.get(userId);
+            return completedFuture(storedUser == null ? ImmutableList.of() : storedUser.activeIdentityRecords());
+        }
+    }
+
+    @Override
     public CompletableFuture<Void> softDelete(String userId) {
         synchronized (lock) {
             checkNotNull(userId, "userId");

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.recording;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
 import com.google.inject.assistedinject.FactoryModuleBuilder;
@@ -27,6 +28,10 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class RecordingModule extends BaseLifecycleComponentModule implements ExposedKeyModule<RecordingService> {
+    /// Thread-name base of the single-threaded executor this module's persistence work runs on.
+    @VisibleForTesting
+    public static final String EXECUTOR_THREAD_NAME = "PSQL";
+
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
     private final boolean readOnly;
     private final Key<RecordingService> exposedKey;
@@ -51,7 +56,7 @@ public final class RecordingModule extends BaseLifecycleComponentModule implemen
     @Override
     protected void configure() {
         installLifecycleComponentModule(ExecutorProviderModule.builder()
-                                                              .setThreadName(literally("PSQL"))
+                                                              .setThreadName(literally(EXECUTOR_THREAD_NAME))
                                                               .withAnnotation(forAnnotation(PsqlExecutor.class))
                                                               .build());
         installLifecycleComponentModule(PersistenceDomainModule.builder()

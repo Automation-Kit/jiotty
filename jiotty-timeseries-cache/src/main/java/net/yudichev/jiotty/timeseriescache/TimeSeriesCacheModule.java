@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.timeseriescache;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
@@ -34,6 +35,10 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TimeSeriesCache> {
+    /// Thread-name base of the single-threaded executor this module's persistence work runs on.
+    @VisibleForTesting
+    public static final String EXECUTOR_THREAD_NAME = "TimeSeriesCache";
+
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
     private final BindingSpec<AdminAlertService> alertServiceSpec;
     private final BindingSpec<Integer> schemaVersionSpec;
@@ -97,7 +102,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
         bind(CodecRegistry.class).toInstance(new CodecRegistry(smileCodec, ImmutableList.of(smileCodec, jsonCodec)));
 
         installLifecycleComponentModule(ExecutorProviderModule.builder()
-                                                              .setThreadName(literally("TimeSeriesCache"))
+                                                              .setThreadName(literally(EXECUTOR_THREAD_NAME))
                                                               .withAnnotation(forAnnotation(Executor.class))
                                                               .build());
         installLifecycleComponentModule(PersistenceDomainModule.builder()

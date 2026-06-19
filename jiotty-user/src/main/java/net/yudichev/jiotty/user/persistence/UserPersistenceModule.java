@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.persistence;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
@@ -26,6 +27,10 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class UserPersistenceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<UserPersistence> {
+    /// Thread-name base of the single-threaded executor this module's persistence work runs on.
+    @VisibleForTesting
+    public static final String EXECUTOR_THREAD_NAME = "UserPersistence";
+
     private static final String DEFAULT_DOMAIN_NAME = "users";
 
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
@@ -69,7 +74,7 @@ public final class UserPersistenceModule extends BaseLifecycleComponentModule im
                     .installedBy(this::installLifecycleComponentModule);
 
         installLifecycleComponentModule(ExecutorProviderModule.builder()
-                                                              .setThreadName(literally("UserPersistence"))
+                                                              .setThreadName(literally(EXECUTOR_THREAD_NAME))
                                                               .withAnnotation(forAnnotation(Executor.class))
                                                               .build());
         installLifecycleComponentModule(PersistenceDomainModule.builder()

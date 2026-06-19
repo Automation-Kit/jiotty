@@ -17,6 +17,9 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// Invalid or disabled-user outcomes are returned in the right side of [Either]. The returned [CompletableFuture] fails only for unexpected technical problems
 /// such as network failures or backend unavailability.
 public interface FirebaseAuthConnector {
+    /// The [UserIdentity#provider()] value for identities sourced from Firebase.
+    String IDENTITY_PROVIDER = "firebase";
+
     CompletableFuture<Either<VerifiedUserToken, VerificationFailure>> verifyUserToken(String idToken);
 
     /// Permanently deletes the Firebase user record. Completes normally if the user is already absent.

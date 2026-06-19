@@ -91,6 +91,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     private final String updateIdentitySql;
     private final String updateIdentityDeletedAtSql;
     private final String listIdentitiesSql;
+    private final String listIdentitiesIgnoringDeletionSql;
     private final String softDeleteUserSql;
     private final String softDeleteIdentitiesSql;
     private final String hardDeleteUserSql;
@@ -155,6 +156,8 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
                 "SELECT i.provider, i.provider_user_id, i.created_at, i.updated_at FROM " + identityTable + " i " +
                 "JOIN " + userTable + " u ON u.id = i.user_id " +
                 "WHERE i.user_id=? AND i.deleted_at IS NULL AND u.deleted_at IS NULL";
+        listIdentitiesIgnoringDeletionSql =
+                "SELECT provider, provider_user_id, created_at, updated_at FROM " + identityTable + " WHERE user_id=?";
         softDeleteUserSql = "UPDATE " + userTable + " SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL";
         softDeleteIdentitiesSql =
                 "UPDATE " + identityTable + " SET deleted_at=?, updated_at=? WHERE user_id=? AND deleted_at IS NULL";
@@ -229,7 +232,13 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     @Override
     public CompletableFuture<List<UserIdentityRecord>> listIdentities(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doListIdentities(userId)));
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doListIdentities(listIdentitiesSql, userId)));
+    }
+
+    @Override
+    public CompletableFuture<List<UserIdentityRecord>> listIdentitiesIgnoringDeletion(String userId) {
+        validateUserId(userId);
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doListIdentities(listIdentitiesIgnoringDeletionSql, userId)));
     }
 
     @Override
@@ -406,10 +415,10 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         }
     }
 
-    private List<UserIdentityRecord> doListIdentities(String userId) {
+    private List<UserIdentityRecord> doListIdentities(String sql, String userId) {
         try {
             try (Connection connection = dataSource.getConnection();
-                 PreparedStatement stmt = connection.prepareStatement(listIdentitiesSql)) {
+                 PreparedStatement stmt = connection.prepareStatement(sql)) {
                 stmt.setString(1, userId);
                 try (ResultSet rs = stmt.executeQuery()) {
                     var result = new ArrayList<UserIdentityRecord>();

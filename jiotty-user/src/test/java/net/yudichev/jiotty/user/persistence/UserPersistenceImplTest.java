@@ -285,6 +285,25 @@ class UserPersistenceImplTest {
     }
 
     @Test
+    void listIdentitiesIgnoringDeletionReturnsIdentitiesOfSoftDeletedUser() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+
+        // the soft-delete-filtering list hides the deleted user's identities, but the ignoring-deletion list still returns the surviving rows
+        assertThat(userPersistence.listIdentities(created.id()).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.listIdentitiesIgnoringDeletion(created.id()).get(5, SECONDS))
+                .extracting(UserIdentityRecord::identity)
+                .containsExactly(identity);
+
+        // once hard-deleted the rows are physically gone, so even the ignoring-deletion list is empty
+        userPersistence.hardDelete(created.id()).get(5, SECONDS);
+        assertThat(userPersistence.listIdentitiesIgnoringDeletion(created.id()).get(5, SECONDS)).isEmpty();
+    }
+
+    @Test
     void hardDeleteIsIdempotentForUnknownUser() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
         // completes normally even though no such user exists
