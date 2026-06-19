@@ -99,8 +99,19 @@ final class MqttTeslaTelemetryManualRunner {
         protected void doStart() {
             var teslaTelemetry = teslaTelemetryFactory.create(vin);
             subs = Closeable.forCloseables(
-                    teslaTelemetry.subscribeToConnectivity(telemetryConnectivityEvent -> log.info("CONNECTIVITY: {}", telemetryConnectivityEvent)),
-                    teslaTelemetry.subscribeToMetrics(telemetryField -> log.info("METRICS: {}={}", telemetryField.getClass().getSimpleName(), telemetryField)));
+                    teslaTelemetry.subscribeToConnectivity(result -> {
+                        switch (result) {
+                            case TelemetryResult.Success<TelemetryConnectivityEvent>(var event) -> log.info("CONNECTIVITY: {}", event);
+                            case TelemetryResult.Error<TelemetryConnectivityEvent>(var message, var cause) ->
+                                    log.warn("CONNECTIVITY ERROR: {}", message, cause);
+                        }
+                    }),
+                    teslaTelemetry.subscribeToMetrics(result -> {
+                        switch (result) {
+                            case TelemetryResult.Success<TelemetryField>(var field) -> log.info("METRICS: {}={}", field.getClass().getSimpleName(), field);
+                            case TelemetryResult.Error<TelemetryField>(var message, var cause) -> log.warn("METRICS ERROR: {}", message, cause);
+                        }
+                    }));
         }
 
         @Override

@@ -5,6 +5,7 @@ import com.google.inject.assistedinject.Assisted;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
+import net.yudichev.jiotty.common.security.LogRedaction;
 import net.yudichev.jiotty.connector.mqtt.Mqtt;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -18,8 +19,6 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
-import static net.yudichev.jiotty.connector.tesla.fleet.TeslaTelemetry.BrokerConnectionStatus.CONNECTED;
-import static net.yudichev.jiotty.connector.tesla.fleet.TeslaTelemetry.BrokerConnectionStatus.DISCONNECTED;
 
 /// Feeds data from the MQTT dispatcher of the [Tesla Fleet Telemetry Server](https://github.com/teslamotors/fleet-telemetry)
 public final class MqttTeslaTelemetry implements TeslaTelemetry {
@@ -27,6 +26,7 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
 
     private final Mqtt mqtt;
     private final String vin;
+    private final String redactedVin;
     private final String metricsTopicFilter;
     private final String connectivityTopicFilter;
 
@@ -36,19 +36,23 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
                               @Assisted("vin") String vin) {
         this.mqtt = checkNotNull(mqtt);
         this.vin = checkNotNull(vin);
+        redactedVin = LogRedaction.redact(vin);
         metricsTopicFilter = topicBase + '/' + vin + "/v/#";
         connectivityTopicFilter = topicBase + '/' + vin + "/connectivity";
     }
 
     @Override
-    public Closeable subscribeToMetrics(Consumer<? super TelemetryField> listener) {
-        logger.debug("subscribing to {}", metricsTopicFilter);
+    public Closeable subscribeToMetrics(Consumer<? super TelemetryResult<TelemetryField>> listener) {
+        if (logger.isDebugEnabled()) {
+            logger.debug("subscribing to {}", redactedTopic(metricsTopicFilter));
+        }
         return mqtt.subscribe(metricsTopicFilter, 1, (topic, data) -> {
-            //TODO:commerce this logs sensitive data (vin in the topic)
-            logger.debug("received metric: topic={}, data={}", topic, data);
+            if (logger.isDebugEnabled()) {
+                logger.debug("received metric: topic={}, data={}", redactedTopic(topic), data);
+            }
             var idx = topic.lastIndexOf('/');
             if (idx < 0 || idx == topic.length() - 1) {
-                logger.warn("Unexpected topic name: {}", topic); //TODO:commerce this exposes VIN to the log file/alert
+                listener.accept(new TelemetryResult.Error<>("Unexpected telemetry topic structure for " + redactedVin, null));
                 return;
             }
             String fieldName = topic.substring(idx + 1);
@@ -56,38 +60,36 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
             try {
                 field = TelemetryFieldDecoder.decode(fieldName, data);
             } catch (RuntimeException e) {
-                //TODO:commerce alert/antispam, also mask VIN
-                logger.warn("[{}] failed decoding field data {}={}", vin, fieldName, data, e);
+                listener.accept(new TelemetryResult.Error<>("Failed to decode telemetry field '" + fieldName + "' for " + redactedVin, e));
                 return;
             }
             if (field == null) {
                 logger.debug("Unsupported field: {}", fieldName);
                 return;
             }
-            listener.accept(field);
+            listener.accept(new TelemetryResult.Success<>(field));
         });
     }
 
     @Override
-    public Closeable subscribeToConnectivity(Consumer<? super TelemetryConnectivityEvent> listener) {
+    public Closeable subscribeToConnectivity(Consumer<? super TelemetryResult<TelemetryConnectivityEvent>> listener) {
         return mqtt.subscribe(connectivityTopicFilter, 1, (topic, data) -> {
-            //TODO:commerce this logs sensitive data
-            logger.debug("received {}={}", topic, data);
-            try {
-                listener.accept(Json.parse(data, TelemetryConnectivityEvent.class));
-            } catch (RuntimeException e) {
-                //TODO:commerce alert/antispam, also mask VIN
-                logger.warn("[{}] failed decoding connectivity data {}", vin, data, e);
+            if (logger.isDebugEnabled()) {
+                logger.debug("received connectivity event: topic={}, data={}", redactedTopic(topic), data);
             }
+            TelemetryConnectivityEvent event;
+            try {
+                event = Json.parse(data, TelemetryConnectivityEvent.class);
+            } catch (RuntimeException e) {
+                listener.accept(new TelemetryResult.Error<>("Failed to decode connectivity event for " + redactedVin, e));
+                return;
+            }
+            listener.accept(new TelemetryResult.Success<>(event));
         });
     }
 
-    @Override
-    public Closeable subscribeToBrokerConnectionStatus(Consumer<BrokerConnectionStatus> listener) {
-        return mqtt.subscribeToConnectionStatus(status -> listener.accept(switch (status) {
-            case Mqtt.Connected _ -> CONNECTED;
-            case Mqtt.Disconnected _ -> DISCONNECTED;
-        }));
+    private String redactedTopic(String topic) {
+        return topic.replace(vin, redactedVin);
     }
 
     @BindingAnnotation
