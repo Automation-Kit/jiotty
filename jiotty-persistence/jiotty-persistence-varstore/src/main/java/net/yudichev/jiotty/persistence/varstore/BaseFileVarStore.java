@@ -18,6 +18,7 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -88,6 +89,29 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
             });
             configNode.remove(toRemove);
         });
+    }
+
+    @Override
+    public List<ExportedEntry> exportEntries() {
+        return exportEntriesWithPrefix("");
+    }
+
+    @Override
+    public List<ExportedEntry> exportEntriesWithPrefix(String keyPrefix) {
+        return inLock(lock, () -> MoreThrowables.getAsUnchecked(() -> {
+            ObjectNode configNode = readConfig();
+            var entries = new ArrayList<ExportedEntry>();
+            configNode.fieldNames().forEachRemaining(name -> {
+                if (name.startsWith(keyPrefix)) {
+                    JsonNode value = configNode.get(name);
+                    // A value stored encrypted at rest is a secret — report it redacted, without decrypting; everything else exports as its stored JSON.
+                    entries.add(value.isTextual() && VarStoreEncryption.isEnvelope(value.textValue())
+                                ? new ExportedEntry(name.substring(keyPrefix.length()), true, null)
+                                : new ExportedEntry(name.substring(keyPrefix.length()), false, value.toString()));
+                }
+            });
+            return entries;
+        }));
     }
 
     @Override

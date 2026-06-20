@@ -222,7 +222,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         logger.info("[{}] token received", apiName);
         validateTokenType(response);
         OauthAccessToken token = responseToToken(requestTime, response, fallbackRefreshToken);
-        varStore.saveValue(varStoreKey, token);
+        varStore.saveValueEncrypted(varStoreKey, token);
         setCurrentToken(token);
         scheduleTokenRefresh();
     }

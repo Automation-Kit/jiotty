@@ -14,6 +14,8 @@ import org.jspecify.annotations.Nullable;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -107,6 +109,28 @@ final class SqlVarStoreOperations {
                 logger.debug("[{}] Cleared all {} entries", userId, rows);
             }
         }));
+    }
+
+    /// Reads the raw stored form of every row in this scope straight from the DB (not the in-memory cache, which holds decrypted objects for keys read via
+    /// [#readValueEncrypted]), classifying each value by its envelope sigil so secrets are reported redacted and never decrypted.
+    public List<VarStore.ExportedEntry> exportEntries() {
+        return getAsUnchecked(() -> {
+            try (var connection = dataSource.getConnection();
+                 var statement = connection.prepareStatement(selectAllSql)) {
+                statement.setString(1, userId);
+                try (var rs = statement.executeQuery()) {
+                    var entries = new ArrayList<VarStore.ExportedEntry>();
+                    while (rs.next()) {
+                        String key = rs.getString(1);
+                        String storedValue = rs.getString(2);
+                        entries.add(VarStoreEncryption.isEnvelope(storedValue)
+                                    ? new VarStore.ExportedEntry(key, true, null)
+                                    : new VarStore.ExportedEntry(key, false, storedValue));
+                    }
+                    return entries;
+                }
+            }
+        });
     }
 
     @SuppressWarnings("unchecked")

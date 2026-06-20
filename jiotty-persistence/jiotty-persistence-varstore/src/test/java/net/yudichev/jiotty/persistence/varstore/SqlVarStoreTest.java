@@ -375,6 +375,64 @@ class SqlVarStoreTest {
         verify(encryption).encrypt("bob", "token", "\"bob-secret\"");
     }
 
+    @Test
+    void exportEntriesReturnsPlainValuesVerbatimAndRedactsEncryptedSecrets() {
+        configuredEncryption = Optional.of(encryption);
+        when(encryption.encrypt(eq("alice"), eq("secret"), any())).thenReturn("ENC1$cipher");
+        startVarStore();
+        VarStore alice = varStore.forUser("alice");
+        alice.saveValue("colour", "red");
+        alice.saveValueEncrypted("secret", "super-secret");
+        flushExecutor();
+
+        assertThat(alice.exportEntries()).containsExactlyInAnyOrder(
+                new VarStore.ExportedEntry("colour", false, "\"red\""),
+                new VarStore.ExportedEntry("secret", true, null));
+    }
+
+    @Test
+    void exportEntriesRedactsSecretEvenAfterItHasBeenDecryptedIntoTheCache() {
+        configuredEncryption = Optional.of(encryption);
+        when(encryption.decrypt("alice", "secret", "ENC1$envelope")).thenReturn("\"plaintext\"");
+        startVarStore();
+        seedRawRowAndReload("alice", "secret", "ENC1$envelope");
+        VarStore alice = varStore.forUser("alice");
+        // Decrypt the secret, which caches the plaintext object in memory.
+        assertThat(alice.readValueEncrypted(String.class, "secret")).contains("plaintext");
+
+        // The export must still redact it: it reads the raw stored form, not the decrypted cache, so a secret can never leak through export.
+        assertThat(alice.exportEntries()).containsExactly(new VarStore.ExportedEntry("secret", true, null));
+    }
+
+    @Test
+    void exportEntriesScopedToUserExcludesOtherUsers() {
+        startVarStore();
+        varStore.forUser("alice").saveValue("colour", "red");
+        varStore.forUser("bob").saveValue("colour", "blue");
+        flushExecutor();
+
+        assertThat(varStore.forUser("alice").exportEntries()).containsExactly(new VarStore.ExportedEntry("colour", false, "\"red\""));
+    }
+
+    @Test
+    void exportEntriesOnUnscopedMultiUserStoreThrows() {
+        startVarStore();
+        assertThatThrownBy(() -> varStore.exportEntries()).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void exportEntriesOnSingleUserStoreReturnsAllEntries() {
+        singleUser = true;
+        startVarStore();
+        varStore.saveValue("a", "1");
+        varStore.saveValue("b", "two");
+        flushExecutor();
+
+        assertThat(varStore.exportEntries()).containsExactlyInAnyOrder(
+                new VarStore.ExportedEntry("a", false, "\"1\""),
+                new VarStore.ExportedEntry("b", false, "\"two\""));
+    }
+
     private void startVarStore() {
         varStore = new SqlVarStore(postgres.dataSourceFactory(), new ExecutorFactoryImpl(), "var_store", singleUser, legacyPath, configuredEncryption);
         varStore.start();

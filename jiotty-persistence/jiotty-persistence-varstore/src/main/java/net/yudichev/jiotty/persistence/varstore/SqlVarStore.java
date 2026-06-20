@@ -16,6 +16,7 @@ import org.apache.logging.log4j.Logger;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -124,6 +125,14 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     }
 
     @Override
+    public List<ExportedEntry> exportEntries() {
+        return whenStartedAndNotLifecycling(() -> {
+            checkState(singleUser, "exportEntries() on the unscoped multi-user store is not supported; use forUser(userId).exportEntries()");
+            return operations.exportEntries();
+        });
+    }
+
+    @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return whenStartedAndNotLifecycling(() -> operations.readValue(type, key));
     }
@@ -228,6 +237,11 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         @Override
         public void clearAll() {
             whenStartedAndNotLifecycling(userOperations::clearAll);
+        }
+
+        @Override
+        public List<ExportedEntry> exportEntries() {
+            return whenStartedAndNotLifecycling(userOperations::exportEntries);
         }
 
         @Override

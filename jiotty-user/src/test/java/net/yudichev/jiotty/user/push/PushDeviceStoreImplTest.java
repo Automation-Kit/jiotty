@@ -2,6 +2,7 @@ package net.yudichev.jiotty.user.push;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
+import net.yudichev.jiotty.persistence.varstore.VarStoreEncryption;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -110,6 +111,10 @@ class PushDeviceStoreImplTest {
         store.upsert(recordFor("device-1", TOKEN_A));
         clock.tick();
         assertThat(varStore.allKeys()).containsExactly("push.devices");
+        // Push tokens are persisted encrypted at rest, not as plaintext JSON.
+        assertThat(varStore.rawStoredValue("push.devices")).hasValueSatisfying(stored ->
+                                                                                       assertThat(VarStoreEncryption.isEnvelope(stored)).as(
+                                                                                               "push devices stored as encryption envelope").isTrue());
 
         store.remove("device-1");
         clock.tick();

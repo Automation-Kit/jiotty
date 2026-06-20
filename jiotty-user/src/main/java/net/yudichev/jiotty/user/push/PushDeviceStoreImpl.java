@@ -85,7 +85,7 @@ public final class PushDeviceStoreImpl extends BaseLifecycleComponent implements
     }
 
     private Map<String, PushDeviceRecord> loadMutable() {
-        return varStore.readValue(STORE_TYPE, STORE_KEY)
+        return varStore.readValueEncrypted(STORE_TYPE, STORE_KEY)
                        .<Map<String, PushDeviceRecord>>map(LinkedHashMap::new)
                        .orElseGet(LinkedHashMap::new);
     }
@@ -94,7 +94,8 @@ public final class PushDeviceStoreImpl extends BaseLifecycleComponent implements
         if (records.isEmpty()) {
             varStore.clearValue(STORE_KEY);
         } else {
-            varStore.saveValue(STORE_KEY, records);
+            // Push tokens let the holder send notifications to a user's device — persist encrypted at rest.
+            varStore.saveValueEncrypted(STORE_KEY, records);
         }
     }
 

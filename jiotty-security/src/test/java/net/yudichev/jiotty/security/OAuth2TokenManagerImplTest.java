@@ -6,6 +6,7 @@ import net.yudichev.jiotty.common.rest.JavalinRestServer;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
+import net.yudichev.jiotty.persistence.varstore.VarStoreEncryption;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -108,6 +109,10 @@ class OAuth2TokenManagerImplTest {
         Instant expectedRefreshTime = NOW.plusSeconds(2880);
         assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY))
                 .hasValue(OauthAccessToken.of("at-1", "rt-1", expectedRefreshTime));
+        // The credential is persisted encrypted at rest, not as plaintext JSON.
+        assertThat(varStore.rawStoredValue(VAR_STORE_KEY)).hasValueSatisfying(stored ->
+                                                                                      assertThat(VarStoreEncryption.isEnvelope(stored)).as(
+                                                                                              "token stored as encryption envelope").isTrue());
     }
 
     @Test

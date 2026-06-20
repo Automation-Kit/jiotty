@@ -2,6 +2,7 @@ package net.yudichev.jiotty.persistence.varstore;
 
 import com.google.common.reflect.TypeToken;
 
+import java.util.List;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -33,6 +34,11 @@ final class UserScopedVarStore implements VarStore {
     @Override
     public void clearAll() {
         delegate.clearAllWithPrefix(keyPrefix);
+    }
+
+    @Override
+    public List<ExportedEntry> exportEntries() {
+        return delegate.exportEntriesWithPrefix(keyPrefix);
     }
 
     @Override

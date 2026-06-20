@@ -4,6 +4,7 @@ import com.google.common.reflect.TypeToken;
 import jakarta.inject.Inject;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 
 import static net.yudichev.jiotty.persistence.varstore.Bindings.SingleUser;
@@ -37,6 +38,11 @@ public final class FileVarStore implements VarStore {
     @Override
     public void clearAll() {
         delegate.clearAll();
+    }
+
+    @Override
+    public List<ExportedEntry> exportEntries() {
+        return delegate.exportEntries();
     }
 
     @Override

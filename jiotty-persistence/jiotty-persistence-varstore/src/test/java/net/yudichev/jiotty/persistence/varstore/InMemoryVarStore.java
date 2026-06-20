@@ -8,7 +8,9 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.reflect.TypeToken;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -50,6 +52,25 @@ public final class InMemoryVarStore implements PrefixClearableVarStore {
     @Override
     public void clearAllWithPrefix(String keyPrefix) {
         serialisedValuesByKey.keySet().removeIf(key -> key.startsWith(keyPrefix));
+    }
+
+    @Override
+    public List<ExportedEntry> exportEntries() {
+        return exportEntriesWithPrefix("");
+    }
+
+    @Override
+    public List<ExportedEntry> exportEntriesWithPrefix(String keyPrefix) {
+        var entries = new ArrayList<ExportedEntry>();
+        serialisedValuesByKey.forEach((key, stored) -> {
+            if (key.startsWith(keyPrefix)) {
+                String scopedKey = key.substring(keyPrefix.length());
+                entries.add(VarStoreEncryption.isEnvelope(stored)
+                            ? new ExportedEntry(scopedKey, true, null)
+                            : new ExportedEntry(scopedKey, false, stored));
+            }
+        });
+        return entries;
     }
 
     @Override

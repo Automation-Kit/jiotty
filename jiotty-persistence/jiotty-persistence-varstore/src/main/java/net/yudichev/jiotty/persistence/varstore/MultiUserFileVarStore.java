@@ -3,6 +3,7 @@ package net.yudichev.jiotty.persistence.varstore;
 import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
+import java.util.List;
 
 final class MultiUserFileVarStore extends BaseFileVarStore {
 
@@ -19,5 +20,10 @@ final class MultiUserFileVarStore extends BaseFileVarStore {
     @Override
     public void clearAll() {
         throw new IllegalStateException("clearAll() on the unscoped multi-user store is not supported; use forUser(userId).clearAll()");
+    }
+
+    @Override
+    public List<ExportedEntry> exportEntries() {
+        throw new IllegalStateException("exportEntries() on the unscoped multi-user store is not supported; use forUser(userId).exportEntries()");
     }
 }
