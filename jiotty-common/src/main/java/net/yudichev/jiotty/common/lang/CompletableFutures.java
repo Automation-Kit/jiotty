@@ -78,14 +78,30 @@ public final class CompletableFutures {
                                      .addAll(builder2.build()),
                 builder -> {
                     ImmutableList<CompletableFuture<T>> listOfFutures = builder.build();
+                    var result = new CompletableFuture<List<R>>();
                     //noinspection ZeroLengthArrayAllocation
-                    return CompletableFuture.allOf(listOfFutures.toArray(new CompletableFuture[0]))
-                                            .handle((_, _) -> listOfFutures.stream()
-                                                                           .map(future -> {
-                                                                               assert future.isDone();
-                                                                               return futureToResult.apply(future);
-                                                                           })
-                                                                           .toList());
+                    CompletableFuture.allOf(listOfFutures.toArray(new CompletableFuture[0]))
+                                     .handle((_, _) -> listOfFutures.stream()
+                                                                    .map(future -> {
+                                                                        assert future.isDone();
+                                                                        return futureToResult.apply(future);
+                                                                    })
+                                                                    .toList())
+                                     .whenComplete((list, failure) -> {
+                                         if (failure != null) {
+                                             result.completeExceptionally(failure);
+                                         } else {
+                                             result.complete(list);
+                                         }
+                                     });
+                    // Propagate cancellation of the aggregate down to its inputs, so cancelling the returned future stops all outstanding work rather than
+                    // leaving it running detached.
+                    result.whenComplete((_, _) -> {
+                        if (result.isCancelled()) {
+                            listOfFutures.forEach(future -> future.cancel(true));
+                        }
+                    });
+                    return result;
                 }
         );
     }

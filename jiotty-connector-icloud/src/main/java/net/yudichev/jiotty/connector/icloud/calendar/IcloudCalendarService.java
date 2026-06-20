@@ -15,6 +15,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
+import net.yudichev.jiotty.common.time.calendar.CalendarAuthorisationException;
 import net.yudichev.jiotty.common.time.calendar.CalendarService;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
@@ -159,7 +160,7 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
             apiKeyState.accept(new AuthState.Success(reasonPhrase));
         } else if (statusCode == 401) {
             apiKeyState.accept(new AuthState.PermanentFailure("Authorisation failed: " + reasonPhrase));
-            throw new RuntimeException("Authorisation failed: " + reasonPhrase);
+            throw new CalendarAuthorisationException("Authorisation failed: " + reasonPhrase);
         } else {
             apiKeyState.accept(new AuthState.TransientFailure("HTTP " + statusCode + ": " + reasonPhrase));
             throw new RuntimeException("Request failed: " + statusCode + " " + reasonPhrase);

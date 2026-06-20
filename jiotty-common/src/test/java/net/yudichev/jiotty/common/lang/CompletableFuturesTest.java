@@ -98,6 +98,40 @@ class CompletableFuturesTest {
     }
 
     @Test
+    void toFutureOfListCancellationPropagatesToInputs() {
+        CompletableFuture<String> future1 = new CompletableFuture<>();
+        CompletableFuture<String> future2 = new CompletableFuture<>();
+
+        CompletableFuture<List<String>> result = Stream.of(future1, future2)
+                                                       .collect(CompletableFutures.toFutureOfList());
+
+        assertThat(result).isNotDone();
+
+        result.cancel(true);
+
+        assertThat(result).isCancelled();
+        assertThat(future1).isCancelled();
+        assertThat(future2).isCancelled();
+    }
+
+    @Test
+    void toFutureOfListWithErrorsCancellationPropagatesToInputs() {
+        CompletableFuture<String> future1 = new CompletableFuture<>();
+        CompletableFuture<String> future2 = new CompletableFuture<>();
+
+        CompletableFuture<List<Either<String, Throwable>>> result = Stream.of(future1, future2)
+                                                                          .collect(CompletableFutures.toFutureOfListWithErrors());
+
+        future1.complete("result1");
+        assertThat(result).isNotDone();
+
+        result.cancel(true);
+
+        assertThat(result).isCancelled();
+        assertThat(future2).isCancelled();
+    }
+
+    @Test
     @MockitoSettings(strictness = LENIENT)
     void toFutureOfListChaining(@Mock Function<? super Integer, CompletableFuture<String>> operation) {
         CompletableFuture<String> future1 = new CompletableFuture<>();
