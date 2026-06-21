@@ -32,7 +32,10 @@ class PriceCombinerTest {
                              p("00:00", 4, 0.0, 1.0, 2.0, 3.0, 4.1, 5.1)),
                 // Predicted ends before real even starts → predicted is dropped, real returned unchanged.
                 Arguments.of(p("03:00", 4, 0.0, 1.0, 2.0, 3.0), p("00:00", 0, 4.1, 5.1),
-                             p("03:00", 4, 0.0, 1.0, 2.0, 3.0))
+                             p("03:00", 4, 0.0, 1.0, 2.0, 3.0)),
+                // Predicted starts after a gap past real's end (real ends 02:00, predicted starts 03:00) → the windows are disjoint, predicted is dropped.
+                Arguments.of(p("00:00", 4, 0.0, 1.0, 2.0, 3.0), p("03:00", 0, 4.1, 5.1),
+                             p("00:00", 4, 0.0, 1.0, 2.0, 3.0))
         );
     }
 

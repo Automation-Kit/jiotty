@@ -20,7 +20,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiConsumer;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -30,14 +32,20 @@ public final class SingleThreadedSchedulingExecutor implements SchedulingExecuto
     private final Set<Closeable> scheduleHandles = Sets.newConcurrentHashSet();
     private final ScheduledExecutorService executor;
     private final String threadNameBase;
+    private final BiConsumer<String, Throwable> taskExceptionHandler;
+
+    public SingleThreadedSchedulingExecutor(String threadNameBase) {
+        this(threadNameBase, new ListenerBackedTaskExceptionHandlerRegistry());
+    }
 
     @Inject
-    public SingleThreadedSchedulingExecutor(@Assisted String threadNameBase) {
+    SingleThreadedSchedulingExecutor(@Assisted String threadNameBase, ListenerBackedTaskExceptionHandlerRegistry exceptionHandler) {
         executor = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryBuilder()
                                                                       .setNameFormat(threadNameBase + "-%s")
                                                                       .setDaemon(true)
                                                                       .build());
         this.threadNameBase = threadNameBase;
+        taskExceptionHandler = checkNotNull(exceptionHandler)::onTaskException;
     }
 
     @Override
@@ -102,8 +110,8 @@ public final class SingleThreadedSchedulingExecutor implements SchedulingExecuto
         return getClass().getSimpleName() + '-' + threadNameBase;
     }
 
-    private static Runnable guard(String task, Runnable command) {
-        return Runnables.guarded(logger, task, command);
+    private Runnable guard(String task, Runnable command) {
+        return Runnables.guarded(logger, task, command, taskExceptionHandler);
     }
 
     private final class ScheduledHandle extends BaseIdempotentCloseable {
