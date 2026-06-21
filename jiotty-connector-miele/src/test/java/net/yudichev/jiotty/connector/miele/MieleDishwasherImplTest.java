@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
@@ -50,8 +51,8 @@ class MieleDishwasherImplTest {
         String baseUrl = wmRuntimeInfo.getHttpBaseUrl();
         OAuth2TokenManager mockTokenManager = new OAuth2TokenManager() {
             @Override
-            public String clientSecret() {
-                return "";
+            public Optional<String> clientSecret() {
+                return Optional.empty();
             }
 
             @Override
@@ -71,7 +72,7 @@ class MieleDishwasherImplTest {
             }
 
             @Override
-            public void onNewAuthCode(String authCode, String redirectUri) {
+            public void onNewAuthCode(String authCode, String redirectUri, Optional<String> codeVerifier) {
             }
         };
 

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.security;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.inject.BindingAnnotation;
 import com.sun.net.httpserver.HttpServer;
 import jakarta.inject.Inject;
@@ -14,6 +15,9 @@ import java.lang.annotation.Target;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.URLEncoder;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -28,6 +32,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
 import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
+import static net.yudichev.jiotty.security.Bindings.Dependency;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
@@ -37,24 +42,30 @@ import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
     private final Optional<Integer> fixedCallbackHttpPort;
     private final String loginUrl;
+    private final Map<String, String> extraLoginParams;
 
     /// Non-nullness of this field means we are in the process of obtaining the initial token.
     private @Nullable HttpServer httpServer;
+    /// The PKCE code verifier for the in-flight login (public clients only), or `null` when not using PKCE. Written when the login starts, read when the
+    /// redirect callback exchanges the code.
+    private volatile @Nullable String codeVerifier;
 
     @Inject
     public LocalLoginOAuth2TokenManager(ExecutorFactory executorFactory,
                                         CurrentDateTimeProvider currentDateTimeProvider,
-                                        VarStore varStore,
+                                        @Dependency VarStore varStore,
                                         @ClientID String clientId,
-                                        @ClientSecret String clientSecret,
+                                        @ClientSecret Optional<String> clientSecret,
                                         @ApiName String apiName,
                                         @TokenUrl String tokenUrl,
                                         @Scope String scope,
                                         @LoginUrl String loginUrl,
-                                        @FixedCallbackHttpPort Optional<Integer> fixedCallbackHttpPort) {
+                                        @FixedCallbackHttpPort Optional<Integer> fixedCallbackHttpPort,
+                                        @ExtraLoginParams Map<String, String> extraLoginParams) {
         super(executorFactory, currentDateTimeProvider, varStore, clientId, clientSecret, apiName, tokenUrl, scope);
         this.loginUrl = checkNotNull(loginUrl);
         this.fixedCallbackHttpPort = checkNotNull(fixedCallbackHttpPort);
+        this.extraLoginParams = ImmutableMap.copyOf(extraLoginParams);
     }
 
     private String startRedirectHttpServer(String state) {
@@ -74,7 +85,7 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
                 } else {
                     String authCode = queryParams.get("code");
                     if (authCode != null) {
-                        onNewAuthCode(authCode, callbackUrl);
+                        onNewAuthCode(authCode, callbackUrl, Optional.ofNullable(codeVerifier));
                         response = "Auth Code Success";
                         exchange.sendResponseHeaders(200, response.length());
                     } else {
@@ -114,12 +125,36 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
         String state = UUID.randomUUID().toString();
         // authorisation code based process, need to communicate with the user
         String redirectUri = startRedirectHttpServer(state);
-        logger.warn("{} login required: {}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}",
-                    apiName, loginUrl,
-                    URLEncoder.encode(clientId, US_ASCII),
-                    URLEncoder.encode(redirectUri, US_ASCII),
-                    URLEncoder.encode(scope, US_ASCII),
-                    URLEncoder.encode(state, US_ASCII));
+        var url = new StringBuilder(loginUrl)
+                .append("?response_type=code")
+                .append("&client_id=").append(enc(clientId))
+                .append("&redirect_uri=").append(enc(redirectUri))
+                .append("&scope=").append(enc(scope))
+                .append("&state=").append(enc(state));
+        // A public client (no secret) authenticates the code exchange via PKCE instead of a secret.
+        if (clientSecret().isEmpty()) {
+            codeVerifier = generateCodeVerifier();
+            url.append("&code_challenge=").append(enc(codeChallenge(codeVerifier))).append("&code_challenge_method=S256");
+        } else {
+            codeVerifier = null;
+        }
+        extraLoginParams.forEach((name, value) -> url.append('&').append(enc(name)).append('=').append(enc(value)));
+        logger.info("[{}] login required — open this URL in a browser:\n{}", apiName, url);
+    }
+
+    private static String enc(String value) {
+        return URLEncoder.encode(value, US_ASCII);
+    }
+
+    private static String generateCodeVerifier() {
+        var bytes = new byte[32];
+        new SecureRandom().nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    private static String codeChallenge(String verifier) {
+        return getAsUnchecked(() -> Base64.getUrlEncoder().withoutPadding()
+                                          .encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(US_ASCII))));
     }
 
     @Override
@@ -144,5 +179,11 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface FixedCallbackHttpPort {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface ExtraLoginParams {
     }
 }

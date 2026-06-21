@@ -6,8 +6,11 @@ import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+
+import java.util.Map;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
@@ -17,14 +20,35 @@ class OAuth2TokenManagerModuleTest {
     void configures(boolean withLoginUrl) {
         OAuth2TokenManagerModule.Builder builder = OAuth2TokenManagerModule.builder()
                                                                            .setClientId(literally("cid"))
-                                                                           .setClientSecret(literally("cs"))
+                                                                           .withClientSecret(literally("cs"))
                                                                            .setApiName(literally("api"))
                                                                            .setTokenUrl(literally("http://token"))
                                                                            .setScope(literally("scope"));
         if (withLoginUrl) {
-            builder.withLoginUrl(literally("http://login"));
+            builder.withLoginUrl(literally("http://login"))
+                   .withLoginExtraParams(literally(Map.of("access_type", "offline")));
         }
         var module = builder.build();
+        Guice.createInjector(new TimeModule(),
+                             new ExecutorModule(),
+                             new AbstractModule() {
+                                 @Override
+                                 protected void configure() {
+                                     bind(VarStore.class).toInstance(new InMemoryVarStore());
+                                 }
+                             },
+                             module)
+             .getBinding(OAuth2TokenManager.class);
+    }
+
+    @Test
+    void configuresPublicClientWithoutSecret() {
+        var module = OAuth2TokenManagerModule.builder()
+                                             .setClientId(literally("cid"))
+                                             .setApiName(literally("api"))
+                                             .setTokenUrl(literally("http://token"))
+                                             .setScope(literally("scope"))
+                                             .build();
         Guice.createInjector(new TimeModule(),
                              new ExecutorModule(),
                              new AbstractModule() {

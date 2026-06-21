@@ -49,7 +49,7 @@ public final class MieleModule extends BaseLifecycleComponentModule {
                                                                 .setTokenUrl(literally("https://api.mcs3.miele.com/thirdparty/token"))
                                                                 .setScope(literally("IDENTIFY_APPLIANCES"))
                                                                 .setClientId(clientIdSpec)
-                                                                .setClientSecret(clientSecretSpec)
+                                                                .withClientSecret(clientSecretSpec)
                                                                 .withAnnotation(forAnnotation(MieleDishwasherImpl.Dependency.class))
                                                                 .build());
 

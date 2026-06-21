@@ -49,7 +49,7 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
         var tokenManagerModuleBuilder = OAuth2TokenManagerModule
                 .builder()
                 .setClientId(clientIdSpec)
-                .setClientSecret(clientSecretSpec)
+                .withClientSecret(clientSecretSpec)
                 .setApiName(literally("TeslaFleet"))
                 .setTokenUrl(literally("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"))
                 .setScope(oauthScopesSpec.map(new TypeToken<>() {},

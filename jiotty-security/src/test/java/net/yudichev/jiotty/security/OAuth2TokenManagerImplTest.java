@@ -17,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -91,10 +92,45 @@ class OAuth2TokenManagerImplTest {
                           .containsEntry("redirect_uri", "http://localhost/callback")
                           .containsEntry("client_id", CLIENT_ID)
                           .containsEntry("client_secret", CLIENT_SECRET)
-                          .doesNotContainKey("refresh_token");
+                          .doesNotContainKey("refresh_token")
+                          .doesNotContainKey("code_verifier");
 
         assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
                                                              success -> assertThat(success.authInfo()).isEqualTo("test-access-token"));
+    }
+
+    @Test
+    void authCodeExchange_publicClientWithPkce_sendsCodeVerifierAndOmitsSecret() {
+        createAndStartTokenManager(Optional.empty());
+        enqueueSuccessResponse("at", "rt", 3600);
+
+        tokenManager.onNewAuthCode("auth-code-123", "http://localhost/callback", Optional.of("pkce-verifier"));
+
+        Map<String, String> params = pollCapturedRequest();
+        assertThat(params).containsEntry("grant_type", "authorization_code")
+                          .containsEntry("code", "auth-code-123")
+                          .containsEntry("redirect_uri", "http://localhost/callback")
+                          .containsEntry("client_id", CLIENT_ID)
+                          .containsEntry("code_verifier", "pkce-verifier")
+                          .doesNotContainKey("client_secret");
+
+        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                             success -> assertThat(success.authInfo()).isEqualTo("at"));
+    }
+
+    @Test
+    void refresh_publicClient_omitsClientSecret() {
+        Instant pastRefreshTime = NOW.minusSeconds(60);
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", pastRefreshTime));
+
+        enqueueSuccessResponse("new-at", "new-rt", 7200);
+        createAndStartTokenManager(Optional.empty());
+
+        Map<String, String> params = pollCapturedRequest();
+        assertThat(params).containsEntry("grant_type", "refresh_token")
+                          .containsEntry("refresh_token", "old-rt")
+                          .containsEntry("client_id", CLIENT_ID)
+                          .doesNotContainKey("client_secret");
     }
 
     @Test
@@ -226,9 +262,13 @@ class OAuth2TokenManagerImplTest {
     }
 
     private void createAndStartTokenManager() {
+        createAndStartTokenManager(Optional.of(CLIENT_SECRET));
+    }
+
+    private void createAndStartTokenManager(Optional<String> clientSecret) {
         tokenManager = new OAuth2TokenManagerImpl(
                 new ExecutorFactoryImpl(), timeProvider, varStore,
-                CLIENT_ID, CLIENT_SECRET, API_NAME,
+                CLIENT_ID, clientSecret, API_NAME,
                 "http://localhost:" + fakeTokenServer.port() + "/token",
                 SCOPE);
         tokenManager.start();

@@ -56,7 +56,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     protected final String scope;
     private final ExecutorFactory executorFactory;
     private final VarStore varStore;
-    private final String clientSecret;
+    private final Optional<String> clientSecret;
     private final CurrentDateTimeProvider currentDateTimeProvider;
     private final Listeners<AuthState> listeners = new Listeners<>();
     private final String varStoreKey;
@@ -71,7 +71,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                   CurrentDateTimeProvider currentDateTimeProvider,
                                   @Dependency VarStore varStore,
                                   @ClientID String clientId,
-                                  @ClientSecret String clientSecret,
+                                  @ClientSecret Optional<String> clientSecret,
                                   @ApiName String apiName,
                                   @TokenUrl String tokenUrl,
                                   @Scope String scope) {
@@ -107,7 +107,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     }
 
     @Override
-    public String clientSecret() {
+    public Optional<String> clientSecret() {
         return clientSecret;
     }
 
@@ -151,26 +151,25 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     }
 
     @Override
-    public void onNewAuthCode(String authCode, String redirectUri) {
+    public void onNewAuthCode(String authCode, String redirectUri, Optional<String> codeVerifier) {
         logger.info("[{}] auth code received", apiName);
-        requestToken(new FormBody.Builder()
-                             .add("grant_type", "authorization_code")
-                             .add("code", authCode)
-                             .add("redirect_uri", redirectUri)
-                             .add("client_id", clientId)
-                             .add("client_secret", clientSecret)
-                             .build(),
-                     null);
+        var formBuilder = new FormBody.Builder()
+                .add("grant_type", "authorization_code")
+                .add("code", authCode)
+                .add("redirect_uri", redirectUri)
+                .add("client_id", clientId);
+        clientSecret.ifPresent(secret -> formBuilder.add("client_secret", secret));
+        codeVerifier.ifPresent(verifier -> formBuilder.add("code_verifier", verifier));
+        requestToken(formBuilder.build(), null);
     }
 
     private void refreshAccessToken(String refreshToken) {
-        requestToken(new FormBody.Builder()
-                             .add("grant_type", "refresh_token")
-                             .add("refresh_token", refreshToken)
-                             .add("client_id", clientId)
-                             .add("client_secret", clientSecret)
-                             .build(),
-                     refreshToken);
+        var formBuilder = new FormBody.Builder()
+                .add("grant_type", "refresh_token")
+                .add("refresh_token", refreshToken)
+                .add("client_id", clientId);
+        clientSecret.ifPresent(secret -> formBuilder.add("client_secret", secret));
+        requestToken(formBuilder.build(), refreshToken);
     }
 
     private void requestToken(RequestBody formBody, @Nullable String fallbackRefreshToken) {

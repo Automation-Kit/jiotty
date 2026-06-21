@@ -1,0 +1,16 @@
+Configuration:
+  appenders:
+    Console:
+      name: STDOUT
+      PatternLayout:
+        Pattern: "%d %p [%t] %replace{[%X{thread}] }{\\[\\] }{}%C{1.} %m%n"
+  Loggers:
+    Root:
+      level: info
+      AppenderRef:
+        - ref: STDOUT
+    logger:
+      - name: net.yudichev.jiotty.connector.google.calendar
+        level: '${sys:log4j.root.level:-DEBUG}'
+#      - name: org.apache.http
+#        level: '${sys:log4j.root.level:-DEBUG}'

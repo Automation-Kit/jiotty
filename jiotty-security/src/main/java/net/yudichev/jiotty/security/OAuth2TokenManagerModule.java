@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.security;
 
+import com.google.common.reflect.TypeToken;
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
@@ -11,6 +12,7 @@ import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -24,22 +26,24 @@ import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
 public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<OAuth2TokenManager> {
     private final BindingSpec<String> clientIdSpec;
-    private final BindingSpec<String> clientSecretSpec;
+    private final BindingSpec<Optional<String>> clientSecretSpec;
     private final BindingSpec<String> apiNameSpec;
     private final @Nullable BindingSpec<String> loginUrlSpec;
     private final BindingSpec<String> tokenUrlSpec;
     private final BindingSpec<String> scopeSpec;
     private final BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec;
+    private final BindingSpec<Map<String, String>> loginExtraParamsSpec;
     private final BindingSpec<VarStore> varStoreSpec;
     private final Key<OAuth2TokenManager> exposedKey;
 
     private OAuth2TokenManagerModule(BindingSpec<String> clientIdSpec,
-                                     BindingSpec<String> clientSecretSpec,
+                                     BindingSpec<Optional<String>> clientSecretSpec,
                                      BindingSpec<String> apiNameSpec,
                                      @Nullable BindingSpec<String> loginUrlSpec,
                                      BindingSpec<String> tokenUrlSpec,
                                      BindingSpec<String> scopeSpec,
                                      BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec,
+                                     BindingSpec<Map<String, String>> loginExtraParamsSpec,
                                      BindingSpec<VarStore> varStoreSpec,
                                      SpecifiedAnnotation specifiedAnnotation) {
         this.clientIdSpec = checkNotNull(clientIdSpec);
@@ -49,6 +53,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         this.tokenUrlSpec = checkNotNull(tokenUrlSpec);
         this.scopeSpec = checkNotNull(scopeSpec);
         this.fixedCallbackHttpPortSpec = checkNotNull(fixedCallbackHttpPortSpec);
+        this.loginExtraParamsSpec = checkNotNull(loginExtraParamsSpec);
         this.varStoreSpec = checkNotNull(varStoreSpec);
         exposedKey = specifiedAnnotation.specify(OAuth2TokenManager.class);
     }
@@ -63,7 +68,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         clientIdSpec.bind(String.class)
                     .annotatedWith(ClientID.class)
                     .installedBy(this::installLifecycleComponentModule);
-        clientSecretSpec.bind(String.class)
+        clientSecretSpec.bind(new TypeLiteral<>() {})
                         .annotatedWith(ClientSecret.class)
                         .installedBy(this::installLifecycleComponentModule);
         apiNameSpec.bind(String.class)
@@ -85,6 +90,9 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
             fixedCallbackHttpPortSpec.bind(new TypeLiteral<>() {})
                                      .annotatedWith(LocalLoginOAuth2TokenManager.FixedCallbackHttpPort.class)
                                      .installedBy(this::installLifecycleComponentModule);
+            loginExtraParamsSpec.bind(new TypeLiteral<>() {})
+                                .annotatedWith(LocalLoginOAuth2TokenManager.ExtraLoginParams.class)
+                                .installedBy(this::installLifecycleComponentModule);
             bind(exposedKey).to(registerLifecycleComponent(LocalLoginOAuth2TokenManager.class));
         } else {
             bind(exposedKey).to(registerLifecycleComponent(OAuth2TokenManagerImpl.class));
@@ -99,7 +107,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
 
     public static final class Builder implements TypedBuilder<ExposedKeyModule<OAuth2TokenManager>>, HasWithAnnotation {
         private BindingSpec<String> clientIdSpec;
-        private BindingSpec<String> clientSecretSpec;
+        private BindingSpec<Optional<String>> clientSecretSpec = BindingSpec.literally(Optional.empty());
         private BindingSpec<String> apiNameSpec;
         private BindingSpec<String> loginUrlSpec;
         private BindingSpec<String> tokenUrlSpec;
@@ -107,11 +115,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         private BindingSpec<VarStore> varStoreSpec = boundTo(VarStore.class);
         private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
         private BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec = BindingSpec.literally(Optional.empty());
-
-        public Builder setClientSecret(BindingSpec<String> clientSecretSpec) {
-            this.clientSecretSpec = clientSecretSpec;
-            return this;
-        }
+        private BindingSpec<Map<String, String>> loginExtraParamsSpec = BindingSpec.literally(Map.of());
 
         public Builder setClientId(BindingSpec<String> clientIdSpec) {
             this.clientIdSpec = clientIdSpec;
@@ -139,9 +143,22 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
             return this;
         }
 
+        /// Sets the client secret for a confidential client. Omit this for a public client that authenticates via PKCE instead.
+        public Builder withClientSecret(BindingSpec<String> clientSecretSpec) {
+            this.clientSecretSpec = clientSecretSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, Optional::of);
+            return this;
+        }
+
         /// Only makes sense if [#withLoginUrl] is also called.
         public Builder withFixedCallbackHttpPort(BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec) {
             this.fixedCallbackHttpPortSpec = checkNotNull(fixedCallbackHttpPortSpec);
+            return this;
+        }
+
+        /// Extra query parameters appended to the local-login authorization URL (e.g. `access_type=offline`, `prompt=consent` for Google). Only makes sense if
+        /// [#withLoginUrl] is also called.
+        public Builder withLoginExtraParams(BindingSpec<Map<String, String>> loginExtraParamsSpec) {
+            this.loginExtraParamsSpec = checkNotNull(loginExtraParamsSpec);
             return this;
         }
 
@@ -165,6 +182,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                                 tokenUrlSpec,
                                                 scopeSpec,
                                                 fixedCallbackHttpPortSpec,
+                                                loginExtraParamsSpec,
                                                 varStoreSpec,
                                                 specifiedAnnotation);
         }

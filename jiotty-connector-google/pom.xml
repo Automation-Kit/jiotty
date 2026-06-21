@@ -15,6 +15,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>jiotty-connector-google-assistant</module>
+        <module>jiotty-connector-google-calendar</module>
         <module>jiotty-connector-google-common</module>
         <module>jiotty-connector-google-drive</module>
         <module>jiotty-connector-google-gmail</module>
