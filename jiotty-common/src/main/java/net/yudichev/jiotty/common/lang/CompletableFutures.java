@@ -2,9 +2,11 @@ package net.yudichev.jiotty.common.lang;
 
 import com.google.common.collect.ImmutableList;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -132,6 +134,15 @@ public final class CompletableFutures {
                 anotherFuture.completeExceptionally(error);
             }
         };
+    }
+
+    public static boolean isCancellation(@Nullable Throwable throwable) {
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (current instanceof CancellationException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static class FutureChainBuilder<T, R> {
