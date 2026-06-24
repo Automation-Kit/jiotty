@@ -17,7 +17,7 @@ final class FakeUIServer implements UIServer, UIServerRuntime {
     }
 
     @Override
-    public boolean dispatchApiPath(HttpServletRequest request, HttpServletResponse response) {
-        return false;
+    public DispatchResult dispatchApiPath(HttpServletRequest request, HttpServletResponse response) {
+        return DispatchResult.NOT_FOUND;
     }
 }

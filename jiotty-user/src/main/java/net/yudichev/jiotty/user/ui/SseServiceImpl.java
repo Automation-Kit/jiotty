@@ -194,7 +194,14 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                 closeAndRemoveClient(client);
             }
         });
-        return idempotent(() -> executor.execute(() -> closeAndRemoveClient(client)));
+        // Guard with isStarted() exactly as removeClient() does: once this component is stopped the executor is terminated and its clients were drained during
+        //  stop, so the close is a no-op. Without the guard, a close arriving after stop would schedule onto the terminated executor and throw
+        //  RejectedExecutionException into the caller.
+        return idempotent(() -> {
+            if (isStarted()) {
+                executor.execute(() -> closeAndRemoveClient(client));
+            }
+        });
     }
 
     private void closeAndRemoveClient(SseClient client) {

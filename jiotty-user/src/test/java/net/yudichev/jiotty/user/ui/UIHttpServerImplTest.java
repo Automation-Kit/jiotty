@@ -9,6 +9,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.StreamInvalidationSubscription;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
+import net.yudichev.jiotty.user.ui.UIServerRuntime.DispatchResult;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
 import org.junit.jupiter.api.AfterEach;
@@ -68,6 +69,7 @@ class UIHttpServerImplTest {
         }).when(requestAuthoriser).authorise(any(), any(), any()));
 
         lenient().when(streamInvalidationSubscription.subscribe(any())).thenAnswer(_ -> Closeable.noop());
+        lenient().when(runtime.dispatchApiPath(any(), any())).thenReturn(DispatchResult.NOT_FOUND);
     }
 
     @AfterEach
@@ -116,7 +118,7 @@ class UIHttpServerImplTest {
             resp.setStatus(200);
             resp.setContentType("text/plain");
             resp.getWriter().print("handled-by-api-path-handler");
-            return true;
+            return DispatchResult.HANDLED;
         }));
 
         HttpResponse<String> response = sendRequest(method, "/ui/api/analytics/some-report");

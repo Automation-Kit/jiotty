@@ -17,7 +17,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 /// Owns no UI state — option/displayable registration lives behind [UIServer], not here.
 public final class UIServerRuntimeImpl extends BaseLifecycleComponent implements UIServerRuntime {
     private final Set<ApiPathHandler> apiPathHandlers;
-
     private Map<String, ApiPathHandler> handlersByPrefix;
 
     @Inject
@@ -38,14 +37,20 @@ public final class UIServerRuntimeImpl extends BaseLifecycleComponent implements
     }
 
     @Override
-    public boolean dispatchApiPath(HttpServletRequest request, HttpServletResponse response) {
+    public DispatchResult dispatchApiPath(HttpServletRequest request, HttpServletResponse response) {
         String pathInfo = request.getPathInfo();
         if (pathInfo == null) {
-            return false;
+            return DispatchResult.NOT_FOUND;
         }
-        ApiPathHandler handler = whenStartedAndNotLifecycling(() -> findMatchingHandler(pathInfo));
+        // No lock on this hot path: a request reaching a stopped/lifecycling runtime must report UNAVAILABLE rather than throw. isStarted() is a volatile
+        //  read, and handlersByPrefix is published through that same flag (written in doStart() before started flips true, never mutated afterwards or nulled
+        //  on stop), so reading it unlocked once started is safe. The caller decides how to render UNAVAILABLE.
+        if (!isStarted()) {
+            return DispatchResult.UNAVAILABLE;
+        }
+        ApiPathHandler handler = findMatchingHandler(pathInfo);
         if (handler == null) {
-            return false;
+            return DispatchResult.NOT_FOUND;
         }
         // Set before invoking handle: SSE handlers commit the response inside flushBuffer, which fires Jetty's onResponseBegin while we are still inside
         // handle(); the metrics layer reads this attribute there to tag the request's TTFB with the matched route. The full URL path
@@ -53,7 +58,7 @@ public final class UIServerRuntimeImpl extends BaseLifecycleComponent implements
         request.setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE,
                              request.getContextPath() + request.getServletPath() + handler.pathPrefix());
         handler.handle(request, response);
-        return true;
+        return DispatchResult.HANDLED;
     }
 
     // TODO O(n) scan on the dispatch hot path with per-iteration `prefix + "/"` concatenation. Reachable optimisation: build a `Map<String, ApiPathHandler>`

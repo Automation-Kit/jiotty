@@ -8,23 +8,35 @@ import java.io.IOException;
 
 import static net.yudichev.jiotty.user.ui.RequestContextFilter.requestContext;
 
-/// Single servlet handling every `/ui/api/*` request. Body is one line: delegate to [UIServerRuntime#dispatchApiPath]; on miss, write 404. All built-in and
-/// user-registered endpoints live behind [ApiPathHandler]s; this servlet does not switch on method or path.
+/// Single servlet handling every `/ui/api/*` request. Body delegates to [UIServerRuntime#dispatchApiPath] and renders its outcome: a miss writes 404, a
+/// stopped/mid-lifecycle runtime writes a retryable 503. All built-in and user-registered endpoints live behind [ApiPathHandler]s; this servlet does not switch
+/// on method or path.
 final class ApiServlet extends HttpServlet {
 
     @Override
     protected void service(HttpServletRequest request, HttpServletResponse response) {
-        if (!requestContext(request).uiServerRuntime().dispatchApiPath(request, response)) {
-            writeUnknownPath(response);
+        switch (requestContext(request).uiServerRuntime().dispatchApiPath(request, response)) {
+            case HANDLED -> {}
+            case NOT_FOUND -> writeUnknownPath(response);
+            case UNAVAILABLE -> writeUnavailable(response);
         }
     }
 
     static void writeUnknownPath(HttpServletResponse response) {
-        response.setStatus(404);
+        writeError(response, 404, "Unknown path");
+    }
+
+    static void writeUnavailable(HttpServletResponse response) {
+        response.setHeader("Retry-After", "1");
+        writeError(response, 503, "Temporarily unavailable");
+    }
+
+    private static void writeError(HttpServletResponse response, int status, String message) {
+        response.setStatus(status);
         response.setCharacterEncoding("utf-8");
         response.setContentType("application/json");
         try {
-            response.getWriter().print("{\"error\":\"Unknown path\"}");
+            response.getWriter().print("{\"error\":\"" + message + "\"}");
         } catch (IOException e) {
             // Best-effort: response is already failing.
         }

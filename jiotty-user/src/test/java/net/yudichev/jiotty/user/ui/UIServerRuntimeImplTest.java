@@ -2,6 +2,7 @@ package net.yudichev.jiotty.user.ui;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.user.ui.UIServerRuntime.DispatchResult;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /// Tests for the pure request dispatcher [UIServerRuntimeImpl]: handlers are resolved by longest-prefix-wins, the route-name attribute is set before the
-/// handler runs, and prefix validation rejects malformed or colliding prefixes at start.
+/// handler runs, prefix validation rejects malformed or colliding prefixes at start, and a stopped runtime degrades to [DispatchResult#UNAVAILABLE] rather
+/// than throwing.
 @ExtendWith(MockitoExtension.class)
 class UIServerRuntimeImplTest {
     @Mock
@@ -46,17 +48,17 @@ class UIServerRuntimeImplTest {
     }
 
     @Test
-    void dispatchApiPath_noPathInfo_returnsFalse() {
+    void dispatchApiPath_noPathInfo_returnsNotFound() {
         when(request.getPathInfo()).thenReturn(null);
-        assertThat(runtime.dispatchApiPath(request, response)).isFalse();
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.NOT_FOUND);
     }
 
     @Test
-    void dispatchApiPath_noHandlersMatch_returnsFalse(@Mock ApiPathHandler handler) {
+    void dispatchApiPath_noHandlersMatch_returnsNotFound(@Mock ApiPathHandler handler) {
         stubPrefix(handler, "/something");
         runtime = runtimeWith(handler);
         when(request.getPathInfo()).thenReturn("/other");
-        assertThat(runtime.dispatchApiPath(request, response)).isFalse();
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.NOT_FOUND);
         verify(handler, never()).handle(request, response);
     }
 
@@ -65,7 +67,7 @@ class UIServerRuntimeImplTest {
         stubPrefix(handler, "/analytics");
         runtime = runtimeWith(handler);
         when(request.getPathInfo()).thenReturn("/analytics");
-        assertThat(runtime.dispatchApiPath(request, response)).isTrue();
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.HANDLED);
         verify(handler).handle(request, response);
     }
 
@@ -74,7 +76,7 @@ class UIServerRuntimeImplTest {
         stubPrefix(handler, "/analytics");
         runtime = runtimeWith(handler);
         when(request.getPathInfo()).thenReturn("/analytics/reports/iog");
-        assertThat(runtime.dispatchApiPath(request, response)).isTrue();
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.HANDLED);
         verify(handler).handle(request, response);
     }
 
@@ -83,7 +85,7 @@ class UIServerRuntimeImplTest {
         stubPrefix(handler, "/analytics");
         runtime = runtimeWith(handler);
         when(request.getPathInfo()).thenReturn("/analytics-other");
-        assertThat(runtime.dispatchApiPath(request, response)).isFalse();
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.NOT_FOUND);
         verify(handler, never()).handle(request, response);
     }
 
@@ -93,7 +95,7 @@ class UIServerRuntimeImplTest {
         runtime = runtimeWith(handler);
         when(request.getPathInfo()).thenReturn("/analytics/savings");
 
-        assertThat(runtime.dispatchApiPath(request, response)).isTrue();
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.HANDLED);
 
         var inOrder = inOrder(request, handler);
         inOrder.verify(request).setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/ui/api/analytics");
@@ -106,7 +108,7 @@ class UIServerRuntimeImplTest {
         runtime = runtimeWith(handler);
         when(request.getPathInfo()).thenReturn("/other");
 
-        assertThat(runtime.dispatchApiPath(request, response)).isFalse();
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.NOT_FOUND);
         verify(request, never()).setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/ui/api/something");
     }
 
@@ -116,9 +118,21 @@ class UIServerRuntimeImplTest {
         stubPrefix(longHandler, "/analytics/special");
         runtime = runtimeWith(shortHandler, longHandler);
         when(request.getPathInfo()).thenReturn("/analytics/special/foo");
-        assertThat(runtime.dispatchApiPath(request, response)).isTrue();
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.HANDLED);
         verify(longHandler).handle(request, response);
         verify(shortHandler, never()).handle(request, response);
+    }
+
+    @Test
+    void dispatchApiPath_whenStopped_returnsUnavailableWithoutInvokingHandler(@Mock ApiPathHandler handler) {
+        stubPrefix(handler, "/analytics");
+        runtime = runtimeWith(handler);
+        lenient().when(request.getPathInfo()).thenReturn("/analytics");
+
+        runtime.stop();   // mirrors a stopped runtime mid-request
+
+        assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.UNAVAILABLE);
+        verify(handler, never()).handle(request, response);
     }
 
     @Test

@@ -44,6 +44,7 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
@@ -466,6 +467,17 @@ class SseServiceImplTest {
         clock.tick();
 
         verify(onStreamClosed).run();
+    }
+
+    @Test
+    void closeHandleAfterStopIsNoOpAndDoesNotThrow() {
+        var capture = connectSseClient();
+        // Terminate the service's executor, mirroring component shutdown while a stream close is still pending. The returned close handle must then be a silent
+        //  no-op, not a RejectedExecutionException scheduled onto the terminated executor.
+        sseService.stop();
+        clock.tick();
+
+        assertThatCode(() -> capture.closeHandle.get().close()).doesNotThrowAnyException();
     }
 
     @Test
