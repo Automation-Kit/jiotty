@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executor;
 import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -129,6 +130,43 @@ class PostgresqlDestinationImplTest {
         assertThat(rows.getFirst().amount()).isEqualTo(1);
         assertThat(rows.get(1).label()).isEqualTo("second");
         assertThat(rows.get(1).amount()).isEqualTo(2);
+    }
+
+    @Test
+    void queryRunsOnTheSuppliedExecutor() throws Exception {
+        var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
+                                                            "sample",
+                                                            1,
+                                                            List.of(),
+                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                            sampleColumns());
+        var recorder = destination.createRecorder(config, Optional.of("userId"));
+        var reader = destination.createReader(config, Optional.of("userId"));
+        flushExecutor(recordingExecutor);
+        flushExecutor(domainExecutor);
+        flushExecutor(recordingExecutor);
+        recorder.record(Instant.parse("2024-01-01T00:00:00Z"), new SampleRecord("only", 1));
+        flushExecutor(recordingExecutor);
+
+        // A synchronous marking executor: proves the query overload runs the row handling on the supplied executor, not the reader's own recording executor.
+        var ranOnSuppliedExecutor = new boolean[1];
+        Executor suppliedExecutor = command -> {
+            ranOnSuppliedExecutor[0] = true;
+            command.run();
+        };
+        var rows = new ArrayList<SampleRow>();
+        reader.query(suppliedExecutor,
+                     QUERY_TEMPLATE,
+                     _ -> {
+                     },
+                     row -> rows.add(new SampleRow(row.timestampReader().get(), row.rs().getString(2), row.rs().getInt(3))))
+              .get(5, SECONDS);
+
+        assertThat(ranOnSuppliedExecutor[0]).as("query ran on the supplied executor").isTrue();
+        assertThat(rows).singleElement().satisfies(only -> {
+            assertThat(only.label()).isEqualTo("only");
+            assertThat(only.amount()).isEqualTo(1);
+        });
     }
 
     @Test

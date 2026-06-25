@@ -29,6 +29,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.TimeZone;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -56,8 +57,13 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
         this.executorProvider = checkNotNull(executorProvider);
         this.dataSourceFactory = checkNotNull(dataSourceFactory);
         this.persistenceDomainService = checkNotNull(persistenceDomainService);
-        calendar = Calendar.getInstance();
+        calendar = utcCalendar();
+    }
+
+    private static Calendar utcCalendar() {
+        Calendar calendar = Calendar.getInstance();
         calendar.setTimeZone(TimeZone.getTimeZone(ZoneOffset.UTC));
+        return calendar;
     }
 
     @Override
@@ -94,6 +100,9 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     }
 
     private static class SqlBase<R> {
+        /// Rows fetched per server round-trip when streaming a query result. Bounds client memory: with a positive fetch size (and autoCommit off) pgjdbc
+        ///  streams the result set in batches of this many rows instead of buffering the whole thing — see [#doQuery].
+        protected static final int STREAM_FETCH_SIZE = 1000;
         protected static final String TIMESTAMP_COL_NAME = "timestamp";
         protected static final String USER_ID_COL_NAME = "user_id";
         protected static final Pattern TABLE_NAME_PATTERN = Pattern.compile("%TABLE_NAME%");
@@ -130,11 +139,25 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                                       String sql,
                                       ThrowingConsumer<PreparedStatement, SQLException> paramSetter,
                                       ThrowingConsumer<ResultSet, SQLException> resultMapper) {
-            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-                paramSetter.accept(stmt);
-                logger.debug("Executing {}", sql);
-                try (var resultSet = stmt.executeQuery()) {
-                    resultMapper.accept(resultSet);
+            try {
+                boolean originalAutoCommit = connection.getAutoCommit();
+                // pgjdbc streams a result set in STREAM_FETCH_SIZE-row batches only when autoCommit is off and a positive fetch size is set; otherwise it
+                //  buffers the entire result client-side. The query is read-only — we commit purely to close the server-side cursor — and always restore
+                //  autoCommit so the pooled connection returns to its prior mode.
+                connection.setAutoCommit(false);
+                try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                    stmt.setFetchSize(STREAM_FETCH_SIZE);
+                    paramSetter.accept(stmt);
+                    logger.debug("Executing {}", sql);
+                    try (var resultSet = stmt.executeQuery()) {
+                        resultMapper.accept(resultSet);
+                    }
+                    connection.commit();
+                } catch (SQLException e) {
+                    connection.rollback();
+                    throw e;
+                } finally {
+                    connection.setAutoCommit(originalAutoCommit);
                 }
             } catch (SQLException e) {
                 throw new RuntimeException(e);
@@ -273,21 +296,33 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
         public CompletableFuture<Void> query(String queryTemplate,
                                              QueryStmtParamValueSetter paramValueSetter,
                                              ThrowingConsumer<? super QueryResultRow, ? extends SQLException> rowHandler) {
-            return executor.submit(() -> {
+            return query(executor, queryTemplate, paramValueSetter, rowHandler);
+        }
+
+        @Override
+        public CompletableFuture<Void> query(Executor queryExecutor,
+                                             String queryTemplate,
+                                             QueryStmtParamValueSetter paramValueSetter,
+                                             ThrowingConsumer<? super QueryResultRow, ? extends SQLException> rowHandler) {
+            return CompletableFuture.runAsync(() -> {
+                // The shared `calendar` is safe to reuse only when the query runs on the recording executor, where it is already confined alongside the
+                //  recorder. On any other executor the recorder keeps mutating it concurrently and java.util.Calendar is not thread-safe, so use a fresh one.
+                Calendar queryCalendar = queryExecutor == executor ? calendar : utcCalendar();
                 var sql = resolveSql(queryTemplate);
                 try (var connection = dataSource.getConnection()) {
                     doQuery(connection,
                             sql,
-                            ps -> paramValueSetter.set(new Reader.QueryStmtParamValueSetter.Input(calendar, connection, ps)),
+                            ps -> paramValueSetter.set(new Reader.QueryStmtParamValueSetter.Input(queryCalendar, connection, ps)),
                             rs -> {
                                 while (rs.next()) {
-                                    rowHandler.accept(new Reader.QueryResultRow(calendar, connection, rs, () -> rs.getTimestamp(1, calendar).toInstant()));
+                                    rowHandler.accept(new Reader.QueryResultRow(queryCalendar, connection, rs,
+                                                                                () -> rs.getTimestamp(1, queryCalendar).toInstant()));
                                 }
                             });
                 } catch (SQLException e) {
                     logger.warn("Failed executing query, sql was {}", sql, e);
                 }
-            });
+            }, queryExecutor);
         }
     }
 
