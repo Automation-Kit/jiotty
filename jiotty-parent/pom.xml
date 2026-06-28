@@ -96,6 +96,14 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- In-JVM Moquette MQTT broker for MQTT integration tests: a real MQTT broker started in-process (no Docker), mirroring the embedded-postgres
+                 idiom above. Test scope only. -->
+            <dependency>
+                <groupId>io.moquette</groupId>
+                <artifactId>moquette-broker</artifactId>
+                <version>0.17</version>
+                <scope>test</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
     <build>

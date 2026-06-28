@@ -6,7 +6,6 @@ import net.yudichev.jiotty.common.async.AsyncOperationFailureHandler;
 import net.yudichev.jiotty.common.async.AsyncOperationRetry;
 import net.yudichev.jiotty.common.async.AsyncOperationRetryImpl;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
-import net.yudichev.jiotty.common.async.Scheduler;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -141,7 +140,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                                              }
                                              return future;
                                          },
-                                         (delayMillis, runnable) -> scheduleReconnect(executor, delayMillis, runnable));
+                                         MqttImpl::scheduleReconnect);
             try {
                 waitForConnectFutureAndThen(connectFuture, () -> logger.info("Connected to {}", client.getServerURI()));
             } catch (InterruptedException e) {
@@ -167,8 +166,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         closeIfNotNull(executor); // after client shutdown because, while active, the client may still invoke callbacks which schedule tasks
     }
 
-    // overridable for tests
-    void scheduleReconnect(Scheduler scheduler, Long delayMillis, Runnable runnable) {
+    static void scheduleReconnect(Long delayMillis, Runnable runnable) {
         // must block the task, so that all user actions queue after start()
         if (delayMillis > 0) {
             asUnchecked(() -> Thread.sleep(delayMillis));
@@ -176,8 +174,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         runnable.run();
     }
 
-    // overridable for tests
-    void waitForConnectFutureAndThen(CompletableFuture<Void> connectFuture, Runnable whenDone) throws InterruptedException, ExecutionException {
+    static void waitForConnectFutureAndThen(CompletableFuture<Void> connectFuture, Runnable whenDone) throws InterruptedException, ExecutionException {
         // must block the task, so that all user actions queue after start()
         connectFuture.get();
         whenDone.run();
@@ -190,17 +187,14 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         var subscription = new Subscription(qos, callback);
         executor.execute(() -> {
             deliverImage(topicFilter, callback);
-            subscriptionsByFilter.computeIfAbsent(topicFilter, filter -> {
-                doSubscribe(filter,
-                            2,
-                            (topic, message) -> {
-                                Set<Subscription> subscriptions = subscriptionsByFilter.get(filter);
-                                if (subscriptions != null && !subscriptions.isEmpty()) {
-                                    runForAll(subscriptions, sub -> sub.accept(topic, message));
-                                }
-                            });
-                return new HashSet<>();
-            }).add(subscription);
+            Set<Subscription> subscriptions = subscriptionsByFilter.computeIfAbsent(topicFilter, _ -> new HashSet<>());
+            boolean firstForFilter = subscriptions.isEmpty();
+            subscriptions.add(subscription);
+            // Only the first subscriber to a filter issues the broker SUBSCRIBE; later subscribers are served the last value via deliverImage above and the
+            // shared fan-out listener. Subscribing again per subscriber would re-deliver the retained message to the existing ones.
+            if (firstForFilter) {
+                ensureBrokerSubscription(topicFilter);
+            }
         });
 
         return idempotent(() -> {
@@ -220,6 +214,9 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                                     logger.log(started ? Level.WARN : Level.DEBUG, "Failed to unsubscribe", started ? e : null);
                                 }
                             }
+                            // No subscribers remain for this filter, so drop its cached last-message images; otherwise a later re-subscribe would replay a
+                            // stale value via deliverImage before the broker redelivers the current retained message.
+                            lastReceivedMessageByTopic.keySet().removeIf(topic -> MqttTopic.isMatched(topicFilter, topic));
                             return null;
                         }
                         return subscriptions;
@@ -252,10 +249,28 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         };
     }
 
+    /// Subscribes the broker to `filter` with a single fan-out listener that dispatches each message to every current subscriber of the filter, at the
+    /// strongest subscriber's qos. Called both for the first local subscription to a filter and when restoring all subscriptions after a reconnect, so the
+    /// broker holds exactly one listener per filter (Paho keys listeners by filter, overwriting on re-subscribe) and the same qos on both paths.
+    private void ensureBrokerSubscription(String filter) {
+        int qos = subscriptionsByFilter.get(filter).stream().mapToInt(Subscription::qos).max().orElseThrow();
+        doSubscribe(filter, qos, (topic, message) -> {
+            Set<Subscription> subscriptions = subscriptionsByFilter.get(filter);
+            if (subscriptions != null && !subscriptions.isEmpty()) {
+                runForAll(subscriptions, sub -> sub.accept(topic, message));
+            }
+        });
+    }
+
     private void doSubscribe(String topicFilter, int qos, BiConsumer<String, MqttMessage> callback) {
         asUnchecked(() -> client.subscribe(topicFilter, qos, (topic, message) -> {
             logger.debug("IN topic: {}, msg: {}", topic, message);
-            executor.execute(() -> callback.accept(topic, message));
+            executor.execute(() -> {
+                // Cache every received message so a later subscriber to the same filter gets the last value via deliverImage. This is the live dispatch
+                // path for every subscription (initial and restored on reconnect), so it sees retained messages the broker redelivers on subscribe.
+                lastReceivedMessageByTopic.put(topic, message);
+                callback.accept(topic, message);
+            });
         }));
     }
 
@@ -311,10 +326,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
             // executor thread
             logger.info("Restoring subscriptions: {}", subscriptionsByFilter);
             try {
-                subscriptionsByFilter.forEach((topicFilter, subscriptions) ->
-                                                      subscriptions.forEach(subscription -> doSubscribe(topicFilter,
-                                                                                                        subscription.qos(),
-                                                                                                        subscription.dataCallback())));
+                subscriptionsByFilter.keySet().forEach(MqttImpl.this::ensureBrokerSubscription);
                 backOff.reset();
             } catch (RuntimeException e) {
                 long nextRetryInMs = backOff.nextBackOffMillis();
@@ -335,10 +347,9 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
 
         @Override
         public void messageArrived(String topic, MqttMessage message) {
-            executor.execute(() -> {
-                logger.debug("messageArrived: {}->{}", topic, message);
-                lastReceivedMessageByTopic.put(topic, message);
-            });
+            // Per-topic listeners registered in doSubscribe receive all subscribed traffic and populate the last-message cache; this connection-wide
+            // callback fires only for a topic with no matching listener — the brief unsubscribe-teardown window — so there is nothing to cache here.
+            logger.debug("messageArrived with no matching subscription: {}->{}", topic, message);
         }
 
         @Override

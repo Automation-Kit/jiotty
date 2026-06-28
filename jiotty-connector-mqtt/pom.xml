@@ -68,6 +68,12 @@
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
         </dependency>
+        <!-- Real in-JVM MQTT broker for the integration tests (MqttImplIntegrationTest). -->
+        <dependency>
+            <groupId>io.moquette</groupId>
+            <artifactId>moquette-broker</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
