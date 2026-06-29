@@ -1,13 +1,20 @@
 package net.yudichev.jiotty.security;
 
-import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
-import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.rest.JavalinRestServer;
+import com.google.common.collect.ImmutableMap;
+import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.security.AuthState;
-import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStoreEncryption;
-import org.junit.jupiter.api.AfterEach;
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.FormBody;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Protocol;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,15 +22,17 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.LinkedBlockingQueue;
 
-import static java.util.concurrent.TimeUnit.SECONDS;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_INITIAL_INTERVAL;
+import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_MAX_ELAPSED_TIME;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class OAuth2TokenManagerImplTest {
@@ -31,120 +40,106 @@ class OAuth2TokenManagerImplTest {
     private static final String CLIENT_SECRET = "test-client-secret";
     private static final String API_NAME = "testApi";
     private static final String SCOPE = "test-scope";
+    private static final String TOKEN_URL = "http://token-host/token";
     private static final String VAR_STORE_KEY = API_NAME + "Oauth2Token_" + CLIENT_ID + "_" + SCOPE;
     private static final Instant NOW = Instant.parse("2025-01-01T00:00:00Z");
+    private static final MediaType APPLICATION_JSON = MediaType.parse("application/json");
+
+    private final ProgrammableClock clock = new ProgrammableClock();
     private final InMemoryVarStore varStore = new InMemoryVarStore();
+    // Every Request the manager sends, in order, so tests can assert form params / URL on what was actually sent.
+    private final List<Request> requestLog = new ArrayList<>();
+    // The token-endpoint responses delivered to successive requests; the last entry is reused once exhausted, so a streak of retries keeps getting it.
+    private final List<FakeResponse> responses = new ArrayList<>();
+    // Auth states the manager publishes, captured in order (the manager runs on the single-threaded ProgrammableClock executor, so a plain list is safe).
+    private final List<AuthState> authStates = new ArrayList<>();
+    private int responseIndex;
     @Mock
-    private CurrentDateTimeProvider timeProvider;
-    private JavalinRestServer fakeTokenServer;
+    private OkHttpClient httpClient;
+    @Mock
+    private Call call;
     private OAuth2TokenManagerImpl tokenManager;
-    private LinkedBlockingQueue<Map<String, String>> capturedRequests;
-    private LinkedBlockingQueue<FakeResponse> responseQueue;
-    private LinkedBlockingQueue<AuthState> tokenResults;
 
     @BeforeEach
     void setUp() {
-        when(timeProvider.currentInstant()).thenReturn(NOW);
-
-        capturedRequests = new LinkedBlockingQueue<>();
-        responseQueue = new LinkedBlockingQueue<>();
-        tokenResults = new LinkedBlockingQueue<>();
-
-        fakeTokenServer = new JavalinRestServer(0);
-        fakeTokenServer.post("/token", ctx -> {
-            Map<String, String> params = new LinkedHashMap<>();
-            ctx.formParamMap().forEach((key, values) -> {
-                if (!values.isEmpty()) {
-                    params.put(key, values.getFirst());
-                }
-            });
-            capturedRequests.add(params);
-
-            FakeResponse fakeResponse = getAsUnchecked(() -> responseQueue.poll(5, SECONDS));
-            ctx.status(fakeResponse.statusCode());
-            ctx.contentType("application/json");
-            ctx.result(fakeResponse.body());
+        clock.setTimeAndTick(NOW);
+        // Each newCall records the request and returns the shared Call; its enqueue delivers the next stubbed response synchronously (so the whole exchange
+        // runs on the ProgrammableClock thread). lenient(): the valid-stored-token test makes no HTTP call and so never exercises these stubs.
+        lenient().when(httpClient.newCall(any())).thenAnswer(invocation -> {
+            requestLog.add(invocation.getArgument(0));
+            return call;
         });
-        fakeTokenServer.start();
-    }
-
-    @AfterEach
-    void tearDown() {
-        Closeable.closeIfNotNull(
-                () -> {
-                    if (tokenManager != null) {
-                        tokenManager.stop();
-                    }
-                },
-                fakeTokenServer::stop);
+        lenient().doAnswer(invocation -> {
+            Callback callback = invocation.getArgument(0);
+            if (!responses.isEmpty()) {
+                FakeResponse response = responses.get(Math.min(responseIndex++, responses.size() - 1));
+                callback.onResponse(call, fakeResponse(requestLog.getLast(), response.status(), response.body()));
+            }
+            return null;
+        }).when(call).enqueue(any());
     }
 
     @Test
     void authCodeExchange_sendsCorrectFormParamsAndDeliversToken() {
-        createAndStartTokenManager();
-        enqueueSuccessResponse("test-access-token", "test-refresh-token", 3600);
+        respondWithToken("test-access-token", "test-refresh-token", 3600);
+        startTokenManager();
 
         tokenManager.onNewAuthCode("auth-code-123", "http://localhost/callback");
+        clock.tick();
 
-        Map<String, String> params = pollCapturedRequest();
-        assertThat(params).containsEntry("grant_type", "authorization_code")
-                          .containsEntry("code", "auth-code-123")
-                          .containsEntry("redirect_uri", "http://localhost/callback")
-                          .containsEntry("client_id", CLIENT_ID)
-                          .containsEntry("client_secret", CLIENT_SECRET)
-                          .doesNotContainKey("refresh_token")
-                          .doesNotContainKey("code_verifier");
-
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
-                                                             success -> assertThat(success.authInfo()).isEqualTo("test-access-token"));
+        assertThat(formParams(soleRequest())).containsEntry("grant_type", "authorization_code")
+                                             .containsEntry("code", "auth-code-123")
+                                             .containsEntry("redirect_uri", "http://localhost/callback")
+                                             .containsEntry("client_id", CLIENT_ID)
+                                             .containsEntry("client_secret", CLIENT_SECRET)
+                                             .doesNotContainKey("refresh_token")
+                                             .doesNotContainKey("code_verifier");
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("test-access-token"));
     }
 
     @Test
     void authCodeExchange_publicClientWithPkce_sendsCodeVerifierAndOmitsSecret() {
-        createAndStartTokenManager(Optional.empty());
-        enqueueSuccessResponse("at", "rt", 3600);
+        respondWithToken("at", "rt", 3600);
+        startTokenManager(Optional.empty());
 
         tokenManager.onNewAuthCode("auth-code-123", "http://localhost/callback", Optional.of("pkce-verifier"));
+        clock.tick();
 
-        Map<String, String> params = pollCapturedRequest();
-        assertThat(params).containsEntry("grant_type", "authorization_code")
-                          .containsEntry("code", "auth-code-123")
-                          .containsEntry("redirect_uri", "http://localhost/callback")
-                          .containsEntry("client_id", CLIENT_ID)
-                          .containsEntry("code_verifier", "pkce-verifier")
-                          .doesNotContainKey("client_secret");
-
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
-                                                             success -> assertThat(success.authInfo()).isEqualTo("at"));
+        assertThat(formParams(soleRequest())).containsEntry("grant_type", "authorization_code")
+                                             .containsEntry("code", "auth-code-123")
+                                             .containsEntry("redirect_uri", "http://localhost/callback")
+                                             .containsEntry("client_id", CLIENT_ID)
+                                             .containsEntry("code_verifier", "pkce-verifier")
+                                             .doesNotContainKey("client_secret");
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("at"));
     }
 
     @Test
     void refresh_publicClient_omitsClientSecret() {
-        Instant pastRefreshTime = NOW.minusSeconds(60);
-        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", pastRefreshTime));
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", NOW.minusSeconds(60)));
+        respondWithToken("new-at", "new-rt", 7200);
 
-        enqueueSuccessResponse("new-at", "new-rt", 7200);
-        createAndStartTokenManager(Optional.empty());
+        startTokenManager(Optional.empty());
 
-        Map<String, String> params = pollCapturedRequest();
-        assertThat(params).containsEntry("grant_type", "refresh_token")
-                          .containsEntry("refresh_token", "old-rt")
-                          .containsEntry("client_id", CLIENT_ID)
-                          .doesNotContainKey("client_secret");
+        assertThat(formParams(soleRequest())).containsEntry("grant_type", "refresh_token")
+                                             .containsEntry("refresh_token", "old-rt")
+                                             .containsEntry("client_id", CLIENT_ID)
+                                             .doesNotContainKey("client_secret");
     }
 
     @Test
     void authCodeExchange_persistsTokenToVarStore() {
-        createAndStartTokenManager();
-        enqueueSuccessResponse("at-1", "rt-1", 3600);
+        respondWithToken("at-1", "rt-1", 3600);
+        startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://redirect");
-        pollTokenResult();
+        clock.tick();
 
         // expires_in=3600, refreshTime = NOW + 3600 * 8 / 10 = NOW + 2880
-        Instant expectedRefreshTime = NOW.plusSeconds(2880);
         assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY))
-                .hasValue(OauthAccessToken.of("at-1", "rt-1", expectedRefreshTime));
+                .hasValue(OauthAccessToken.of("at-1", "rt-1", NOW.plusSeconds(2880)));
         // The credential is persisted encrypted at rest, not as plaintext JSON.
         assertThat(varStore.rawStoredValue(VAR_STORE_KEY)).hasValueSatisfying(stored ->
                                                                                       assertThat(VarStoreEncryption.isEnvelope(stored)).as(
@@ -153,141 +148,202 @@ class OAuth2TokenManagerImplTest {
 
     @Test
     void startupWithValidStoredToken_doesNotHitServer() {
-        Instant futureRefreshTime = NOW.plusSeconds(1800);
-        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", futureRefreshTime));
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
 
-        createAndStartTokenManager();
+        startTokenManager();
 
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
-                                                             success -> assertThat(success.authInfo()).isEqualTo("stored-at"));
-        assertThat(capturedRequests).isEmpty();
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("stored-at"));
+        assertThat(requestLog).isEmpty();
     }
 
     @Test
     void startupWithExpiredStoredToken_triggersRefresh() {
-        Instant pastRefreshTime = NOW.minusSeconds(60);
-        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", pastRefreshTime));
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", NOW.minusSeconds(60)));
+        respondWithToken("new-at", "new-rt", 7200);
 
-        enqueueSuccessResponse("new-at", "new-rt", 7200);
-        createAndStartTokenManager();
+        startTokenManager();
 
-        Map<String, String> params = pollCapturedRequest();
-        assertThat(params).containsEntry("grant_type", "refresh_token")
-                          .containsEntry("refresh_token", "old-rt")
-                          .containsEntry("client_id", CLIENT_ID)
-                          .containsEntry("client_secret", CLIENT_SECRET)
-                          .doesNotContainKey("code")
-                          .doesNotContainKey("redirect_uri");
-
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
-                                                             success -> assertThat(success.authInfo()).isEqualTo("new-at"));
+        assertThat(formParams(soleRequest())).containsEntry("grant_type", "refresh_token")
+                                             .containsEntry("refresh_token", "old-rt")
+                                             .containsEntry("client_id", CLIENT_ID)
+                                             .containsEntry("client_secret", CLIENT_SECRET)
+                                             .doesNotContainKey("code")
+                                             .doesNotContainKey("redirect_uri");
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("new-at"));
     }
 
     @Test
     void refreshTimeCalculation_refreshesAtEightyPercentOfLifetime() {
-        createAndStartTokenManager();
-        enqueueSuccessResponse("at", "rt", 1000);
+        respondWithToken("at", "rt", 1000);
+        startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
-        pollTokenResult();
+        clock.tick();
 
         // expires_in=1000, refreshTime = NOW + 1000 * 8 / 10 = NOW + 800
-        Instant expectedRefreshTime = NOW.plusSeconds(800);
         assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY))
-                .hasValue(OauthAccessToken.of("at", "rt", expectedRefreshTime));
+                .hasValue(OauthAccessToken.of("at", "rt", NOW.plusSeconds(800)));
     }
 
     @Test
     void refreshResponse_withoutRefreshToken_keepsPreviousRefreshToken() {
-        Instant pastRefreshTime = NOW.minusSeconds(60);
-        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "original-rt", pastRefreshTime));
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "original-rt", NOW.minusSeconds(60)));
+        responses.add(new FakeResponse(200, """
+                                            {"access_token": "new-at", "expires_in": 3600, "token_type": "Bearer"}"""));
 
-        responseQueue.add(new FakeResponse(200, """
-                                                {"access_token": "new-at", "expires_in": 3600, "token_type": "Bearer"}"""));
-        createAndStartTokenManager();
-        pollTokenResult();
+        startTokenManager();
 
-        Instant expectedRefreshTime = NOW.plusSeconds(2880);
         assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY))
-                .hasValue(OauthAccessToken.of("new-at", "original-rt", expectedRefreshTime));
+                .hasValue(OauthAccessToken.of("new-at", "original-rt", NOW.plusSeconds(2880)));
     }
 
     @Test
     void tokenTypeValidation_acceptsBearerCaseInsensitive() {
-        createAndStartTokenManager();
-        responseQueue.add(new FakeResponse(200, """
-                                                {"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "token_type": "BEARER"}"""));
+        responses.add(new FakeResponse(200, """
+                                            {"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "token_type": "BEARER"}"""));
+        startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
 
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(AuthState.Success.class,
-                                                             success -> assertThat(success.authInfo()).isEqualTo("at"));
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("at"));
     }
 
     @Test
     void tokenTypeValidation_rejectsNonBearerType() {
-        createAndStartTokenManager();
-        responseQueue.add(new FakeResponse(200, """
-                                                {"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "token_type": "MAC"}"""));
+        responses.add(new FakeResponse(200, """
+                                            {"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "token_type": "MAC"}"""));
+        startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
 
-        assertThat(pollTokenResult()).isInstanceOf(AuthState.TransientFailure.class);
+        assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
     }
 
     @Test
     void errorResponse_invalidGrant_notifiesLoginRequired() {
-        createAndStartTokenManager();
-        responseQueue.add(new FakeResponse(400, """
-                                                {"error": "invalid_grant", "error_description": "Token has been revoked"}"""));
+        respondWith(400, """
+                         {"error": "invalid_grant", "error_description": "Token has been revoked"}""");
+        startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
 
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(
+        assertThat(lastAuthState()).isInstanceOfSatisfying(
                 AuthState.PermanentFailure.class,
                 permanentFailure -> assertThat(permanentFailure.description()).isEqualTo("Token has been revoked"));
     }
 
     @Test
     void errorResponse_otherError_notifiesTransientError() {
-        createAndStartTokenManager();
-        responseQueue.add(new FakeResponse(400, """
-                                                {"error": "invalid_client", "error_description": "Client authentication failed"}"""));
+        respondWith(400, """
+                         {"error": "invalid_client", "error_description": "Client authentication failed"}""");
+        startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
 
-        assertThat(pollTokenResult()).isInstanceOfSatisfying(
+        assertThat(lastAuthState()).isInstanceOfSatisfying(
                 AuthState.TransientFailure.class,
                 transientFailure -> assertThat(transientFailure.description()).isEqualTo("Client authentication failed"));
     }
 
-    private void createAndStartTokenManager() {
-        createAndStartTokenManager(Optional.of(CLIENT_SECRET));
+    @Test
+    void tokenRequestFailure_retriesAndRecoversOnNextAttempt() {
+        // A token whose lifetime is too short to schedule a refresh before it expires makes the first attempt fail; the retry then gets a healthy token.
+        respondWithToken("at-fail", "rt", 10);
+        respondWithToken("at-ok", "rt", 3600);
+        startTokenManager();
+
+        tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
+
+        assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
+
+        // The retry is scheduled one (randomised) initial interval out; doubling it clears the +50% jitter ceiling so the retry reliably fires.
+        clock.advanceTimeAndTick(TOKEN_RETRY_INITIAL_INTERVAL.multipliedBy(2));
+
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("at-ok"));
+        // the endpoint was hit twice: the initial failed attempt and the successful retry
+        assertThat(requestLog).hasSize(2);
     }
 
-    private void createAndStartTokenManager(Optional<String> clientSecret) {
-        tokenManager = new OAuth2TokenManagerImpl(
-                new ExecutorFactoryImpl(), timeProvider, varStore,
-                CLIENT_ID, clientSecret, API_NAME,
-                "http://localhost:" + fakeTokenServer.port() + "/token",
-                SCOPE);
+    @Test
+    void tokenRequestFailure_keepsFailing_givesUpWithPermanentFailure() {
+        // Every attempt returns a token too short-lived to use, so the attempts keep failing until the retry budget is exhausted.
+        respondWithToken("at", "rt", 10);
+        startTokenManager();
+
+        tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
+        assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
+
+        // Advancing well past the retry budget (its max elapsed time) lets the scheduled retries run until one finds the budget exhausted and escalates to a
+        // re-auth prompt; doubling the window leaves ample room for the randomised, growing retry intervals to cross the threshold.
+        clock.advanceTimeAndTick(TOKEN_RETRY_MAX_ELAPSED_TIME.multipliedBy(2));
+
+        assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+    }
+
+    private void startTokenManager() {
+        startTokenManager(Optional.of(CLIENT_SECRET));
+    }
+
+    private void startTokenManager(Optional<String> clientSecret) {
+        tokenManager = new OAuth2TokenManagerImpl(clock, clock, varStore, CLIENT_ID, clientSecret, API_NAME, TOKEN_URL, SCOPE) {
+            @Override
+            OkHttpClient createHttpClient() {
+                return httpClient;
+            }
+        };
         tokenManager.start();
-        tokenManager.subscribeToAccessTokenState(tokenResults::add);
+        tokenManager.subscribeToAccessTokenState(authStates::add);
+        clock.tick();
     }
 
-    private void enqueueSuccessResponse(String accessToken, String refreshToken, int expiresIn) {
-        responseQueue.add(new FakeResponse(200, """
-                                                {"access_token": "%s", "refresh_token": "%s", "expires_in": %d, "token_type": "Bearer"}"""
+    private void respondWithToken(String accessToken, String refreshToken, int expiresIn) {
+        responses.add(new FakeResponse(200, """
+                                            {"access_token": "%s", "refresh_token": "%s", "expires_in": %d, "token_type": "Bearer"}"""
                 .formatted(accessToken, refreshToken, expiresIn)));
     }
 
-    private Map<String, String> pollCapturedRequest() {
-        return getAsUnchecked(() -> capturedRequests.poll(5, SECONDS));
+    private void respondWith(int status, String body) {
+        responses.add(new FakeResponse(status, body));
     }
 
-    private AuthState pollTokenResult() {
-        return getAsUnchecked(() -> tokenResults.poll(5, SECONDS));
+    private Request soleRequest() {
+        assertThat(requestLog).hasSize(1);
+        return requestLog.getFirst();
     }
 
-    private record FakeResponse(int statusCode, String body) {}
+    private AuthState lastAuthState() {
+        assertThat(authStates).isNotEmpty();
+        return authStates.getLast();
+    }
+
+    private static Map<String, String> formParams(Request request) {
+        var body = (FormBody) checkNotNull(request.body());
+        var paramsByName = ImmutableMap.<String, String>builderWithExpectedSize(body.size());
+        for (int i = 0; i < body.size(); i++) {
+            paramsByName.put(body.name(i), body.value(i));
+        }
+        return paramsByName.build();
+    }
+
+    private static Response fakeResponse(Request request, int status, String json) {
+        return new Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(status)
+                .message(status == 200 ? "OK" : "Error")
+                .body(ResponseBody.create(json, APPLICATION_JSON))
+                .build();
+    }
+
+    private record FakeResponse(int status, String body) {}
 }

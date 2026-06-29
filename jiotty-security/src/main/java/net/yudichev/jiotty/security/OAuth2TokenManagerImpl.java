@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.security;
 
+import com.google.common.annotations.VisibleForTesting;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -9,6 +10,8 @@ import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.lang.backoff.BackOff;
+import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
@@ -37,6 +40,7 @@ import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.Math.toIntExact;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.logErrorOnFailure;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
@@ -49,8 +53,13 @@ import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
 public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OAuth2TokenManager {
+    // Backoff schedule for retrying a failed token request before escalating to PermanentFailure.
+    @VisibleForTesting
+    static final Duration TOKEN_RETRY_INITIAL_INTERVAL = Duration.ofSeconds(5);
+    @VisibleForTesting
+    static final Duration TOKEN_RETRY_MAX_ELAPSED_TIME = Duration.ofMinutes(10);
+    private static final Duration TOKEN_RETRY_MAX_INTERVAL = Duration.ofMinutes(1);
     protected final Logger logger = LogManager.getLogger(getClass());
-
     protected final String clientId;
     protected final String apiName;
     protected final String scope;
@@ -65,6 +74,11 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     protected SchedulingExecutor executor;
     private OkHttpClient httpClient;
     private OauthAccessToken currentToken;
+    /// Backoff governing token-request retries, armed on the first failure of a streak and consulted on each subsequent failure. Confined to [#executor].
+    private BackOff tokenRequestBackOff;
+    /// Whether a token-request retry streak is in progress, so the first failure of a streak arms [#tokenRequestBackOff] and a success ends it. Confined to
+    /// [#executor].
+    private boolean retryingTokenRequest;
 
     @Inject
     public OAuth2TokenManagerImpl(ExecutorFactory executorFactory,
@@ -88,8 +102,15 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     @Override
     protected void doStart() {
-        httpClient = newClient();
+        httpClient = createHttpClient();
         executor = executorFactory.createSingleThreadedSchedulingExecutor(apiName + "-oauth2");
+        // The backoff reads elapsed time through the injected clock (so tests drive it deterministically via ProgrammableClock), not the wall clock.
+        tokenRequestBackOff = new ExponentialBackOff.Builder()
+                .setInitialIntervalMillis(toIntExact(TOKEN_RETRY_INITIAL_INTERVAL.toMillis()))
+                .setMaxIntervalMillis(toIntExact(TOKEN_RETRY_MAX_INTERVAL.toMillis()))
+                .setMaxElapsedTimeMillis(toIntExact(TOKEN_RETRY_MAX_ELAPSED_TIME.toMillis()))
+                .setNanoClock(currentDateTimeProvider)
+                .build();
         varStore.readValueEncrypted(OauthAccessToken.class, varStoreKey)
                 .ifPresentOrElse(accessToken -> {
                                      if (isExpired(accessToken)) {
@@ -104,6 +125,12 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     protected void obtainAccessToken() {
         logger.info("[{}] No valid access token, awaiting login authCode ", apiName);
+    }
+
+    /// Creates the HTTP client used for token requests. Overridden in tests to inject a deterministic fake.
+    @VisibleForTesting
+    OkHttpClient createHttpClient() {
+        return newClient();
     }
 
     @Override
@@ -210,8 +237,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                executor)
               .exceptionallyAsync(exception -> {
                   logger.info("[{}] failed to obtain token", apiName, exception);
-                  listeners.notify(new AuthState.TransientFailure(HumanReadableExceptionMessage.humanReadableMessage(
-                          exception)));
+                  retryTokenRequestOrGiveUp(formBody, fallbackRefreshToken, HumanReadableExceptionMessage.humanReadableMessage(exception));
                   return null;
               }, executor)
               .whenComplete(logErrorOnFailure(logger, "[%s] Unhandled exception", apiName));
@@ -223,7 +249,32 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         OauthAccessToken token = responseToToken(requestTime, response, fallbackRefreshToken);
         varStore.saveValueEncrypted(varStoreKey, token);
         setCurrentToken(token);
+        retryingTokenRequest = false;
         scheduleTokenRefresh();
+    }
+
+    /// Reschedules a failed token request after a backoff delay, or — once [#tokenRequestBackOff]'s maximum elapsed time is reached — gives up and escalates to
+    /// [AuthState.PermanentFailure]. This is the only path that re-drives a request after a failure ([#scheduleTokenRefresh] schedules the routine refresh
+    /// solely on success), so a token-endpoint failure keeps being retried here until it recovers or is escalated. The backoff is armed on the first failure of
+    /// a streak; a later success ([#handleSuccessResponse]) ends the streak.
+    ///
+    /// @param fallbackRefreshToken the refresh token re-sent on each retry, or `null` when retrying an initial authorization-code exchange (which carries no
+    ///  prior refresh token)
+    private void retryTokenRequestOrGiveUp(RequestBody formBody, @Nullable String fallbackRefreshToken, String description) {
+        if (!retryingTokenRequest) {
+            retryingTokenRequest = true;
+            tokenRequestBackOff.reset();
+        }
+        long backOffMillis = tokenRequestBackOff.nextBackOffMillis();
+        if (backOffMillis == BackOff.STOP) {
+            retryingTokenRequest = false;
+            logger.info("[{}] giving up obtaining token after retrying for {}ms: {}", apiName, tokenRequestBackOff.getMaxElapsedTimeMillis(), description);
+            listeners.notify(new AuthState.PermanentFailure(description));
+        } else {
+            logger.info("[{}] token request failed ({}); retrying in {}ms", apiName, description, backOffMillis);
+            listeners.notify(new AuthState.TransientFailure(description));
+            executor.schedule(Duration.ofMillis(backOffMillis), () -> requestToken(formBody, fallbackRefreshToken));
+        }
     }
 
     private void validateTokenType(OauthAccessTokenResponse response) {
