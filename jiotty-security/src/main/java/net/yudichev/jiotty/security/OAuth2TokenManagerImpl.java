@@ -7,7 +7,6 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
-import net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
@@ -42,7 +41,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.Math.toIntExact;
 import static java.nio.charset.StandardCharsets.US_ASCII;
-import static net.yudichev.jiotty.common.lang.CompletableFutures.logErrorOnFailure;
+import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
@@ -231,16 +230,38 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
             }
         });
 
-        future.thenAcceptAsync(responseEither -> responseEither.accept(
-                                       successResponse -> handleSuccessResponse(requestTime, successResponse, fallbackRefreshToken),
-                                       this::handleErrorResponse),
-                               executor)
-              .exceptionallyAsync(exception -> {
-                  logger.info("[{}] failed to obtain token", apiName, exception);
-                  retryTokenRequestOrGiveUp(formBody, fallbackRefreshToken, HumanReadableExceptionMessage.humanReadableMessage(exception));
-                  return null;
-              }, executor)
-              .whenComplete(logErrorOnFailure(logger, "[%s] Unhandled exception", apiName));
+        // Marshal the completed request back onto the executor under the lifecycle lock: if the component stopped while the request was in flight, orphaned response is dropped instead of being rejected by the dead executor.
+        future.whenComplete((responseEither, throwable) ->
+                                    whenNotLifecycling(() -> {
+                                        if (isStarted()) {
+                                            executor.execute(() -> handleTokenResponse(requestTime, formBody, fallbackRefreshToken, responseEither, throwable));
+                                        }
+                                    }));
+    }
+
+    /// Handles a completed token request on [#executor]: a successful response goes to [#handleSuccessResponse], an OAuth error to [#handleErrorResponse], and
+    /// any failure — a transport error, or an exception thrown while processing the response — to [#retryTokenRequestOrGiveUp].
+    ///
+    /// @param responseEither the parsed token response, or `null` when the request failed in transport (then `throwable` is set)
+    /// @param throwable      the transport failure, or `null` when the request produced a `responseEither`
+    private void handleTokenResponse(Instant requestTime,
+                                     RequestBody formBody,
+                                     @Nullable String fallbackRefreshToken,
+                                     @Nullable Either<OauthAccessTokenResponse, OauthErrorResponse> responseEither,
+                                     @Nullable Throwable throwable) {
+        Throwable failure = throwable;
+        if (failure == null) {
+            try {
+                assert responseEither != null;
+                responseEither.accept(successResponse -> handleSuccessResponse(requestTime, successResponse, fallbackRefreshToken),
+                                      this::handleErrorResponse);
+                return;
+            } catch (RuntimeException e) {
+                failure = e;
+            }
+        }
+        logger.info("[{}] failed to obtain token", apiName, failure);
+        retryTokenRequestOrGiveUp(formBody, fallbackRefreshToken, humanReadableMessage(failure));
     }
 
     private void handleSuccessResponse(Instant requestTime, OauthAccessTokenResponse response, @Nullable String fallbackRefreshToken) {
@@ -287,10 +308,14 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     private void handleErrorResponse(OauthErrorResponse errorResponse) {
         String description = errorResponse.errorDescription().orElse(errorResponse.error());
         logger.info("[{}] token request failed: {} ({})", apiName, errorResponse.error(), description);
-        AuthState failure = "invalid_grant".equals(errorResponse.error())
-                            ? new AuthState.PermanentFailure(description)
-                            : new AuthState.TransientFailure(description);
-        listeners.notify(failure);
+        if ("invalid_grant".equals(errorResponse.error())) {
+            retryingTokenRequest = false;
+            // The stored credential is no longer accepted; drop it so a later re-authentication starts clean instead of refreshing the dead token
+            varStore.clearValue(varStoreKey);
+            listeners.notify(new AuthState.PermanentFailure(description));
+        } else {
+            listeners.notify(new AuthState.TransientFailure(description));
+        }
     }
 
     private OauthAccessToken responseToToken(Instant currentTime, OauthAccessTokenResponse response, @Nullable String fallbackRefreshToken) {

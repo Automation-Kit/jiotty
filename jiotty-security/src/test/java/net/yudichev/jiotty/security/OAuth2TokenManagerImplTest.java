@@ -15,12 +15,14 @@ import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,6 +30,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_INITIAL_INTERVAL;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_MAX_ELAPSED_TIME;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,6 +47,8 @@ class OAuth2TokenManagerImplTest {
     private static final String VAR_STORE_KEY = API_NAME + "Oauth2Token_" + CLIENT_ID + "_" + SCOPE;
     private static final Instant NOW = Instant.parse("2025-01-01T00:00:00Z");
     private static final MediaType APPLICATION_JSON = MediaType.parse("application/json");
+    /// Sentinel stub: the enqueue answer delivers it as an okhttp transport failure ([Callback#onFailure]) rather than an HTTP response.
+    private static final FakeResponse TRANSPORT_FAILURE = new FakeResponse(-1, "");
 
     private final ProgrammableClock clock = new ProgrammableClock();
     private final InMemoryVarStore varStore = new InMemoryVarStore();
@@ -54,6 +59,11 @@ class OAuth2TokenManagerImplTest {
     // Auth states the manager publishes, captured in order (the manager runs on the single-threaded ProgrammableClock executor, so a plain list is safe).
     private final List<AuthState> authStates = new ArrayList<>();
     private int responseIndex;
+    // Set while the manager is starting (and by the stopped-manager test): the okhttp callback is captured rather than answered synchronously, so the response
+    // lands after start() returns — mirroring the real async okhttp call, which never completes mid-doStart.
+    private boolean captureOnly;
+    private @Nullable Callback pendingCallback;
+    private @Nullable Request pendingRequest;
     @Mock
     private OkHttpClient httpClient;
     @Mock
@@ -63,17 +73,20 @@ class OAuth2TokenManagerImplTest {
     @BeforeEach
     void setUp() {
         clock.setTimeAndTick(NOW);
-        // Each newCall records the request and returns the shared Call; its enqueue delivers the next stubbed response synchronously (so the whole exchange
-        // runs on the ProgrammableClock thread). lenient(): the valid-stored-token test makes no HTTP call and so never exercises these stubs.
+        // Each newCall records the request and returns the shared Call; its enqueue answers with the next stubbed response (synchronously by default, or
+        // captured for later when captureOnly is set). lenient(): the valid-stored-token test makes no HTTP call and so never exercises these stubs.
         lenient().when(httpClient.newCall(any())).thenAnswer(invocation -> {
             requestLog.add(invocation.getArgument(0));
             return call;
         });
         lenient().doAnswer(invocation -> {
             Callback callback = invocation.getArgument(0);
-            if (!responses.isEmpty()) {
-                FakeResponse response = responses.get(Math.min(responseIndex++, responses.size() - 1));
-                callback.onResponse(call, fakeResponse(requestLog.getLast(), response.status(), response.body()));
+            Request request = requestLog.getLast();
+            if (captureOnly) {
+                pendingCallback = callback;
+                pendingRequest = request;
+            } else {
+                deliver(callback, request);
             }
             return null;
         }).when(call).enqueue(any());
@@ -290,6 +303,48 @@ class OAuth2TokenManagerImplTest {
         assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
     }
 
+    @Test
+    void transportFailure_reportedAsTransientFailure() {
+        respondWithTransportFailure();
+        startTokenManager();
+
+        tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
+
+        assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
+    }
+
+    @Test
+    void invalidGrantOnStoredTokenRefresh_clearsStoredTokenSoReconnectStartsClean() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", NOW.minusSeconds(60)));
+        respondWith(400, """
+                         {"error": "invalid_grant", "error_description": "Token has been expired or revoked."}""");
+
+        // start() refreshes the expired stored token, which Google rejects as invalid_grant
+        startTokenManager();
+
+        assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+        // the dead credential is dropped, so a later reconnect's startup finds no token to refresh (no doomed refresh racing the fresh auth-code exchange)
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+    }
+
+    @Test
+    void tokenResponseAfterStop_isDroppedWithoutPublishingState() {
+        respondWithToken("at", "rt", 3600);
+        startTokenManager();
+
+        captureOnly = true;
+        tokenManager.onNewAuthCode("code", "http://r");
+        captureOnly = false;
+        tokenManager.stop();
+
+        // the in-flight request's callback lands after the component stopped (e.g. the integration was torn down); it must be dropped, not processed
+        deliverPending();
+        clock.tick();
+
+        assertThat(authStates).noneMatch(AuthState.Success.class::isInstance);
+    }
+
     private void startTokenManager() {
         startTokenManager(Optional.of(CLIENT_SECRET));
     }
@@ -301,9 +356,37 @@ class OAuth2TokenManagerImplTest {
                 return httpClient;
             }
         };
+        // A token request issued during start() (refreshing an expired stored token) is answered only after start() returns — mirroring the real async okhttp
+        // call, which never lands mid-doStart — so the component is fully started when the response arrives.
+        captureOnly = true;
         tokenManager.start();
+        captureOnly = false;
         tokenManager.subscribeToAccessTokenState(authStates::add);
+        if (pendingCallback != null) {
+            deliverPending();
+        }
         clock.tick();
+    }
+
+    private void deliver(Callback callback, Request request) {
+        if (responses.isEmpty()) {
+            return;
+        }
+        FakeResponse response = responses.get(Math.min(responseIndex++, responses.size() - 1));
+        asUnchecked(() -> {
+            if (response == TRANSPORT_FAILURE) {
+                callback.onFailure(call, new IOException("simulated transport failure"));
+            } else {
+                callback.onResponse(call, fakeResponse(request, response.status(), response.body()));
+            }
+        });
+    }
+
+    /// Answers the request captured while [#captureOnly] was set (one issued during start, or in the stopped-manager test).
+    private void deliverPending() {
+        deliver(checkNotNull(pendingCallback), checkNotNull(pendingRequest));
+        pendingCallback = null;
+        pendingRequest = null;
     }
 
     private void respondWithToken(String accessToken, String refreshToken, int expiresIn) {
@@ -314,6 +397,10 @@ class OAuth2TokenManagerImplTest {
 
     private void respondWith(int status, String body) {
         responses.add(new FakeResponse(status, body));
+    }
+
+    private void respondWithTransportFailure() {
+        responses.add(TRANSPORT_FAILURE);
     }
 
     private Request soleRequest() {
