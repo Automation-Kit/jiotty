@@ -28,5 +28,4 @@ public final class StandardOptionDtos {
 
     public record Location(String type, String key, String label, String tabName, int order, @Nullable LatLon value)
             implements OptionDto {}
-
 }

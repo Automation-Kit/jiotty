@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.user.ui;
 
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
 import org.junit.jupiter.api.BeforeEach;
@@ -189,7 +190,7 @@ class StatusHistoryDisplayableTest {
                 10,
                 String::valueOf,
                 _ -> customTime,
-                (status, appender) -> appender.append(status.status()),
+                (status, appendable) -> Append.to(appendable, status.status()),
                 (_, _) -> CompletableFuture.completedFuture(null),
                 HistoryDisplayableDto.Format.PLAIN_TEXT);
 
@@ -212,7 +213,7 @@ class StatusHistoryDisplayableTest {
                 10,
                 String::valueOf,
                 DeviceStatus::lastChanged,
-                (status, appender) -> appender.append(status.status()),
+                (status, appendable) -> Append.to(appendable, status.status()),
                 (downloadId, resp) -> {
                     handlerCalled.set(true);
                     assertThat(downloadId).isEqualTo("dl-1");

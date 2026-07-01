@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.persistence.recording;
 
 import jakarta.servlet.http.HttpServletResponse;
-import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.time.DateTimeUtils;
 import net.yudichev.jiotty.user.ui.HistoryDisplayableDto;
 import net.yudichev.jiotty.user.ui.UIServer;
@@ -20,7 +19,7 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
         default void initialise(DateTimeUtils.Formatter dateTimeFormatter) {
         }
 
-        void render(R recordable, Appender target);
+        void render(R recordable, Appendable appendable);
     }
 
     record UIConfig<R>(UIServer uiServer,

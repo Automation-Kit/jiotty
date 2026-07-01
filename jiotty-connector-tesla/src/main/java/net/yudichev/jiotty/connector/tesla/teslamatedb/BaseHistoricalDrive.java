@@ -8,7 +8,7 @@ import org.immutables.value.Value.Immutable;
 import java.time.Duration;
 import java.time.Instant;
 
-import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
+import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 
 @Immutable
 @PublicImmutablesStyle
@@ -34,9 +34,9 @@ abstract class BaseHistoricalDrive {
 
     public String toString() {
         var sb = new StringBuilder(128).append("HistoricalDrive{").append(id()).append(',');
-        redacted(startLocation()).formatTo(sb);
+        appendRedacted(sb, startLocation());
         sb.append('@').append(startInstant()).append(' ').append(startSoC()).append("% -> ");
-        redacted(endLocation()).formatTo(sb);
+        appendRedacted(sb, endLocation());
         return sb.append('@').append(endInstant()).append(' ').append(endSoC()).append('%').toString();
     }
 }

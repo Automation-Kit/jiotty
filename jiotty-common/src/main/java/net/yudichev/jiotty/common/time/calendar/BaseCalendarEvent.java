@@ -5,7 +5,7 @@ import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import java.time.temporal.Temporal;
 import java.util.Optional;
 
-import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
+import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 import static org.immutables.value.Value.Immutable;
 
 @Immutable
@@ -24,15 +24,15 @@ abstract class BaseCalendarEvent {
     @Override
     public String toString() {
         var builder = new StringBuilder(64).append("CalendarEvent{");
-        redacted(summary()).formatTo(builder);
+        appendRedacted(builder, summary());
         builder.append(' ').append(start()).append("...").append(end());
         location().ifPresent(loc -> {
             builder.append(" @ ");
-            redacted(loc).formatTo(builder);
+            appendRedacted(builder, loc);
         });
         description().ifPresent(desc -> {
             builder.append(" (");
-            redacted(desc).formatTo(builder);
+            appendRedacted(builder, desc);
             builder.append(')');
         });
         return builder.append('}').toString();

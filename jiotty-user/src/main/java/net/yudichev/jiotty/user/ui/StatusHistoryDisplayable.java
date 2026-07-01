@@ -2,7 +2,7 @@ package net.yudichev.jiotty.user.ui;
 
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import jakarta.servlet.http.HttpServletResponse;
-import net.yudichev.jiotty.common.lang.Appender;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Listeners;
@@ -32,7 +32,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
     private final String title;
     private final Function<K, String> keyToKeyTitle;
     private final Function<DeviceStatus<T>, Instant> statusToEventTime;
-    private final @Nullable BiConsumer<DeviceStatus<T>, Appender> statusRenderer;
+    private final @Nullable BiConsumer<DeviceStatus<T>, Appendable> statusRenderer;
     private final BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler;
     private final int windowSize;
     private final HistoryDisplayableDto.Format entryFormat;
@@ -43,7 +43,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
              windowSize,
              keyToKeyTitle,
              DeviceStatus::lastChanged,
-             (status, appender) -> appender.append(status.status()),
+             (status, appendable) -> Append.to(appendable, status.status()),
              (_, _) -> CompletableFutures.completedFuture(),
              HistoryDisplayableDto.Format.PLAIN_TEXT);
     }
@@ -52,7 +52,7 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
                                     int windowSize,
                                     Function<K, String> keyToKeyTitle,
                                     Function<DeviceStatus<T>, Instant> statusToEventTime,
-                                    @Nullable BiConsumer<DeviceStatus<T>, Appender> statusRenderer,
+                                    @Nullable BiConsumer<DeviceStatus<T>, Appendable> statusRenderer,
                                     BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler,
                                     HistoryDisplayableDto.Format entryFormat) {
         this.title = checkNotNull(title);
@@ -110,12 +110,11 @@ public final class StatusHistoryDisplayable<K, T> implements Displayable {
                 switch (entryFormat) {
                     case PLAIN_TEXT, HTML -> {
                         var sb = new StringBuilder(64);
-                        var appender = Appender.wrap(sb);
                         // newest first
                         stats.statusHistory().descendingIterator().forEachRemaining(status -> {
                             Instant time = statusToEventTime.apply(status);
                             assert statusRenderer != null;
-                            statusRenderer.accept(status, appender);
+                            statusRenderer.accept(status, sb);
                             entries.add(new HistoryDisplayableDto.Entry(time, entryFormat, sb.toString()));
                             sb.setLength(0);
                         });

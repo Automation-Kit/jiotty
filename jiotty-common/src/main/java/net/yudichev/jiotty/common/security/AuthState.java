@@ -7,7 +7,7 @@ public sealed interface AuthState {
         @Override
         public String toString() {
             var sb = new StringBuilder(16).append("Success[");
-            LogRedaction.redacted(authInfo).formatTo(sb);
+            LogRedaction.appendRedacted(sb, authInfo);
             return sb.append(']').toString();
         }
     }

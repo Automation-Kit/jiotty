@@ -32,7 +32,7 @@ final class UIDestinationImpl implements UIDestination {
                 config.windowSize(),
                 Function.identity(),
                 DeviceStatus::lastChanged,
-                mapIfNotNull(renderer, theRenderer -> (status, appender) -> theRenderer.render(status.status(), appender)),
+                mapIfNotNull(renderer, theRenderer -> (status, appendable) -> theRenderer.render(status.status(), appendable)),
                 config.downloadHandler(),
                 config.format());
         var displayableRegistration = config.uiServer().registerDisplayable(displayable);

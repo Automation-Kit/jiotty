@@ -15,7 +15,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import net.yudichev.jiotty.common.lang.Appender;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
@@ -174,7 +173,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                     @Override
                     public void onError(AsyncEvent event) {
                         logger.debug("[SSE {}] onError: {}",
-                                     clientId, (StringBuilderFormattable) buffer -> appendHumanReadableMessage(event.getThrowable(), Appender.wrap(buffer)));
+                                     clientId, (StringBuilderFormattable) buffer -> appendHumanReadableMessage(event.getThrowable(), buffer));
                         removeClient();
                     }
 
