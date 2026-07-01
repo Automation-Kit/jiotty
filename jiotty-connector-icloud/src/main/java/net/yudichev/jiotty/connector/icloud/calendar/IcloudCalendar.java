@@ -14,7 +14,9 @@ import net.fortuna.ical4j.model.DateTime;
 import net.fortuna.ical4j.model.Property;
 import net.fortuna.ical4j.model.component.VEvent;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
 import net.yudichev.jiotty.common.time.calendar.CalendarEvent;
 import org.apache.http.impl.client.CloseableHttpClient;
@@ -37,7 +39,7 @@ import java.util.concurrent.CompletableFuture;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.security.LogRedaction.redact;
 
-final class IcloudCalendar implements Calendar {
+final class IcloudCalendar implements Calendar, StringFormattable {
     private static final Logger logger = LogManager.getLogger(IcloudCalendar.class);
 
     private final String id;
@@ -140,8 +142,15 @@ final class IcloudCalendar implements Calendar {
 
     @Override
     public String toString() {
-        return "IcloudCalendar{" + "id='" + id + '\''
-               + ", name='" + redactedName + '\''
-               + '}';
+        return toString(64);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "IcloudCalendar{id='");
+        Append.to(appendable, id);
+        Append.to(appendable, "', name='");
+        Append.to(appendable, redactedName);
+        Append.to(appendable, "'}");
     }
 }

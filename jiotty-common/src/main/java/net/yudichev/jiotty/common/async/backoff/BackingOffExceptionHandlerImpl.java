@@ -1,8 +1,9 @@
 package net.yudichev.jiotty.common.async.backoff;
 
-import com.google.common.base.MoreObjects;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -20,7 +21,7 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
-final class BackingOffExceptionHandlerImpl implements BackingOffExceptionHandler {
+final class BackingOffExceptionHandlerImpl implements BackingOffExceptionHandler, StringFormattable {
     private static final Logger logger = LogManager.getLogger(BackingOffExceptionHandlerImpl.class);
     private final BackOff backOff;
     private final Predicate<? super Throwable> retryableExceptionPredicate;
@@ -59,9 +60,14 @@ final class BackingOffExceptionHandlerImpl implements BackingOffExceptionHandler
 
     @Override
     public String toString() {
-        return MoreObjects.toStringHelper(this)
-                          .add("backOff", backOff)
-                          .toString();
+        return toString(64);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "BackingOffExceptionHandlerImpl{backOff=");
+        Append.to(appendable, backOff);
+        Append.to(appendable, '}');
     }
 
     @BindingAnnotation

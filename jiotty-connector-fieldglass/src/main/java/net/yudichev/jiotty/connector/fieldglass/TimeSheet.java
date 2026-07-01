@@ -1,10 +1,11 @@
 package net.yudichev.jiotty.connector.fieldglass;
 
-import com.google.common.base.MoreObjects;
 import com.opencsv.bean.AbstractBeanField;
 import com.opencsv.bean.CsvBindByName;
 import com.opencsv.bean.CsvCustomBindByName;
 import com.opencsv.exceptions.CsvDataTypeMismatchException;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
@@ -12,7 +13,7 @@ import java.util.Objects;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class TimeSheet {
+public final class TimeSheet implements StringFormattable {
     @CsvCustomBindByName(column = "Status", required = true, converter = Status.Converter.class)
     private Status status;
     @CsvBindByName(column = "ID", required = true)
@@ -75,11 +76,11 @@ public final class TimeSheet {
         }
         TimeSheet timeSheet = (TimeSheet) obj;
         return standardDays == timeSheet.standardDays &&
-                otherDays == timeSheet.otherDays &&
-                status == timeSheet.status &&
-                id.equals(timeSheet.id) &&
-                startDate.equals(timeSheet.startDate) &&
-                endDate.equals(timeSheet.endDate);
+               otherDays == timeSheet.otherDays &&
+               status == timeSheet.status &&
+               id.equals(timeSheet.id) &&
+               startDate.equals(timeSheet.startDate) &&
+               endDate.equals(timeSheet.endDate);
     }
 
     @SuppressWarnings({"NonFinalFieldReferencedInHashCode", "ObjectInstantiationInEqualsHashCode"}) // fields must be non-final
@@ -90,14 +91,24 @@ public final class TimeSheet {
 
     @Override
     public String toString() {
-        return MoreObjects.toStringHelper(this)
-                .add("status", status)
-                .add("id", id)
-                .add("startDate", startDate)
-                .add("endDate", endDate)
-                .add("standardDays", standardDays)
-                .add("otherDays", otherDays)
-                .toString();
+        return toString(128);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "TimeSheet{status=");
+        Append.to(appendable, status);
+        Append.to(appendable, ", id=");
+        Append.to(appendable, id);
+        Append.to(appendable, ", startDate=");
+        Append.to(appendable, startDate);
+        Append.to(appendable, ", endDate=");
+        Append.to(appendable, endDate);
+        Append.to(appendable, ", standardDays=");
+        Append.to(appendable, standardDays);
+        Append.to(appendable, ", otherDays=");
+        Append.to(appendable, otherDays);
+        Append.to(appendable, '}');
     }
 
     public enum Status {

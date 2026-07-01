@@ -1,6 +1,8 @@
 package net.yudichev.jiotty.timeseriescache;
 
 import com.google.common.reflect.TypeToken;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 
 import java.time.Instant;
 import java.util.Map;
@@ -106,7 +108,7 @@ public interface TimeSeriesCache {
             }
         }
 
-        record User(String userId) implements Scope {
+        record User(String userId) implements Scope, StringFormattable {
             public User {
                 if (userId == null || userId.isBlank()) {
                     throw new IllegalArgumentException("userId must be non-blank");
@@ -115,11 +117,18 @@ public interface TimeSeriesCache {
 
             @Override
             public String toString() {
-                return "user(" + userId + ")";
+                return toString(32);
+            }
+
+            @Override
+            public void formatTo(Appendable appendable) {
+                Append.to(appendable, "user(");
+                Append.to(appendable, userId);
+                Append.to(appendable, ')');
             }
         }
 
-        record Region(String code) implements Scope {
+        record Region(String code) implements Scope, StringFormattable {
             public Region {
                 if (code == null || code.isBlank()) {
                     throw new IllegalArgumentException("code must be non-blank");
@@ -128,7 +137,14 @@ public interface TimeSeriesCache {
 
             @Override
             public String toString() {
-                return "region(" + code + ")";
+                return toString(16);
+            }
+
+            @Override
+            public void formatTo(Appendable appendable) {
+                Append.to(appendable, "region(");
+                Append.to(appendable, code);
+                Append.to(appendable, ')');
             }
         }
     }

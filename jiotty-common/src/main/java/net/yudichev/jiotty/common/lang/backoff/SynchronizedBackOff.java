@@ -1,10 +1,11 @@
 package net.yudichev.jiotty.common.lang.backoff;
 
-import com.google.common.base.MoreObjects;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class SynchronizedBackOff implements BackOff {
+public final class SynchronizedBackOff implements BackOff, StringFormattable {
     private final BackOff delegate;
     private final Object lock = new Object();
 
@@ -35,8 +36,13 @@ public final class SynchronizedBackOff implements BackOff {
 
     @Override
     public String toString() {
-        return MoreObjects.toStringHelper(this)
-                          .add("delegate", delegate)
-                          .toString();
+        return toString(64);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "SynchronizedBackOff{delegate=");
+        Append.to(appendable, delegate);
+        Append.to(appendable, '}');
     }
 }

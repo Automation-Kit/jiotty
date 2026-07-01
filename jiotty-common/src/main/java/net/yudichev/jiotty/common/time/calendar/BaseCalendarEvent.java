@@ -1,6 +1,8 @@
 package net.yudichev.jiotty.common.time.calendar;
 
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 
 import java.time.temporal.Temporal;
 import java.util.Optional;
@@ -10,7 +12,7 @@ import static org.immutables.value.Value.Immutable;
 
 @Immutable
 @PublicImmutablesStyle
-abstract class BaseCalendarEvent {
+abstract class BaseCalendarEvent implements StringFormattable {
     public abstract Temporal start();
 
     public abstract Temporal end();
@@ -23,18 +25,26 @@ abstract class BaseCalendarEvent {
 
     @Override
     public String toString() {
-        var builder = new StringBuilder(64).append("CalendarEvent{");
-        appendRedacted(builder, summary());
-        builder.append(' ').append(start()).append("...").append(end());
+        return toString(64);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "CalendarEvent{");
+        appendRedacted(appendable, summary());
+        Append.to(appendable, ' ');
+        Append.to(appendable, start());
+        Append.to(appendable, "...");
+        Append.to(appendable, end());
         location().ifPresent(loc -> {
-            builder.append(" @ ");
-            appendRedacted(builder, loc);
+            Append.to(appendable, " @ ");
+            appendRedacted(appendable, loc);
         });
         description().ifPresent(desc -> {
-            builder.append(" (");
-            appendRedacted(builder, desc);
-            builder.append(')');
+            Append.to(appendable, " (");
+            appendRedacted(appendable, desc);
+            Append.to(appendable, ')');
         });
-        return builder.append('}').toString();
+        Append.to(appendable, '}');
     }
 }

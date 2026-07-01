@@ -2,8 +2,10 @@ package net.yudichev.jiotty.user.ui.options;
 
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.async.TaskExecutor;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Objects;
@@ -13,7 +15,7 @@ import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public abstract class BaseOption<T> implements Option<T> {
+public abstract class BaseOption<T> implements Option<T>, StringFormattable {
     private final TaskExecutor executor;
     private final OptionMeta<T> meta;
     private final Listeners<Option<T>> changeListeners = new Listeners<>();
@@ -72,7 +74,14 @@ public abstract class BaseOption<T> implements Option<T> {
 
     @Override
     public String toString() {
-        return meta.key() + '=' + value;
+        return toString(32);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, meta.key());
+        Append.to(appendable, '=');
+        Append.to(appendable, value);
     }
 
     @Override

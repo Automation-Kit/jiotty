@@ -2,6 +2,8 @@ package net.yudichev.jiotty.common.time;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -9,7 +11,7 @@ import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-public final class TimeInterval {
+public final class TimeInterval implements StringFormattable {
     private final Instant start;
     private final Instant end;
     private Duration duration;
@@ -88,6 +90,15 @@ public final class TimeInterval {
 
     @Override
     public String toString() {
-        return "[" + start + "..." + end + ']';
+        return toString(64);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, '[');
+        Append.to(appendable, start);
+        Append.to(appendable, "...");
+        Append.to(appendable, end);
+        Append.to(appendable, ']');
     }
 }

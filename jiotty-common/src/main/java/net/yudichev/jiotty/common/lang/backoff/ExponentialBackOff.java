@@ -14,8 +14,9 @@
 
 package net.yudichev.jiotty.common.lang.backoff;
 
-import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 
 import java.util.function.DoubleSupplier;
 
@@ -26,7 +27,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// [#nextBackOffMillis()] is calculated using the following formula:
 /// <pre>
 /// randomized_interval =
-/// retry_interval * (random value in range [1-randomization_factor, 1 + randomization_factor])
+/// retry_interval * (random value in range [1-randomization_factor,1+randomization_factor])
 /// </pre>
 ///
 /// In other words [#nextBackOffMillis()] will range between the randomization factor percentage below and above the retry interval. For example, using 2
@@ -43,22 +44,22 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// <pre>
 /// request#     retry_interval     randomized_interval
 ///
-/// 1             0.5                [0.25,   0.75]
-/// 2             0.75               [0.375,  1.125]
-/// 3             1.125              [0.562,  1.687]
-/// 4             1.687              [0.8435, 2.53]
-/// 5             2.53               [1.265,  3.795]
-/// 6             3.795              [1.897,  5.692]
-/// 7             5.692              [2.846,  8.538]
-/// 8             8.538              [4.269, 12.807]
-/// 9            12.807              [6.403, 19.210]
+/// 1             0.5                [0.25,0.75]
+/// 2             0.75               [0.375,1.125]
+/// 3             1.125              [0.562,1.687]
+/// 4             1.687              [0.8435,2.53]
+/// 5             2.53               [1.265,3.795]
+/// 6             3.795              [1.897,5.692]
+/// 7             5.692              [2.846,8.538]
+/// 8             8.538              [4.269,12.807]
+/// 9            12.807              [6.403,19.210]
 /// 10           19.210              [BackOff#STOP]
 /// </pre>
 ///
 /// Implementation is not thread-safe.
 ///
 /// @author Ravi Mistry
-public class ExponentialBackOff implements BackOff {
+public class ExponentialBackOff implements BackOff, StringFormattable {
 
     /// The default initial interval value in milliseconds (0.5 seconds).
     public static final long DEFAULT_INITIAL_INTERVAL_MILLIS = 500;
@@ -214,15 +215,26 @@ public class ExponentialBackOff implements BackOff {
 
     @Override
     public String toString() {
-        return MoreObjects.toStringHelper(this)
-                          .add("initialIntervalMillis", initialIntervalMillis)
-                          .add("randomizationFactor", randomizationFactor)
-                          .add("multiplier", multiplier)
-                          .add("maxIntervalMillis", maxIntervalMillis)
-                          .add("maxElapsedTimeMillis", maxElapsedTimeMillis)
-                          .add("startTimeNanos", startTimeNanos)
-                          .add("currentIntervalMillis", currentIntervalMillis)
-                          .toString();
+        return toString(256);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "ExponentialBackOff{initialIntervalMillis=");
+        Append.to(appendable, initialIntervalMillis);
+        Append.to(appendable, ", randomizationFactor=");
+        Append.to(appendable, randomizationFactor);
+        Append.to(appendable, ", multiplier=");
+        Append.to(appendable, multiplier);
+        Append.to(appendable, ", maxIntervalMillis=");
+        Append.to(appendable, maxIntervalMillis);
+        Append.to(appendable, ", maxElapsedTimeMillis=");
+        Append.to(appendable, maxElapsedTimeMillis);
+        Append.to(appendable, ", startTimeNanos=");
+        Append.to(appendable, startTimeNanos);
+        Append.to(appendable, ", currentIntervalMillis=");
+        Append.to(appendable, currentIntervalMillis);
+        Append.to(appendable, '}');
     }
 
     /// Builder for [ExponentialBackOff].

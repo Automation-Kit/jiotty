@@ -1,7 +1,9 @@
 package net.yudichev.jiotty.connector.tesla.teslamatedb;
 
 import net.yudichev.jiotty.common.geo.LatLon;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
 
@@ -12,7 +14,7 @@ import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 
 @Immutable
 @PublicImmutablesStyle
-abstract class BaseHistoricalDrive {
+abstract class BaseHistoricalDrive implements StringFormattable {
     public abstract long id();
 
     public abstract Instant startInstant();
@@ -32,11 +34,27 @@ abstract class BaseHistoricalDrive {
         return Duration.between(startInstant(), endInstant());
     }
 
+    @Override
     public String toString() {
-        var sb = new StringBuilder(128).append("HistoricalDrive{").append(id()).append(',');
-        appendRedacted(sb, startLocation());
-        sb.append('@').append(startInstant()).append(' ').append(startSoC()).append("% -> ");
-        appendRedacted(sb, endLocation());
-        return sb.append('@').append(endInstant()).append(' ').append(endSoC()).append('%').toString();
+        return toString(128);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "HistoricalDrive{");
+        Append.to(appendable, id());
+        Append.to(appendable, ',');
+        appendRedacted(appendable, startLocation());
+        Append.to(appendable, '@');
+        Append.to(appendable, startInstant());
+        Append.to(appendable, ' ');
+        Append.to(appendable, startSoC());
+        Append.to(appendable, "% -> ");
+        appendRedacted(appendable, endLocation());
+        Append.to(appendable, '@');
+        Append.to(appendable, endInstant());
+        Append.to(appendable, ' ');
+        Append.to(appendable, endSoC());
+        Append.to(appendable, '%');
     }
 }

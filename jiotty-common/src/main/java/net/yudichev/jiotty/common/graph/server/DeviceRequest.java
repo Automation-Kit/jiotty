@@ -1,8 +1,10 @@
 package net.yudichev.jiotty.common.graph.server;
 
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import org.jspecify.annotations.Nullable;
 
-public record DeviceRequest<T>(String name, boolean sent, @Nullable String failure, @Nullable T payload) {
+public record DeviceRequest<T>(String name, boolean sent, @Nullable String failure, @Nullable T payload) implements StringFormattable {
     public DeviceRequest(String name, T payload) {
         this(name, false, null, payload);
     }
@@ -21,14 +23,23 @@ public record DeviceRequest<T>(String name, boolean sent, @Nullable String failu
 
     @Override
     public String toString() {
-        var sb = new StringBuilder(64).append("Request{").append(name).append(", sent=").append(sent);
+        return toString(64);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "Request{");
+        Append.to(appendable, name);
+        Append.to(appendable, ", sent=");
+        Append.to(appendable, sent);
         if (payload != null) {
-            sb.append(", payload=").append(payload);
+            Append.to(appendable, ", payload=");
+            Append.to(appendable, payload);
         }
         if (failure != null) {
-            sb.append(" FAILED:").append(failure);
+            Append.to(appendable, " FAILED:");
+            Append.to(appendable, failure);
         }
-        sb.append('}');
-        return sb.toString();
+        Append.to(appendable, '}');
     }
 }

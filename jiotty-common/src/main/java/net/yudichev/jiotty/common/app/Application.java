@@ -10,8 +10,10 @@ import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -31,7 +33,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
-public final class Application extends BaseIdempotentCloseable {
+public final class Application extends BaseIdempotentCloseable implements StringFormattable {
     private static final Logger logger = LogManager.getLogger(Application.class);
 
     static {
@@ -220,7 +222,13 @@ public final class Application extends BaseIdempotentCloseable {
 
     @Override
     public String toString() {
-        return "Application " + name;
+        return toString(32);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "Application ");
+        Append.to(appendable, name);
     }
 
     public static final class Builder implements TypedBuilder<Application>, HasWithAnnotation {

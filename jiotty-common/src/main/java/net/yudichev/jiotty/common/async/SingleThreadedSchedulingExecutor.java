@@ -5,9 +5,11 @@ import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.inject.assistedinject.Assisted;
 import jakarta.inject.Inject;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Runnables;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -26,7 +28,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public final class SingleThreadedSchedulingExecutor implements SchedulingExecutor {
+public final class SingleThreadedSchedulingExecutor implements SchedulingExecutor, StringFormattable {
     private static final Logger logger = LogManager.getLogger(SingleThreadedSchedulingExecutor.class);
 
     private final Set<Closeable> scheduleHandles = Sets.newConcurrentHashSet();
@@ -107,7 +109,14 @@ public final class SingleThreadedSchedulingExecutor implements SchedulingExecuto
 
     @Override
     public String toString() {
-        return getClass().getSimpleName() + '-' + threadNameBase;
+        return toString(64);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, getClass().getSimpleName());
+        Append.to(appendable, '-');
+        Append.to(appendable, threadNameBase);
     }
 
     private Runnable guard(String task, Runnable command) {

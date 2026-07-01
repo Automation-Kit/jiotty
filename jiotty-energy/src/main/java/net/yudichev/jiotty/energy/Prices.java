@@ -1,5 +1,8 @@
 package net.yudichev.jiotty.energy;
 
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.AbstractList;
@@ -7,7 +10,7 @@ import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-public final class Prices {
+public final class Prices implements StringFormattable {
     private final Instant profileStart;
     private final PriceProfile profile;
 
@@ -109,9 +112,17 @@ public final class Prices {
 
     @Override
     public String toString() {
-        return "{"
-               + profileStart + ".." + profileEnd() + ", "
-               + profile
-               + '}';
+        return toString(128);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, '{');
+        Append.to(appendable, profileStart);
+        Append.to(appendable, "..");
+        Append.to(appendable, profileEnd());
+        Append.to(appendable, ", ");
+        Append.to(appendable, profile);
+        Append.to(appendable, '}');
     }
 }

@@ -2,8 +2,10 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 
 import com.google.common.collect.ImmutableSet;
 import net.yudichev.jiotty.common.geo.LatLon;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import org.jspecify.annotations.Nullable;
 
 import java.util.stream.Stream;
@@ -32,7 +34,7 @@ public sealed interface TelemetryField permits
 
     String fieldName();
 
-    enum THvacPower implements TelemetryField {
+    enum THvacPower implements TelemetryField, StringFormattable {
         UNKNOWN,
         OFF,
         ON,
@@ -58,12 +60,19 @@ public sealed interface TelemetryField permits
 
         @Override
         public String toString() {
-            // To look consistent with the other fields
-            return "THvacPower[" + name() + ']';
+            return toString(32);
+        }
+
+        // To look consistent with the other fields
+        @Override
+        public void formatTo(Appendable appendable) {
+            Append.to(appendable, "THvacPower[");
+            Append.to(appendable, name());
+            Append.to(appendable, ']');
         }
     }
 
-    enum TGear implements TelemetryField {
+    enum TGear implements TelemetryField, StringFormattable {
         UNKNOWN,
         INVALID,
         P,
@@ -93,11 +102,18 @@ public sealed interface TelemetryField permits
 
         @Override
         public String toString() {
-            return "TGear[" + name() + ']';
+            return toString(16);
+        }
+
+        @Override
+        public void formatTo(Appendable appendable) {
+            Append.to(appendable, "TGear[");
+            Append.to(appendable, name());
+            Append.to(appendable, ']');
         }
     }
 
-    enum TDriveRail implements TelemetryField {
+    enum TDriveRail implements TelemetryField, StringFormattable {
         UNKNOWN,
         OFF,
         ON;
@@ -119,7 +135,14 @@ public sealed interface TelemetryField permits
 
         @Override
         public String toString() {
-            return "TDriveRail[" + name() + ']';
+            return toString(32);
+        }
+
+        @Override
+        public void formatTo(Appendable appendable) {
+            Append.to(appendable, "TDriveRail[");
+            Append.to(appendable, name());
+            Append.to(appendable, ']');
         }
     }
 
@@ -175,10 +198,16 @@ public sealed interface TelemetryField permits
 
     record Invalid(String fieldName)
             implements TBatteryLevel, TLocation, TChargeLimitSoc, TInsideTemp, THvacLeftTemperatureRequest, THvacRightTemperatureRequest, TVehicleSpeed,
-            TACChargingEnergyIn, TDCChargingEnergyIn {
+            TACChargingEnergyIn, TDCChargingEnergyIn, StringFormattable {
         @Override
         public String toString() {
-            return fieldName + "[INVALID]";
+            return toString(48);
+        }
+
+        @Override
+        public void formatTo(Appendable appendable) {
+            Append.to(appendable, fieldName);
+            Append.to(appendable, "[INVALID]");
         }
     }
 

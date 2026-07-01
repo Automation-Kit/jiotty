@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.lang;
 
+import com.google.common.collect.ImmutableMap;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -8,6 +9,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -33,7 +35,7 @@ class AppendTest {
         Append.to(appendable, 2.5);
         Append.to(appendable, (Object) 7);
         Append.to(appendable, (Object) null);
-        Append.to(appendable, buffer -> buffer.append("formatted"));
+        Append.to(appendable, buffer -> Append.to(buffer, "formatted"));
         assertThat(appendable.toString()).isEqualTo("cssubctrue42431.52.57nullformatted");
     }
 
@@ -49,6 +51,23 @@ class AppendTest {
         assertThat(appendable.toString()).isEqualTo("[1+, 2+, 3+][][4, 5]");
     }
 
+    @ParameterizedTest
+    @MethodSource("appendables")
+    void map(Appendable appendable) {
+        Append.to(appendable, ImmutableMap.of(1, "a", 2, "b"),
+                  (a, key) -> {
+                      Append.to(a, key);
+                      Append.to(a, '#');
+                  },
+                  (a, value) -> {
+                      Append.to(a, value);
+                      Append.to(a, '+');
+                  });
+        Append.to(appendable, Map.of());
+        Append.to(appendable, ImmutableMap.of(3, "c", 4, "d"));
+        assertThat(appendable.toString()).isEqualTo("{1#=a+, 2#=b+}{}{3=c, 4=d}");
+    }
+
     static Stream<Arguments> appendableFailure_isWrappedInRuntimeException() {
         return Stream.of(
                 arguments("charSequence", (Consumer<Appendable>) appendable -> Append.to(appendable, "x")),
@@ -60,7 +79,7 @@ class AppendTest {
                 arguments("float", (Consumer<Appendable>) appendable -> Append.to(appendable, 1.5f)),
                 arguments("double", (Consumer<Appendable>) appendable -> Append.to(appendable, 1.5)),
                 arguments("object", (Consumer<Appendable>) appendable -> Append.to(appendable, (Object) "x")),
-                arguments("formattable", (Consumer<Appendable>) appendable -> Append.to(appendable, buffer -> buffer.append("x"))));
+                arguments("formattable", (Consumer<Appendable>) appendable -> Append.to(appendable, buffer -> Append.to(buffer, "x"))));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -77,6 +96,15 @@ class AppendTest {
         assertThatThrownBy(() -> Append.to(new StringBuilder(), List.of(1), (_, _) -> {
             throw new Exception("boom");
         }))
+                .isInstanceOf(RuntimeException.class)
+                .cause().isInstanceOf(Exception.class).hasMessage("boom");
+    }
+
+    @Test
+    void mapAppendCodeFailure_isWrappedInRuntimeException() {
+        assertThatThrownBy(() -> Append.to(new StringBuilder(), Map.of(1, "a"), (_, _) -> {
+            throw new Exception("boom");
+        }, Append::to))
                 .isInstanceOf(RuntimeException.class)
                 .cause().isInstanceOf(Exception.class).hasMessage("boom");
     }

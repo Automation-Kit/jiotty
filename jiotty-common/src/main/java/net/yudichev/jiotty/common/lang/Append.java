@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.lang;
 
 import java.io.IOException;
+import java.util.Map;
 
 @SuppressWarnings("OverloadedMethodsWithSameNumberOfParameters")
 public final class Append {
@@ -110,11 +111,7 @@ public final class Append {
     }
 
     public static void to(Appendable to, StringFormattable formattable) {
-        try {
-            formattable.formatTo(to);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        formattable.formatTo(to);
     }
 
     public static <T> void to(Appendable to,
@@ -138,5 +135,32 @@ public final class Append {
 
     public static void to(Appendable to, Iterable<?> iterable) {
         to(to, iterable, Append::to);
+    }
+
+    public static <K, V> void to(Appendable to,
+                                 Map<? extends K, ? extends V> map,
+                                 ThrowingBiConsumer<? super Appendable, ? super K, ? extends Exception> keyAppendCode,
+                                 ThrowingBiConsumer<? super Appendable, ? super V, ? extends Exception> valueAppendCode) {
+        boolean notFirst = false;
+        to(to, '{');
+        // entrySet loop rather than Map.forEach: the append code may throw a checked exception, and the separator needs mutable per-iteration state
+        for (Map.Entry<? extends K, ? extends V> entry : map.entrySet()) {
+            if (notFirst) {
+                to(to, ", ");
+            }
+            notFirst = true;
+            try {
+                keyAppendCode.accept(to, entry.getKey());
+                to(to, '=');
+                valueAppendCode.accept(to, entry.getValue());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+        to(to, '}');
+    }
+
+    public static void to(Appendable to, Map<?, ?> map) {
+        to(to, map, Append::to, Append::to);
     }
 }

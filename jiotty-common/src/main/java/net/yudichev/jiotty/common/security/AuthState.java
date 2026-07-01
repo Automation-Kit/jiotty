@@ -1,14 +1,22 @@
 package net.yudichev.jiotty.common.security;
 
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
+
 /// Represents a state of authentication.
 public sealed interface AuthState {
 
-    record Success(String authInfo) implements AuthState {
+    record Success(String authInfo) implements AuthState, StringFormattable {
         @Override
         public String toString() {
-            var sb = new StringBuilder(16).append("Success[");
-            LogRedaction.appendRedacted(sb, authInfo);
-            return sb.append(']').toString();
+            return toString(16);
+        }
+
+        @Override
+        public void formatTo(Appendable appendable) {
+            Append.to(appendable, "Success[");
+            LogRedaction.appendRedacted(appendable, authInfo);
+            Append.to(appendable, ']');
         }
     }
 
