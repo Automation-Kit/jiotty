@@ -1,5 +1,7 @@
 package net.yudichev.jiotty.common.lang;
 
+import org.jspecify.annotations.Nullable;
+
 import java.io.IOException;
 import java.util.Map;
 
@@ -110,8 +112,13 @@ public final class Append {
         }
     }
 
-    public static void to(Appendable to, StringFormattable formattable) {
-        formattable.formatTo(to);
+    /// Appends `formattable`'s formatted form, or the text `null` when `formattable` is itself `null`.
+    public static void to(Appendable to, @Nullable StringFormattable formattable) {
+        if (formattable == null) {
+            to(to, "null");
+        } else {
+            formattable.formatTo(to);
+        }
     }
 
     public static <T> void to(Appendable to,

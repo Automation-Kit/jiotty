@@ -300,7 +300,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
 
         private void sendEvent(String eventName, Object data) {
             try {
-                logger.debug("[SSE {}] send event {}, {}", clientId, eventName, logger.isTraceEnabled() ? UIJson.WRITER.writeValueAsString(data) : data);
+                logger.debug("[SSE {}] send event {}, {}", clientId, eventName, data);
                 out.print("event: ");
                 out.print(eventName);
                 out.print('\n');

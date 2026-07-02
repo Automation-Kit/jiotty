@@ -36,7 +36,8 @@ class AppendTest {
         Append.to(appendable, (Object) 7);
         Append.to(appendable, (Object) null);
         Append.to(appendable, buffer -> Append.to(buffer, "formatted"));
-        assertThat(appendable.toString()).isEqualTo("cssubctrue42431.52.57nullformatted");
+        Append.to(appendable, (StringFormattable) null);
+        assertThat(appendable.toString()).isEqualTo("cssubctrue42431.52.57nullformattednull");
     }
 
     @ParameterizedTest
