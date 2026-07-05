@@ -78,6 +78,10 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     /// Whether a token-request retry streak is in progress, so the first failure of a streak arms [#tokenRequestBackOff] and a success ends it. Confined to
     /// [#executor].
     private boolean retryingTokenRequest;
+    /// The pending scheduled token request — a retry ([#retryTokenRequestOrGiveUp]) or a routine refresh ([#scheduleTokenRefresh]) — or `null` when none is
+    /// scheduled. Retained so it is cancelled before the next one is scheduled (at most one is ever pending) and by [#invalidateCredential], which must stop a
+    /// pending retry/refresh from resurrecting a dropped credential. Confined to [#executor].
+    private @Nullable Closeable pendingScheduledTokenRequest;
 
     @Inject
     public OAuth2TokenManagerImpl(ExecutorFactory executorFactory,
@@ -154,6 +158,9 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     @Override
     protected void doStop() {
+        // Release the pending scheduled retry/refresh on the executor (the field is confined to it); the executor is still live here, and its graceful
+        // shutdown below drains this task before terminating.
+        executor.execute(this::cancelPendingTokenRequest);
         Closeable.closeSafelyIfNotNull(logger, executor, () -> shutdown(httpClient));
     }
 
@@ -187,6 +194,14 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         clientSecret.ifPresent(secret -> formBuilder.add("client_secret", secret));
         codeVerifier.ifPresent(verifier -> formBuilder.add("code_verifier", verifier));
         requestToken(formBuilder.build(), null);
+    }
+
+    @Override
+    public void invalidate(String reason) {
+        whenStartedAndNotLifecycling(() -> executor.execute(() -> {
+            logger.info("[{}] credential invalidated by caller: {}", apiName, reason);
+            invalidateCredential(reason);
+        }));
     }
 
     private void refreshAccessToken(String refreshToken) {
@@ -230,7 +245,8 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
             }
         });
 
-        // Marshal the completed request back onto the executor under the lifecycle lock: if the component stopped while the request was in flight, orphaned response is dropped instead of being rejected by the dead executor.
+        // Marshal the completed request back onto the executor under the lifecycle lock: if the component stopped while the request was in flight, orphaned
+        // response is dropped instead of being rejected by the dead executor.
         future.whenComplete((responseEither, throwable) ->
                                     whenNotLifecycling(() -> {
                                         if (isStarted()) {
@@ -294,7 +310,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         } else {
             logger.info("[{}] token request failed ({}); retrying in {}ms", apiName, description, backOffMillis);
             listeners.notify(new AuthState.TransientFailure(description));
-            executor.schedule(Duration.ofMillis(backOffMillis), () -> requestToken(formBody, fallbackRefreshToken));
+            scheduleTokenRequest(Duration.ofMillis(backOffMillis), () -> requestToken(formBody, fallbackRefreshToken));
         }
     }
 
@@ -309,13 +325,21 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         String description = errorResponse.errorDescription().orElse(errorResponse.error());
         logger.info("[{}] token request failed: {} ({})", apiName, errorResponse.error(), description);
         if ("invalid_grant".equals(errorResponse.error())) {
-            retryingTokenRequest = false;
-            // The stored credential is no longer accepted; drop it so a later re-authentication starts clean instead of refreshing the dead token
-            varStore.clearValue(varStoreKey);
-            listeners.notify(new AuthState.PermanentFailure(description));
+            invalidateCredential(description);
         } else {
             listeners.notify(new AuthState.TransientFailure(description));
         }
+    }
+
+    /// Marks the credential permanently unusable: cancels any pending scheduled retry/refresh, ends the retry streak, and drops the token both in memory and
+    /// from the var store — so no scheduled request resurrects the dead credential and a later re-authentication starts clean — then escalates to
+    /// [AuthState.PermanentFailure]. Runs on [#executor].
+    private void invalidateCredential(String reason) {
+        cancelPendingTokenRequest();
+        retryingTokenRequest = false;
+        currentToken = null;
+        varStore.clearValue(varStoreKey);
+        listeners.notify(new AuthState.PermanentFailure(reason));
     }
 
     private OauthAccessToken responseToToken(Instant currentTime, OauthAccessTokenResponse response, @Nullable String fallbackRefreshToken) {
@@ -343,6 +367,19 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     private void scheduleTokenRefresh() {
         Duration expiryDelay = Duration.between(currentDateTimeProvider.currentInstant(), currentToken.expiryTime());
         logger.info("[{}] will refresh token in {} ({})", apiName, expiryDelay, currentToken.expiryTime());
-        executor.schedule(expiryDelay, () -> refreshAccessToken(currentToken.refreshToken()));
+        String refreshToken = currentToken.refreshToken();
+        scheduleTokenRequest(expiryDelay, () -> refreshAccessToken(refreshToken));
+    }
+
+    /// Schedules `command` after `delay` as the single pending token request, cancelling any previously-scheduled retry/refresh first — so at most one is ever
+    /// pending and [#invalidateCredential] can stop it. Runs on [#executor].
+    private void scheduleTokenRequest(Duration delay, Runnable command) {
+        cancelPendingTokenRequest();
+        pendingScheduledTokenRequest = executor.schedule(delay, command);
+    }
+
+    private void cancelPendingTokenRequest() {
+        Closeable.closeSafelyIfNotNull(logger, pendingScheduledTokenRequest);
+        pendingScheduledTokenRequest = null;
     }
 }

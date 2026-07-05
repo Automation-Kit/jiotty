@@ -23,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -326,6 +327,80 @@ class OAuth2TokenManagerImplTest {
         assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
         // the dead credential is dropped, so a later reconnect's startup finds no token to refresh (no doomed refresh racing the fresh auth-code exchange)
         assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+    }
+
+    @Test
+    void invalidate_dropsStoredTokenAndNotifiesPermanentFailure() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        startTokenManager();
+        assertThat(lastAuthState()).isInstanceOf(AuthState.Success.class);
+
+        tokenManager.invalidate("API rejected the token");
+        clock.tick();
+
+        assertThat(lastAuthState()).isInstanceOfSatisfying(
+                AuthState.PermanentFailure.class,
+                permanentFailure -> assertThat(permanentFailure.description()).isEqualTo("API rejected the token"));
+        // the dropped credential must not be refreshed by a later startup
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+    }
+
+    @Test
+    void invalidate_preventsScheduledRefreshFromResurrectingTheCredential() {
+        // A valid stored token schedules a refresh at 80% of its lifetime (800s); invalidate() before then must stop that refresh from re-authenticating.
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1000)));
+        respondWithToken("refreshed-at", "refreshed-rt", 3600);
+        startTokenManager();
+        assertThat(requestLog).isEmpty(); // a valid stored token needs no token request at startup
+
+        tokenManager.invalidate("API rejected the token");
+        clock.tick();
+        assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+
+        // Advance past the scheduled refresh time: the refresh must not fire (no token request) and the state must stay PermanentFailure.
+        clock.advanceTimeAndTick(Duration.ofSeconds(1000));
+
+        assertThat(requestLog).isEmpty();
+        assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+    }
+
+    @Test
+    void invalidate_cancelsPendingRetrySoItDoesNotResurrectTheCredential() {
+        // The first attempt returns a token too short-lived to use, so it fails and a retry is scheduled; the second response would succeed if the retry fired.
+        respondWithToken("at-fail", "rt", 10);
+        respondWithToken("at-ok", "rt", 3600);
+        startTokenManager();
+        tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
+        assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
+        assertThat(requestLog).hasSize(1); // the failed attempt; a retry is now scheduled
+
+        tokenManager.invalidate("API rejected the token");
+        clock.tick();
+        assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+
+        // Advancing past the retry delay must NOT fire the cancelled retry: no second request, and the state stays PermanentFailure (the "at-ok" response is
+        // never consumed, so the credential is not resurrected).
+        clock.advanceTimeAndTick(TOKEN_RETRY_INITIAL_INTERVAL.multipliedBy(2));
+
+        assertThat(requestLog).hasSize(1);
+        assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+    }
+
+    @Test
+    void stop_cancelsPendingScheduledRefreshSoItDoesNotFireAfterShutdown() {
+        // A valid stored token schedules a refresh at 80% of its lifetime; stopping the manager before then must cancel it so it never runs post-shutdown.
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1000)));
+        respondWithToken("refreshed-at", "refreshed-rt", 3600);
+        startTokenManager();
+        assertThat(requestLog).isEmpty(); // a valid stored token needs no token request at startup
+
+        tokenManager.stop();
+
+        // Advance well past the scheduled refresh time: the cancelled refresh must not fire, so no token request is ever made.
+        clock.advanceTimeAndTick(Duration.ofSeconds(1000));
+
+        assertThat(requestLog).isEmpty();
     }
 
     @Test

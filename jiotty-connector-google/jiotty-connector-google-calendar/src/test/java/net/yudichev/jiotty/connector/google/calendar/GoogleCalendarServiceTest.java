@@ -205,6 +205,29 @@ class GoogleCalendarServiceTest {
     }
 
     @Test
+    void retrieveCalendars_permanentAuthError_invalidatesCredentialSoUserIsPromptedToReconnect() {
+        // A deleted client project surfaces as a 403 (reason not a rate limit); the credential must be invalidated so the auth state goes to PermanentFailure.
+        startService((_, _) -> forbidden("forbidden", "Project #123 has been deleted."));
+
+        CompletableFuture<List<Calendar>> future = service.retrieveCalendars();
+        clock.tick();
+
+        assertThatThrownBy(future::join).hasMessageContaining("Failed to sync Google calendar list");
+        assertThat(tokenManager.invalidations()).singleElement().asString().contains("403");
+    }
+
+    @Test
+    void retrieveCalendars_rateLimit403_isTransient_doesNotInvalidateCredential() {
+        startService((_, _) -> forbidden("userRateLimitExceeded", "Rate Limit Exceeded"));
+
+        CompletableFuture<List<Calendar>> future = service.retrieveCalendars();
+        clock.tick();
+
+        assertThatThrownBy(future::join).hasMessageContaining("Failed to sync Google calendar list");
+        assertThat(tokenManager.invalidations()).isEmpty();
+    }
+
+    @Test
     void fetchEvents_skipsEventsMissingStartOrEnd() {
         startService((_, url) -> url.contains("/calendars/cal-1/events")
                                  ? ok("""
@@ -287,5 +310,11 @@ class GoogleCalendarServiceTest {
     private static MockLowLevelHttpResponse gone() {
         return new MockLowLevelHttpResponse().setStatusCode(410).setContentType("application/json").setContent("""
                                                                                                                {"error":{"code":410,"message":"Sync token is no longer valid."}}""");
+    }
+
+    private static MockLowLevelHttpResponse forbidden(String reason, String message) {
+        return new MockLowLevelHttpResponse().setStatusCode(403).setContentType("application/json").setContent(
+                """
+                {"error":{"code":403,"message":"%s","errors":[{"domain":"global","reason":"%s","message":"%s"}]}}""".formatted(message, reason, message));
     }
 }

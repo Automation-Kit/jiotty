@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.google.calendar;
 
+import com.google.api.client.googleapis.json.GoogleJsonError;
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
 import com.google.api.client.http.HttpRequestInitializer;
 import com.google.api.client.http.HttpTransport;
@@ -32,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
@@ -47,6 +49,10 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     private static final String APPLICATION_NAME = "jiotty";
     /// Re-emitted in place of the token manager's [AuthState.Success] so the raw access token is never exposed to subscribers.
     private static final AuthState AUTHENTICATED = new AuthState.Success("authenticated");
+    /// Calendar API 403 `reason` values that denote a transient rate/quota limit (retry with backoff) rather than a permanently-rejected credential — see
+    /// [Handle API errors](https://developers.google.com/workspace/calendar/api/guides/errors). `dailyLimitExceeded` is the general Google quota reason,
+    /// included defensively; a credential/permission problem is reported as a `401` or a different `403` reason, none of which appear here.
+    private static final Set<String> TRANSIENT_403_REASONS = Set.of("rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded", "quotaExceeded");
 
     private final ExecutorFactory executorFactory;
     private final OAuth2TokenManager tokenManager;
@@ -181,12 +187,40 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                     calendarListSyncToken = null;
                     retriedAfterExpiry = true;
                 } else {
+                    if (isPermanentAuthError(e)) {
+                        // The credential is no longer accepted by the API — revoked access, a deleted client project, or the API not being enabled — even
+                        // though the token itself may still refresh. Invalidate it (escalating to a permanent auth failure) rather than retrying this call
+                        // indefinitely against a credential that will never work.
+                        tokenManager.invalidate("Google Calendar API rejected the credential (HTTP " + e.getStatusCode() + ')');
+                    }
                     throw new RuntimeException("Failed to sync Google calendar list", e);
                 }
             } catch (IOException e) {
                 throw new RuntimeException("Failed to sync Google calendar list", e);
             }
         }
+    }
+
+    /// Whether a Calendar API error means the credential is permanently rejected and the user must re-authenticate: a `401`, or a `403` that is not a transient
+    /// rate/quota limit. A deleted client project, revoked access, or the API not being enabled all surface as a non-rate-limit `403`, whereas a rate-limit
+    /// `403` is transient and must not trigger re-authentication.
+    private static boolean isPermanentAuthError(GoogleJsonResponseException e) {
+        int statusCode = e.getStatusCode();
+        if (statusCode == 401) {
+            return true;
+        }
+        if (statusCode != 403) {
+            return false;
+        }
+        // Treat a 403 without a recognised reason as permanent: better to prompt re-auth than to retry a genuinely-broken credential forever.
+        return errorReason(e).map(reason -> !TRANSIENT_403_REASONS.contains(reason)).orElse(true);
+    }
+
+    private static Optional<String> errorReason(GoogleJsonResponseException e) {
+        return Optional.ofNullable(e.getDetails())
+                       .map(GoogleJsonError::getErrors)
+                       .filter(errors -> !errors.isEmpty())
+                       .map(errors -> errors.getFirst().getReason());
     }
 
     private static String calendarName(CalendarListEntry entry) {

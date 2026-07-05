@@ -16,6 +16,11 @@ public interface OAuth2TokenManager {
 
     Closeable subscribeToAccessTokenState(Consumer<? super AuthState> handler);
 
+    /// Marks the current credential as permanently unusable: drops the stored token and notifies subscribers of an [AuthState.PermanentFailure], so a caller
+    /// that has independently determined the credential is no longer accepted can force re-authentication instead of the token being refreshed
+    /// indefinitely. A subsequent [#onNewAuthCode] clears the invalidation. `reason` is a human-readable description of why the credential was rejected.
+    void invalidate(String reason);
+
     /// Supply the new auth code received from the target system after the user logged in. This initiates exchanging this code for an access token.
     default void onNewAuthCode(String authCode, String redirectUri) {
         onNewAuthCode(authCode, redirectUri, Optional.empty());

@@ -72,6 +72,10 @@ class MieleDishwasherImplTest {
             }
 
             @Override
+            public void invalidate(String reason) {
+            }
+
+            @Override
             public void onNewAuthCode(String authCode, String redirectUri, Optional<String> codeVerifier) {
             }
         };
