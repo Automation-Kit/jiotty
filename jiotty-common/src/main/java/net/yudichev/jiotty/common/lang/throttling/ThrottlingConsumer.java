@@ -22,7 +22,6 @@ public final class ThrottlingConsumer<T> extends BaseIdempotentCloseable impleme
     private boolean throttling;
 
     private Closeable throttlingTimerHandle = noop();
-    private boolean closed;
 
     public ThrottlingConsumer(SchedulingExecutor executor, Duration throttlingDuration, Consumer<T> delegate) {
         this.executor = checkNotNull(executor);
@@ -34,7 +33,7 @@ public final class ThrottlingConsumer<T> extends BaseIdempotentCloseable impleme
     @Override
     public void accept(T t) {
         executor.execute(() -> {
-            if (!closed) {
+            if (!isClosedOpaque()) {
                 pendingValue = t;
                 if (!throttling) {
                     deliverValue();
@@ -45,19 +44,22 @@ public final class ThrottlingConsumer<T> extends BaseIdempotentCloseable impleme
 
     @Override
     protected void doClose() {
-        executor.execute(() -> {
-            closed = true;
-            closeIfNotNull(throttlingTimerHandle);
-        });
+        // The delivery already queued on the
+        //  executor, or a timer about to fire, is suppressed when the executor drains it during teardown, after the components this delegate touches have
+        //  stopped. Cancelling the timer handle stays on the executor thread that mutates it.
+        executor.execute(() -> closeIfNotNull(throttlingTimerHandle));
     }
 
     private void deliverValue() {
         assert pendingValue != NONE;
+        if (isClosedOpaque()) {
+            return;
+        }
         //noinspection unchecked it's either T or NONE
         delegate.accept((T) pendingValue);
         pendingValue = NONE;
 
-        if (!closed) {
+        if (!isClosedOpaque()) {
             throttlingTimerHandle = executor.schedule(throttlingDuration, this::onTimer);
             throttling = true;
         }

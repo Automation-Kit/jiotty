@@ -481,6 +481,37 @@ class SseServiceImplTest {
     }
 
     @Test
+    void startSseInitialImageDrainedAfterStopClosesClientWithoutReadingRegistries() {
+        var onStreamClosed = mock(Runnable.class);
+        var request = mock(HttpServletRequest.class);
+        var response = mock(HttpServletResponse.class);
+        var asyncContext = mock(AsyncContext.class);
+        var capture = new SseCapture();
+
+        when(request.getRemoteHost()).thenReturn("localhost");
+        when(request.getRemotePort()).thenReturn(12345);
+        when(request.startAsync()).thenReturn(asyncContext);
+        lenient().when(asyncContext.getResponse()).thenReturn(response);
+        asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
+
+        // Enqueue the initial-image task but do not tick, so it stays queued on the executor.
+        asUnchecked(() -> sseService.startSse(request, response, onStreamClosed));
+
+        // Tear down in reverse dependency order — the SSE service first, then the registries it reads — mirroring per-user injector teardown, and only now tick
+        //  so the queued initial-image task drains after every component has stopped. It must skip all work and close the freshly-created client, not read the
+        //  stopped registries.
+        sseService.stop();
+        displayableRegistry.stop();
+        optionRegistry.stop();
+        clock.tick();
+
+        // The drained task never initialised the stream (no hello/snapshot frames), proving it took the stopped-service short-circuit instead of reading the
+        //  registries. onStreamClosed still fires so the connection is not leaked.
+        assertThat(capture.output()).isEmpty();
+        verify(onStreamClosed).run();
+    }
+
+    @Test
     void sseClientCloseIsIdempotentAcrossMultipleTriggers() {
         var onStreamClosed = mock(Runnable.class);
         var request = mock(HttpServletRequest.class);

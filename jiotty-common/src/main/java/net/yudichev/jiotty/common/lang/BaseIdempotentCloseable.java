@@ -22,5 +22,10 @@ public abstract class BaseIdempotentCloseable implements Closeable {
         return closed.getPlain();
     }
 
+    /// Same as [#isClosed()] but with an [opaque][AtomicBoolean#getOpaque()] read instead of a full volatile (acquire) one.
+    public final boolean isClosedOpaque() {
+        return closed.getOpaque();
+    }
+
     protected abstract void doClose();
 }

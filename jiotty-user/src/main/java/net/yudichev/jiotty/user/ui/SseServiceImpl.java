@@ -135,6 +135,13 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
         var client = new SseClient(asyncContext, clientId, clientIdSeqNum, idempotent(onStreamClosed::run));
         logger.debug("[SSE {}] created", clientId);
         executor.execute(() -> {
+            if (!isStarted()) {
+                // Stopped between startSse enqueuing this task and the executor draining it during teardown. The option/displayable registries this initial
+                //  image reads have stopped too, so skip delivery and just close the freshly-created client to complete its stream and fire onStreamClosed —
+                //  doStop's client drain never saw this client, as it was not yet in sseClients when stop ran.
+                closeAndRemoveClient(client);
+                return;
+            }
             sseClients.add(client);
             client.init();
             logger.debug("[SSE {}] delivering initial image", clientId);
