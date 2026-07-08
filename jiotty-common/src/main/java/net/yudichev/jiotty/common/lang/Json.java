@@ -9,7 +9,9 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.reflect.TypeToken;
 
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.Reader;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
@@ -33,6 +35,17 @@ public final class Json {
 
     public static <T> T parse(String json, TypeToken<T> type) {
         return getAsUnchecked(() -> mapper.readValue(json, mapper.getTypeFactory().constructType(type.getType())));
+    }
+
+    /// Parses JSON read directly from `reader`, avoiding the intermediate [String]/byte-array copy that reading the whole payload into memory first would
+    /// incur. Jackson reads `reader` to completion and closes it. A caller holding a byte stream wraps it in an [InputStreamReader] with the desired charset.
+    public static <T> T parse(Reader reader, Class<T> type) {
+        return getAsUnchecked(() -> mapper.readValue(reader, type));
+    }
+
+    /// Generic-type-aware counterpart to [#parse(Reader, Class)]: pass a [TypeToken] to capture parameterised element types.
+    public static <T> T parse(Reader reader, TypeToken<T> type) {
+        return getAsUnchecked(() -> mapper.readValue(reader, mapper.getTypeFactory().constructType(type.getType())));
     }
 
     public static ObjectNode object() {

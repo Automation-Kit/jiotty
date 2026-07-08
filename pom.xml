@@ -114,6 +114,17 @@
                     <artifactId>versions-maven-plugin</artifactId>
                     <version>2.21.0</version>
                 </plugin>
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>0.8.14</version>
+                    <!-- Coverage is consumed only as the machine-readable XML report; do not generate HTML/CSV. -->
+                    <configuration>
+                        <formats>
+                            <format>XML</format>
+                        </formats>
+                    </configuration>
+                </plugin>
             </plugins>
         </pluginManagement>
         <plugins>

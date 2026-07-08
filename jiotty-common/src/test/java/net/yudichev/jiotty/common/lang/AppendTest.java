@@ -54,6 +54,18 @@ class AppendTest {
 
     @ParameterizedTest
     @MethodSource("appendables")
+    void iterableWithPrefixSeparatorAndSuffix(Appendable appendable) {
+        Append.to(appendable, List.of(1, 2, 3), "<", " | ", ">", (a, object) -> {
+            Append.to(a, object);
+            Append.to(a, '+');
+        });
+        Append.to(appendable, List.of(), "<", " | ", ">", Append::to);                       // empty iterable is just prefix+suffix
+        Append.to(appendable, List.of("MON", "SAT"), "", ",", "", (a, s) -> Append.to(a, s, 0, 3));  // unbracketed, tight comma
+        assertThat(appendable.toString()).isEqualTo("<1+ | 2+ | 3+><>MON,SAT");
+    }
+
+    @ParameterizedTest
+    @MethodSource("appendables")
     void map(Appendable appendable) {
         Append.to(appendable, ImmutableMap.of(1, "a", 2, "b"),
                   (a, key) -> {

@@ -124,11 +124,22 @@ public final class Append {
     public static <T> void to(Appendable to,
                               Iterable<? extends T> iterable,
                               ThrowingBiConsumer<? super Appendable, ? super T, ? extends Exception> appendCode) {
+        to(to, iterable, "[", ", ", "]", appendCode);
+    }
+
+    /// Joins `iterable` with caller-chosen `prefix`, `separator`, and `suffix` in place of the defaults (`[`, `, `, `]`). Pass empty `prefix`/`suffix` for an
+    /// unbracketed join and a bare `,` for a tight separator.
+    public static <T> void to(Appendable to,
+                              Iterable<? extends T> iterable,
+                              String prefix,
+                              String separator,
+                              String suffix,
+                              ThrowingBiConsumer<? super Appendable, ? super T, ? extends Exception> appendCode) {
         int i = 0;
-        to(to, '[');
+        to(to, prefix);
         for (T item : iterable) {
             if (i++ > 0) {
-                to(to, ", ");
+                to(to, separator);
             }
             try {
                 appendCode.accept(to, item);
@@ -136,7 +147,7 @@ public final class Append {
                 throw new RuntimeException(e);
             }
         }
-        to(to, ']');
+        to(to, suffix);
     }
 
 
