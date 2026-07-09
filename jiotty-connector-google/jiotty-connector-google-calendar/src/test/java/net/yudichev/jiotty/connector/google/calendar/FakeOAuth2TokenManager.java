@@ -55,7 +55,7 @@ final class FakeOAuth2TokenManager implements OAuth2TokenManager {
     }
 
     @Override
-    public void invalidate(String reason) {
+    public void invalidate(String rejectedAccessToken, String reason) {
         invalidations.add(reason);
         // Mirror the real manager: an invalidation drops the credential and escalates to a permanent failure.
         setState(new AuthState.PermanentFailure(reason));

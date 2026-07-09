@@ -335,7 +335,7 @@ class OAuth2TokenManagerImplTest {
         startTokenManager();
         assertThat(lastAuthState()).isInstanceOf(AuthState.Success.class);
 
-        tokenManager.invalidate("API rejected the token");
+        tokenManager.invalidate("stored-at", "API rejected the token");
         clock.tick();
 
         assertThat(lastAuthState()).isInstanceOfSatisfying(
@@ -353,7 +353,7 @@ class OAuth2TokenManagerImplTest {
         startTokenManager();
         assertThat(requestLog).isEmpty(); // a valid stored token needs no token request at startup
 
-        tokenManager.invalidate("API rejected the token");
+        tokenManager.invalidate("stored-at", "API rejected the token");
         clock.tick();
         assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
 
@@ -366,16 +366,20 @@ class OAuth2TokenManagerImplTest {
 
     @Test
     void invalidate_cancelsPendingRetrySoItDoesNotResurrectTheCredential() {
-        // The first attempt returns a token too short-lived to use, so it fails and a retry is scheduled; the second response would succeed if the retry fired.
+        // A valid stored token becomes current and schedules its refresh at the stored refresh time (1000s). That refresh returns a token too short-lived to
+        // use, so it fails and a retry is scheduled while the stored token is still current; the second response would succeed if the retry fired. invalidate()
+        // against that still-current token must cancel the retry.
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1000)));
         respondWithToken("at-fail", "rt", 10);
         respondWithToken("at-ok", "rt", 3600);
         startTokenManager();
-        tokenManager.onNewAuthCode("code", "http://r");
-        clock.tick();
-        assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
-        assertThat(requestLog).hasSize(1); // the failed attempt; a retry is now scheduled
+        assertThat(requestLog).isEmpty(); // a valid stored token needs no token request at startup
 
-        tokenManager.invalidate("API rejected the token");
+        clock.advanceTimeAndTick(Duration.ofSeconds(1000)); // fire the scheduled refresh, which fails (too short-lived) and schedules a retry
+        assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
+        assertThat(requestLog).hasSize(1); // the failed refresh; a retry is now scheduled, and the stored token is still current
+
+        tokenManager.invalidate("stored-at", "API rejected the token");
         clock.tick();
         assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
 
@@ -385,6 +389,42 @@ class OAuth2TokenManagerImplTest {
 
         assertThat(requestLog).hasSize(1);
         assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+    }
+
+    @Test
+    void invalidate_withNonCurrentToken_isIgnored() {
+        // A stale rejection — against a token the manager is no longer holding (here one that was never current) — must not drop the live credential.
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        startTokenManager();
+        assertThat(lastAuthState()).isInstanceOf(AuthState.Success.class);
+
+        tokenManager.invalidate("some-other-token", "API rejected a stale token");
+        clock.tick();
+
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("stored-at"));
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isPresent();
+    }
+
+    @Test
+    void invalidate_whileAwaitingInitialExchange_isIgnored() {
+        // No token has been obtained yet: the auth-code exchange is still in flight (its response is held), so there is no current token. A rejection cannot
+        // refer to a live credential and must be a no-op, so it cannot tear down the in-flight exchange — which then completes normally.
+        respondWithToken("at", "rt", 3600);
+        startTokenManager();
+
+        captureOnly = true;
+        tokenManager.onNewAuthCode("code", "http://r");
+        captureOnly = false;
+
+        tokenManager.invalidate("anything", "API rejected the credential");
+        clock.tick();
+        assertThat(authStates).noneMatch(AuthState.PermanentFailure.class::isInstance);
+
+        deliverPending();
+        clock.tick();
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("at"));
     }
 
     @Test

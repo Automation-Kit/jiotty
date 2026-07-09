@@ -148,6 +148,14 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     /// stored sync token and apply only the changed and removed entries, so each refresh transfers just the delta. On a `410` expiry the token is dropped and a
     /// single full resync is performed. Runs on [#executor].
     private void syncCalendarList() {
+        // Not authenticated yet — the auth-code exchange has not produced a token. Skip the API call rather than send an unauthenticated request (the request
+        // initializer omits the Authorization header when accessToken is null), which Google would reject with 401 and be misread below as a permanent
+        // credential rejection, tearing the integration down mid-exchange. accessToken is confined to this executor and the blocking calls below never yield to
+        // the token-state callback that writes it, so it stays fixed for the whole sync — the invalidate() below therefore refers to exactly the token these
+        // requests carried.
+        if (accessToken == null) {
+            return;
+        }
         boolean retriedAfterExpiry = false;
         while (true) {
             if (calendarListSyncToken == null) {
@@ -191,7 +199,7 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                         // The credential is no longer accepted by the API — revoked access, a deleted client project, or the API not being enabled — even
                         // though the token itself may still refresh. Invalidate it (escalating to a permanent auth failure) rather than retrying this call
                         // indefinitely against a credential that will never work.
-                        tokenManager.invalidate("Google Calendar API rejected the credential (HTTP " + e.getStatusCode() + ')');
+                        tokenManager.invalidate(accessToken, "Google Calendar API rejected the credential (HTTP " + e.getStatusCode() + ')');
                     }
                     throw new RuntimeException("Failed to sync Google calendar list", e);
                 }

@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -214,6 +215,33 @@ class GoogleCalendarServiceTest {
 
         assertThatThrownBy(future::join).hasMessageContaining("Failed to sync Google calendar list");
         assertThat(tokenManager.invalidations()).singleElement().asString().contains("403");
+    }
+
+    @Test
+    void retrieveCalendars_notAuthenticated_makesNoApiCallAndDoesNotInvalidate() {
+        // Before the token exchange completes the service has no access token: it must not issue an unauthenticated API call (which Google would reject with
+        // 401, and the service would misread as a permanent credential rejection and tear the integration down), but return an empty list, leaving the
+        // credential untouched.
+        var requestCount = new AtomicInteger();
+        tokenManager = new FakeOAuth2TokenManager(new AuthState.TransientFailure("Initialising"));
+        service = new GoogleCalendarService(clock, tokenManager, "redirect", Optional.empty(), Optional.empty(), Duration.ofSeconds(30), "test-user") {
+            @Override
+            HttpTransport createHttpTransport() {
+                return new MockHttpTransport() {
+                    @Override
+                    public LowLevelHttpRequest buildRequest(String method, String url) {
+                        requestCount.incrementAndGet();
+                        return new MockLowLevelHttpRequest();
+                    }
+                };
+            }
+        };
+        service.start();
+        clock.tick(); // run the token-state callback: the non-Success state leaves the access token unset
+
+        assertThat(retrieveCalendars()).isEmpty();
+        assertThat(requestCount).hasValue(0);
+        assertThat(tokenManager.invalidations()).isEmpty();
     }
 
     @Test

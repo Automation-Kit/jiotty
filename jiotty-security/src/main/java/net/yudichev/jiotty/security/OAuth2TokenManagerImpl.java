@@ -197,8 +197,15 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     }
 
     @Override
-    public void invalidate(String reason) {
+    public void invalidate(String rejectedAccessToken, String reason) {
         whenStartedAndNotLifecycling(() -> executor.execute(() -> {
+            // Honour the rejection only for the token the caller actually used and that is still current: a mismatch means the credential has already moved on
+            // (no token yet during an in-flight exchange, or a refresh has replaced it), so the rejection is stale and must not drop the live token. Never log
+            // the token itself.
+            if (currentToken == null || !currentToken.accessToken().equals(rejectedAccessToken)) {
+                logger.info("[{}] ignoring stale credential invalidation: {}", apiName, reason);
+                return;
+            }
             logger.info("[{}] credential invalidated by caller: {}", apiName, reason);
             invalidateCredential(reason);
         }));

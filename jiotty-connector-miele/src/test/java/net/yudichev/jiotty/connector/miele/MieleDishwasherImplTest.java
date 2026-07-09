@@ -72,7 +72,7 @@ class MieleDishwasherImplTest {
             }
 
             @Override
-            public void invalidate(String reason) {
+            public void invalidate(String rejectedAccessToken, String reason) {
             }
 
             @Override
