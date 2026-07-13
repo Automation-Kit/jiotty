@@ -128,24 +128,15 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
     @Override
     public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
         VarStoreEncryption enc = requireEncryption();
-        return inLock(lock, () -> MoreThrowables.getAsUnchecked(() -> {
-            ObjectNode configNode = readConfig();
-            JsonNode valueNode = configNode.get(key);
-            if (valueNode == null) {
-                return Optional.empty();
-            }
-            JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
-            if (valueNode.isTextual() && VarStoreEncryption.isEnvelope(valueNode.textValue())) {
-                String plaintextJson = enc.decrypt("", key, valueNode.textValue());
-                return Optional.of(OBJECT_MAPPER.readerFor(javaType).readValue(plaintextJson));
-            }
-            logger.info("legacy plaintext value for '{}' — re-encrypting on read", key);
-            T decoded = OBJECT_MAPPER.readerFor(javaType).readValue(valueNode);
-            String plaintextJson = OBJECT_MAPPER.writeValueAsString(valueNode);
-            configNode.set(key, TextNode.valueOf(enc.encrypt("", key, plaintextJson)));
-            writeConfigLocked(configNode);
-            return Optional.of(decoded);
-        }));
+        JsonNode valueNode = inLock(lock, () -> MoreThrowables.getAsUnchecked(() -> readConfig().get(key)));
+        if (valueNode == null) {
+            return Optional.empty();
+        }
+        checkState(valueNode.isTextual() && VarStoreEncryption.isEnvelope(valueNode.textValue()),
+                   "value under '%s' read via readValueEncrypted is not an encryption envelope", key);
+        String plaintextJson = enc.decrypt("", key, valueNode.textValue());
+        JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
+        return Optional.of(MoreThrowables.getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(plaintextJson)));
     }
 
     private VarStoreEncryption requireEncryption() {

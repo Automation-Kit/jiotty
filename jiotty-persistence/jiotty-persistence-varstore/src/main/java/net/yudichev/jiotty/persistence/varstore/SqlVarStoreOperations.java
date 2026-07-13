@@ -146,22 +146,14 @@ final class SqlVarStoreOperations {
     @SuppressWarnings("unchecked")
     public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
         VarStoreEncryption enc = requireEncryption();
-        boolean[] migrated = {false};
-        T result = (T) cache.computeIfPresent(key, (k, v) -> {
+        return Optional.ofNullable((T) cache.computeIfPresent(key, (k, v) -> {
             if (v instanceof Json(var json)) {
-                if (VarStoreEncryption.isEnvelope(json)) {
-                    return deserialize(type, enc.decrypt(userId, k, json));
-                }
-                logger.info("[{}] legacy plaintext value for '{}' — re-encrypting on read", userId, k);
-                migrated[0] = true;
-                return deserialize(type, json);
+                checkState(VarStoreEncryption.isEnvelope(json),
+                           "[%s] value under '%s' read via readValueEncrypted is not an encryption envelope", userId, k);
+                return deserialize(type, enc.decrypt(userId, k, json));
             }
             return v;
-        });
-        if (migrated[0]) {
-            scheduleWrite(key, result, plaintextJson -> enc.encrypt(userId, key, plaintextJson));
-        }
-        return Optional.ofNullable(result);
+        }));
     }
 
     private void persist(String key, Object value, Function<String, String> serialisedEncoder) {

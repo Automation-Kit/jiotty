@@ -16,6 +16,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.google.common.base.Preconditions.checkState;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 /// In-memory [VarStore] test double.
@@ -87,13 +88,9 @@ public final class InMemoryVarStore implements PrefixClearableVarStore {
         if (stored == null) {
             return Optional.empty();
         }
-        String plaintext;
-        if (VarStoreEncryption.isEnvelope(stored)) {
-            plaintext = stored.substring(VarStoreEncryption.ENVELOPE_PREFIX.length());
-        } else {
-            plaintext = stored;
-            serialisedValuesByKey.put(key, VarStoreEncryption.ENVELOPE_PREFIX + plaintext);
-        }
+        checkState(VarStoreEncryption.isEnvelope(stored),
+                   "value under '%s' read via readValueEncrypted is not an encryption envelope", key);
+        String plaintext = stored.substring(VarStoreEncryption.ENVELOPE_PREFIX.length());
         return Optional.of(getAsUnchecked(() -> mapper.readerFor(javaType).readValue(plaintext)));
     }
 

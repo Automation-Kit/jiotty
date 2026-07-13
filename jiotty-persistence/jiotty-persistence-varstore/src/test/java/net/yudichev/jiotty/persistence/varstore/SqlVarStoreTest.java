@@ -28,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -333,17 +334,28 @@ class SqlVarStoreTest {
     }
 
     @Test
-    void encryptedReadRewritesLegacyPlaintextRow() {
+    void encryptedReadDecryptsOnceAcrossRepeatedReads() {
         configuredEncryption = Optional.of(encryption);
-        when(encryption.encrypt(eq(""), eq("legacy"), any())).thenReturn("ENC1$re-encrypted");
+        when(encryption.decrypt("", "token", "ENC1$stored-envelope")).thenReturn("\"decrypted-value\"");
         startVarStore();
-        seedRawRowAndReload("", "legacy", "\"legacy-plaintext\"");
+        seedRawRowAndReload("", "token", "ENC1$stored-envelope");
 
-        assertThat(varStore.readValueEncrypted(String.class, "legacy")).contains("legacy-plaintext");
-        flushExecutor();
+        assertThat(varStore.readValueEncrypted(String.class, "token")).contains("decrypted-value");
+        assertThat(varStore.readValueEncrypted(String.class, "token")).contains("decrypted-value");
+        // The decrypting collaborator is invoked once; a repeated read of the same key does not decrypt again.
+        verify(encryption).decrypt("", "token", "ENC1$stored-envelope");
+    }
 
-        assertThat(readRawValue("", "legacy")).isEqualTo("ENC1$re-encrypted");
-        verify(encryption).encrypt("", "legacy", "\"legacy-plaintext\"");
+    @Test
+    void encryptedReadRejectsNonEnvelopeValue() {
+        configuredEncryption = Optional.of(encryption);
+        startVarStore();
+        seedRawRowAndReload("", "legacy", "\"plaintext\"");
+
+        assertThatThrownBy(() -> varStore.readValueEncrypted(String.class, "legacy"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not an encryption envelope");
+        verifyNoInteractions(encryption);
     }
 
     @Test

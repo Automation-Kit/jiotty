@@ -34,12 +34,10 @@ public interface VarStore {
     /// @throws IllegalStateException if the store was not configured with encryption
     void saveValueEncrypted(String key, Object value);
 
-    /// Reads a value written by [#saveValueEncrypted].
+    /// Reads a value written by [#saveValueEncrypted]. The stored value must be an encryption envelope; a value stored under this key in any other form is a
+    /// broken invariant and is rejected rather than returned as plaintext.
     ///
-    /// Tolerates legacy plaintext values for the same key: if the stored value is not encrypted., it is decoded as plain JSON and the row is immediately
-    /// re-encrypted in place.
-    ///
-    /// @throws IllegalStateException if the store was not configured with encryption
+    /// @throws IllegalStateException if the store was not configured with encryption, or the stored value is not an encryption envelope
     <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key);
 
     /// Returns a user-scoped view of the store.
