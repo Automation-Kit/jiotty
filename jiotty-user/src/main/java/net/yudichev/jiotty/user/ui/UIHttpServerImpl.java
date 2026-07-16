@@ -1,7 +1,9 @@
 package net.yudichev.jiotty.user.ui;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.BindingAnnotation;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.inject.Inject;
@@ -21,6 +23,7 @@ import org.eclipse.jetty.server.handler.ContextHandler;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.eclipse.jetty.server.handler.EventsHandler;
 import org.eclipse.jetty.util.NanoTime;
+import org.eclipse.jetty.util.thread.QueuedThreadPool;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -49,19 +52,32 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 ///   - `http_request_seconds` — recorded when Jetty fires `onComplete` at full request completion. For non-streaming endpoints it mirrors
 ///     `http_response_begin_seconds`; for SSE it measures session length, which is informational rather than a TTFB signal.
 ///
-/// The `path` tag is derived from the request attribute named [#ROUTE_NAME_ATTRIBUTE] when present (set by [UIServerImpl#dispatchApiPath] to the matched
+/// The `path` tag is derived from the request attribute named [#ROUTE_NAME_ATTRIBUTE] when present (set by [UIServerRuntime#dispatchApiPath] to the matched
 /// [ApiPathHandler#pathPrefix]). When the attribute is absent, the tag falls back to the first URL path segment of the request **if** that segment is one of
 /// the [ServletMount] context paths registered with the server; any other path (browser auto-requests like `/favicon.ico`, probes, typos) collapses into a
 /// single `"unmatched"` bucket, and the root `/` stays as `/`. Tag values are drawn from this bounded identifier set only.
 final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
-    /// Request-attribute key set by [UIServerImpl#dispatchApiPath] (and any other dispatcher that wants per-route metrics) to override the default `path` tag
-    /// derived by this server's request-timing hook from the URL. The value, if present, must be a [String]; the bounded set of legal values is the union of
-    /// registered [ApiPathHandler#pathPrefix] values.
+    /// Request-attribute key set by [UIServerRuntime#dispatchApiPath] (and any other dispatcher that wants per-route metrics) to override the default
+    /// `path` tag derived by this server's request-timing hook from the URL. The value, if present, must be a [String]; the bounded set of legal values
+    /// is the union of registered [ApiPathHandler#pathPrefix] values.
     static final String ROUTE_NAME_ATTRIBUTE = "metrics.routeName";
     private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
 
+    /// Bounded request-handling thread pool. SSE streams run async — their writes are marshalled onto the
+    /// UI executor, never held on a Jetty thread — so they do not occupy this pool per-stream; the max is
+    /// sized for concurrent short requests across the user base, not for stream count.
+    @VisibleForTesting
+    static final int MAX_THREADS = 32;
+    @VisibleForTesting
+    static final int MIN_THREADS = 8;
+    /// Accept backlog bound: excess inbound connections are refused by the OS rather than queued unbounded.
+    private static final int ACCEPT_QUEUE_SIZE = 128;
+    /// Request header size cap — app-side defence-in-depth alongside the Caddy edge header cap.
+    private static final int REQUEST_HEADER_SIZE_BYTES = 16 * 1024;
+
     private final Set<ServletMount> servletMounts;
     private final MeterRegistry meterRegistry;
+    private final QueuedThreadPool threadPool;
     private final Server server;
     private final ServerConnector connector;
 
@@ -70,11 +86,15 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         this.servletMounts = checkNotNull(servletMounts, "servletMounts");
         this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
         checkArgument(listenPort >= 0 && listenPort <= 65_535, "listenPort: %s", listenPort);
-        server = new Server();
+        threadPool = new QueuedThreadPool(MAX_THREADS, MIN_THREADS);
+        threadPool.setName("ui-http");
+        server = new Server(threadPool);
         var httpConfig = new HttpConfiguration();
         httpConfig.setFormEncodedMethods("POST");
+        httpConfig.setRequestHeaderSize(REQUEST_HEADER_SIZE_BYTES);
         connector = new ServerConnector(server, new HttpConnectionFactory(httpConfig));
         connector.setPort(listenPort);
+        connector.setAcceptQueueSize(ACCEPT_QUEUE_SIZE);
         server.addConnector(connector);
     }
 
@@ -85,6 +105,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
 
     @Override
     protected void doStart() {
+        registerThreadPoolMetrics();
         var contexts = new ContextHandlerCollection();
         for (ServletMount mount : servletMounts) {
             contexts.addHandler(mount.buildHandler());
@@ -92,6 +113,17 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         server.setHandler(new TimingEventsHandler(contexts, meterRegistry, collectAllowedFirstSegments(contexts)));
         server.setErrorHandler(new JsonErrorHandler());
         asUnchecked(server::start);
+    }
+
+    /// Publishes the request-handling pool's saturation to Micrometer under the standard `jetty_threads_*`
+    /// names (busy/idle vs configured max) so the shared thread ceiling is observable and alertable.
+    private void registerThreadPoolMetrics() {
+        Gauge.builder("jetty_threads_config_max", threadPool, QueuedThreadPool::getMaxThreads).register(meterRegistry);
+        Gauge.builder("jetty_threads_config_min", threadPool, QueuedThreadPool::getMinThreads).register(meterRegistry);
+        Gauge.builder("jetty_threads_current", threadPool, QueuedThreadPool::getThreads).register(meterRegistry);
+        Gauge.builder("jetty_threads_idle", threadPool, QueuedThreadPool::getIdleThreads).register(meterRegistry);
+        Gauge.builder("jetty_threads_busy", threadPool, p -> p.getThreads() - p.getIdleThreads()).register(meterRegistry);
+        Gauge.builder("jetty_threads_jobs", threadPool, QueuedThreadPool::getQueueSize).register(meterRegistry);
     }
 
     /// Normalises each registered [ContextHandler]'s context path to its first URL segment (e.g. `/ui/api` → `/ui`, `/admin/api` → `/admin`, `/ui` → `/ui`).

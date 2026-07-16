@@ -92,6 +92,17 @@ class UIHttpServerImplTest {
     }
 
     @Test
+    void start_registersBoundedThreadPoolMetrics() {
+        assertThat(meterRegistry.get("jetty_threads_config_max").gauge().value()).isEqualTo(UIHttpServerImpl.MAX_THREADS);
+        assertThat(meterRegistry.get("jetty_threads_config_min").gauge().value()).isEqualTo(UIHttpServerImpl.MIN_THREADS);
+        // Poll the live gauges too, so their pool-reading functions are exercised, not just registered.
+        assertThat(meterRegistry.get("jetty_threads_current").gauge().value()).isGreaterThanOrEqualTo(0.0);
+        assertThat(meterRegistry.get("jetty_threads_idle").gauge().value()).isGreaterThanOrEqualTo(0.0);
+        assertThat(meterRegistry.get("jetty_threads_busy").gauge().value()).isGreaterThanOrEqualTo(0.0);
+        assertThat(meterRegistry.get("jetty_threads_jobs").gauge().value()).isGreaterThanOrEqualTo(0.0);
+    }
+
+    @Test
     void staticResourceGet_servesFile() {
         HttpResponse<String> response = sendGet("/ui/style.css");
 
