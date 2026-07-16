@@ -277,7 +277,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
             try {
                 assert responseEither != null;
                 responseEither.accept(successResponse -> handleSuccessResponse(requestTime, successResponse, fallbackRefreshToken),
-                                      this::handleErrorResponse);
+                                      errorResponse -> handleErrorResponse(formBody, fallbackRefreshToken, errorResponse));
                 return;
             } catch (RuntimeException e) {
                 failure = e;
@@ -328,13 +328,20 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                       "%s: unsupported token type '%s', only 'Bearer' is supported", apiName, tokenType);
     }
 
-    private void handleErrorResponse(OauthErrorResponse errorResponse) {
+    /// Handles an OAuth error response on [#executor]: `invalid_grant` means the credential itself is dead (revoked/expired refresh token, consumed auth code),
+    /// so it is dropped immediately; every other error (e.g. `temporarily_unavailable`) is treated like a transport failure — retried with backoff and, once
+    /// the retry budget is exhausted, escalated to [AuthState.PermanentFailure] — so a token-endpoint error can never leave the manager dormant with no token,
+    /// no pending request and no user-visible state.
+    ///
+    /// @param fallbackRefreshToken the refresh token re-sent on each retry, or `null` when the failed request was an initial authorization-code exchange
+    ///  (which carries no prior refresh token)
+    private void handleErrorResponse(RequestBody formBody, @Nullable String fallbackRefreshToken, OauthErrorResponse errorResponse) {
         String description = errorResponse.errorDescription().orElse(errorResponse.error());
         logger.info("[{}] token request failed: {} ({})", apiName, errorResponse.error(), description);
         if ("invalid_grant".equals(errorResponse.error())) {
             invalidateCredential(description);
         } else {
-            listeners.notify(new AuthState.TransientFailure(description));
+            retryTokenRequestOrGiveUp(formBody, fallbackRefreshToken, description);
         }
     }
 

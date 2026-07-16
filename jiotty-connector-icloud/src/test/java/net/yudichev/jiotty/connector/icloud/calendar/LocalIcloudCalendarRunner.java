@@ -8,12 +8,14 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
 import net.yudichev.jiotty.common.time.calendar.CalendarService;
+import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.Calendars;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
@@ -49,7 +51,9 @@ final class LocalIcloudCalendarRunner {
 
         @Override
         protected void doStart() {
-            service.retrieveCalendars().thenAccept(calendars -> {
+            service.retrieveCalendars().thenAccept(result -> {
+                       // the iCloud service authenticates on the retrieval call itself, so the result always carries the calendar list
+                       List<Calendar> calendars = ((Calendars) result).calendars();
                        logger.info("Calendars: {}", calendars.stream().map(Calendar::name).toList());
                        calendars.stream()
                                 .map(calendar -> calendar.fetchEvents(Instant.now(), Instant.now().plus(1, ChronoUnit.DAYS))

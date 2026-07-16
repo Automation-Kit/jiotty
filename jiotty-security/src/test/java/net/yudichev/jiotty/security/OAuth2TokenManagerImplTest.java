@@ -19,6 +19,9 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -29,12 +32,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_INITIAL_INTERVAL;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_MAX_ELAPSED_TIME;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Named.named;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 
@@ -266,16 +272,15 @@ class OAuth2TokenManagerImplTest {
                 transientFailure -> assertThat(transientFailure.description()).isEqualTo("Client authentication failed"));
     }
 
-    @Test
-    void tokenRequestFailure_retriesAndRecoversOnNextAttempt() {
-        // A token whose lifetime is too short to schedule a refresh before it expires makes the first attempt fail; the retry then gets a healthy token.
-        respondWithToken("at-fail", "rt", 10);
+    @ParameterizedTest
+    @MethodSource("failureResponses")
+    void tokenRequestFailure_retriesAndRecoversOnNextAttempt(FakeResponse failureResponse) {
+        responses.add(failureResponse);
         respondWithToken("at-ok", "rt", 3600);
         startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
         clock.tick();
-
         assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
 
         // The retry is scheduled one (randomised) initial interval out; doubling it clears the +50% jitter ceiling so the retry reliably fires.
@@ -287,10 +292,12 @@ class OAuth2TokenManagerImplTest {
         assertThat(requestLog).hasSize(2);
     }
 
-    @Test
-    void tokenRequestFailure_keepsFailing_givesUpWithPermanentFailure() {
-        // Every attempt returns a token too short-lived to use, so the attempts keep failing until the retry budget is exhausted.
-        respondWithToken("at", "rt", 10);
+    @ParameterizedTest
+    @MethodSource("failureResponses")
+    void tokenRequestFailure_keepsFailing_givesUpWithPermanentFailure(FakeResponse failureResponse) {
+        // The endpoint keeps failing the same way, so retries continue until the budget is exhausted; the manager must then escalate to a user-visible
+        // permanent failure rather than fall silent with no token and no pending request.
+        responses.add(failureResponse);
         startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
@@ -302,6 +309,17 @@ class OAuth2TokenManagerImplTest {
         clock.advanceTimeAndTick(TOKEN_RETRY_MAX_ELAPSED_TIME.multipliedBy(2));
 
         assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+        assertThat(requestLog.size()).as("the failed request was retried before giving up").isGreaterThan(1);
+    }
+
+    /// Both shapes of a failed token request that must be retried: a response the manager cannot use (its token is too short-lived to schedule a refresh
+    /// before it expires) and a non-`invalid_grant` OAuth error response.
+    private static Stream<Arguments> failureResponses() {
+        return Stream.of(
+                arguments(named("token too short-lived to use", createTokenResponse("at-fail", "rt", 10))),
+                arguments(named("non-invalid_grant error response",
+                                new FakeResponse(503, """
+                                                      {"error": "temporarily_unavailable", "error_description": "Service is temporarily unavailable"}"""))));
     }
 
     @Test
@@ -505,9 +523,13 @@ class OAuth2TokenManagerImplTest {
     }
 
     private void respondWithToken(String accessToken, String refreshToken, int expiresIn) {
-        responses.add(new FakeResponse(200, """
-                                            {"access_token": "%s", "refresh_token": "%s", "expires_in": %d, "token_type": "Bearer"}"""
-                .formatted(accessToken, refreshToken, expiresIn)));
+        responses.add(createTokenResponse(accessToken, refreshToken, expiresIn));
+    }
+
+    private static FakeResponse createTokenResponse(String accessToken, String refreshToken, int expiresIn) {
+        return new FakeResponse(200, """
+                                     {"access_token": "%s", "refresh_token": "%s", "expires_in": %d, "token_type": "Bearer"}"""
+                .formatted(accessToken, refreshToken, expiresIn));
     }
 
     private void respondWith(int status, String body) {

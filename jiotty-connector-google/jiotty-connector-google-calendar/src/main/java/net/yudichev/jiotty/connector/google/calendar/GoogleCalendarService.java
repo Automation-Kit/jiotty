@@ -6,6 +6,7 @@ import com.google.api.client.http.HttpRequestInitializer;
 import com.google.api.client.http.HttpTransport;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
+import com.google.api.services.calendar.Calendar;
 import com.google.api.services.calendar.model.CalendarList;
 import com.google.api.services.calendar.model.CalendarListEntry;
 import com.google.common.annotations.VisibleForTesting;
@@ -18,8 +19,9 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.security.AuthState;
-import net.yudichev.jiotty.common.time.calendar.Calendar;
 import net.yudichev.jiotty.common.time.calendar.CalendarService;
+import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.Calendars;
+import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.NotYetAuthenticated;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -72,7 +74,7 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     /// [#executor].
     private @Nullable String calendarListSyncToken;
     private SchedulingExecutor executor;
-    private com.google.api.services.calendar.Calendar calendarApi;
+    private Calendar calendarApi;
     private @Nullable Closeable tokenSubscription;
 
     @Inject
@@ -102,7 +104,7 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                 request.getHeaders().setAuthorization("Bearer " + accessToken);
             }
         };
-        calendarApi = new com.google.api.services.calendar.Calendar.Builder(createHttpTransport(), GsonFactory.getDefaultInstance(), requestInitializer)
+        calendarApi = new Calendar.Builder(createHttpTransport(), GsonFactory.getDefaultInstance(), requestInitializer)
                 .setApplicationName(APPLICATION_NAME)
                 .build();
         // Cache the latest access token for the request initializer and re-publish the token manager's state as our auth state (hiding the raw token). The
@@ -137,25 +139,23 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     }
 
     @Override
-    public CompletableFuture<List<Calendar>> retrieveCalendars() {
+    public CompletableFuture<CalendarsResult> retrieveCalendars() {
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
+            // Not authenticated yet — the auth-code exchange has not produced a token.
+            if (accessToken == null) {
+                return NotYetAuthenticated.INSTANCE;
+            }
             syncCalendarList();
-            return ImmutableList.copyOf(calendarsById.values());
+            return new Calendars(ImmutableList.copyOf(calendarsById.values()));
         }));
     }
 
     /// Refreshes [#calendarsById] from the Calendar API. The first call (and any call after the sync token has expired) does a full list; later calls send the
     /// stored sync token and apply only the changed and removed entries, so each refresh transfers just the delta. On a `410` expiry the token is dropped and a
-    /// single full resync is performed. Runs on [#executor].
+    /// single full resync is performed. Runs on [#executor], with [#accessToken] non-null.
     private void syncCalendarList() {
-        // Not authenticated yet — the auth-code exchange has not produced a token. Skip the API call rather than send an unauthenticated request (the request
-        // initializer omits the Authorization header when accessToken is null), which Google would reject with 401 and be misread below as a permanent
-        // credential rejection, tearing the integration down mid-exchange. accessToken is confined to this executor and the blocking calls below never yield to
-        // the token-state callback that writes it, so it stays fixed for the whole sync — the invalidate() below therefore refers to exactly the token these
-        // requests carried.
-        if (accessToken == null) {
-            return;
-        }
+        // accessToken is confined to this executor and the blocking calls below never yield to the token-state callback that writes it, so it stays fixed for
+        // the whole sync — the invalidate() below therefore refers to exactly the token these requests carried.
         boolean retriedAfterExpiry = false;
         while (true) {
             if (calendarListSyncToken == null) {

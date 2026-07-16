@@ -17,6 +17,7 @@ import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
 import net.yudichev.jiotty.common.time.calendar.CalendarAuthorisationException;
 import net.yudichev.jiotty.common.time.calendar.CalendarService;
+import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.Calendars;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.HttpClient;
@@ -40,7 +41,6 @@ import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.util.Collection;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
@@ -104,7 +104,7 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
     }
 
     @Override
-    public CompletableFuture<List<Calendar>> retrieveCalendars() {
+    public CompletableFuture<CalendarsResult> retrieveCalendars() {
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
             // Prepare HTTP BASIC Auth with app-specific password
 
@@ -135,7 +135,7 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
                         logger.debug("Skipping non-calendar entry: {}", href);
                     }
                 }
-                return resultBuilder.build();
+                return new Calendars(resultBuilder.build());
             } catch (IOException | DavException e) {
                 throw new RuntimeException("Failed to fetch calendar list", e);
             }

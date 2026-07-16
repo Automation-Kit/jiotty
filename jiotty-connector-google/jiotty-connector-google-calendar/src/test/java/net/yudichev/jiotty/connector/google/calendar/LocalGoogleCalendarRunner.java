@@ -12,6 +12,7 @@ import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
 import net.yudichev.jiotty.common.time.calendar.CalendarService;
+import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.Calendars;
 import net.yudichev.jiotty.persistence.varstore.VarStoreModule;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
@@ -22,6 +23,7 @@ import java.io.BufferedReader;
 import java.nio.file.Paths;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -139,7 +141,9 @@ final class LocalGoogleCalendarRunner {
 
         private void listCalendarsAndEvents() {
             service.retrieveCalendars()
-                   .thenAccept(calendars -> {
+                   .thenAccept(result -> {
+                       // this runner only lists once the auth state is Success, so the result always carries the calendar list
+                       List<Calendar> calendars = ((Calendars) result).calendars();
                        logger.info("Calendars: {}", calendars.stream().map(Calendar::name).toList());
                        calendars.stream()
                                 .map(calendar -> calendar.fetchEvents(Instant.now(), Instant.now().plus(1, ChronoUnit.DAYS))

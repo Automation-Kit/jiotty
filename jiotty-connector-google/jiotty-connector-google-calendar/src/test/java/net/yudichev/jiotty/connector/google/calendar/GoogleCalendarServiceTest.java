@@ -11,6 +11,9 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
 import net.yudichev.jiotty.common.time.calendar.CalendarEvent;
+import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult;
+import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.Calendars;
+import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.NotYetAuthenticated;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -188,7 +191,7 @@ class GoogleCalendarServiceTest {
     void retrieveCalendars_apiIoException_failsFuture() {
         startService(transportThrowing(new IOException("connection reset")));
 
-        CompletableFuture<List<Calendar>> future = service.retrieveCalendars();
+        CompletableFuture<CalendarsResult> future = service.retrieveCalendars();
         clock.tick();
         assertThatThrownBy(future::join)
                 .hasRootCauseInstanceOf(IOException.class)
@@ -197,10 +200,12 @@ class GoogleCalendarServiceTest {
 
     @Test
     void retrieveCalendars_nonExpiryApiError_failsFuture() {
-        startService((_, _) -> new MockLowLevelHttpResponse().setStatusCode(500).setContentType("application/json").setContent("""
-                                                                                                                               {"error":{"code":500,"message":"backend error"}}"""));
+        startService((_, _) -> new MockLowLevelHttpResponse().setStatusCode(500)
+                                                             .setContentType("application/json")
+                                                             .setContent("""
+                                                                         {"error":{"code":500,"message":"backend error"}}"""));
 
-        CompletableFuture<List<Calendar>> future = service.retrieveCalendars();
+        CompletableFuture<CalendarsResult> future = service.retrieveCalendars();
         clock.tick();
         assertThatThrownBy(future::join).hasMessageContaining("Failed to sync Google calendar list");
     }
@@ -210,7 +215,7 @@ class GoogleCalendarServiceTest {
         // A deleted client project surfaces as a 403 (reason not a rate limit); the credential must be invalidated so the auth state goes to PermanentFailure.
         startService((_, _) -> forbidden("forbidden", "Project #123 has been deleted."));
 
-        CompletableFuture<List<Calendar>> future = service.retrieveCalendars();
+        CompletableFuture<CalendarsResult> future = service.retrieveCalendars();
         clock.tick();
 
         assertThatThrownBy(future::join).hasMessageContaining("Failed to sync Google calendar list");
@@ -218,10 +223,10 @@ class GoogleCalendarServiceTest {
     }
 
     @Test
-    void retrieveCalendars_notAuthenticated_makesNoApiCallAndDoesNotInvalidate() {
+    void retrieveCalendars_notAuthenticated_reportsNotYetAuthenticatedWithoutApiCall() {
         // Before the token exchange completes the service has no access token: it must not issue an unauthenticated API call (which Google would reject with
-        // 401, and the service would misread as a permanent credential rejection and tear the integration down), but return an empty list, leaving the
-        // credential untouched.
+        // 401, and the service would misread as a permanent credential rejection and tear the integration down), but report the not-yet-authenticated state —
+        // never a successful empty list, which callers would trust as "the account has no calendars" — leaving the credential untouched.
         var requestCount = new AtomicInteger();
         tokenManager = new FakeOAuth2TokenManager(new AuthState.TransientFailure("Initialising"));
         service = new GoogleCalendarService(clock, tokenManager, "redirect", Optional.empty(), Optional.empty(), Duration.ofSeconds(30), "test-user") {
@@ -239,7 +244,9 @@ class GoogleCalendarServiceTest {
         service.start();
         clock.tick(); // run the token-state callback: the non-Success state leaves the access token unset
 
-        assertThat(retrieveCalendars()).isEmpty();
+        CompletableFuture<CalendarsResult> future = service.retrieveCalendars();
+        clock.tick();
+        assertThat(future.join()).isSameAs(NotYetAuthenticated.INSTANCE);
         assertThat(requestCount).hasValue(0);
         assertThat(tokenManager.invalidations()).isEmpty();
     }
@@ -248,7 +255,7 @@ class GoogleCalendarServiceTest {
     void retrieveCalendars_rateLimit403_isTransient_doesNotInvalidateCredential() {
         startService((_, _) -> forbidden("userRateLimitExceeded", "Rate Limit Exceeded"));
 
-        CompletableFuture<List<Calendar>> future = service.retrieveCalendars();
+        CompletableFuture<CalendarsResult> future = service.retrieveCalendars();
         clock.tick();
 
         assertThatThrownBy(future::join).hasMessageContaining("Failed to sync Google calendar list");
@@ -320,9 +327,12 @@ class GoogleCalendarServiceTest {
     }
 
     private List<Calendar> retrieveCalendars() {
-        CompletableFuture<List<Calendar>> future = service.retrieveCalendars();
+        CompletableFuture<CalendarsResult> future = service.retrieveCalendars();
         clock.tick();
-        return future.join();
+        return switch (future.join()) {
+            case Calendars(List<Calendar> calendars) -> calendars;
+            case NotYetAuthenticated _ -> throw new AssertionError("expected a calendar list, but the service reported it is not yet authenticated");
+        };
     }
 
     private List<CalendarEvent> fetchEvents(Calendar calendar) {
@@ -336,8 +346,10 @@ class GoogleCalendarServiceTest {
     }
 
     private static MockLowLevelHttpResponse gone() {
-        return new MockLowLevelHttpResponse().setStatusCode(410).setContentType("application/json").setContent("""
-                                                                                                               {"error":{"code":410,"message":"Sync token is no longer valid."}}""");
+        return new MockLowLevelHttpResponse().setStatusCode(410)
+                                             .setContentType("application/json")
+                                             .setContent("""
+                                                         {"error":{"code":410,"message":"Sync token is no longer valid."}}""");
     }
 
     private static MockLowLevelHttpResponse forbidden(String reason, String message) {
