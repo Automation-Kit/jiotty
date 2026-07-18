@@ -22,7 +22,6 @@ import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionDto;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.util.StringBuilderFormattable;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -46,7 +45,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.idempotent;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.toFutureOfList;
-import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.appendHumanReadableMessage;
+import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessageFormattable;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 
 public final class SseServiceImpl extends BaseLifecycleComponent implements SseService {
@@ -179,8 +178,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
 
                     @Override
                     public void onError(AsyncEvent event) {
-                        logger.debug("[SSE {}] onError: {}",
-                                     clientId, (StringBuilderFormattable) buffer -> appendHumanReadableMessage(event.getThrowable(), buffer));
+                        logger.debug("[SSE {}] onError: {}", clientId, humanReadableMessageFormattable(event.getThrowable()));
                         removeClient();
                     }
 

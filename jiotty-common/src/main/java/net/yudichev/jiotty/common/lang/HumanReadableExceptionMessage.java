@@ -15,6 +15,10 @@ public final class HumanReadableExceptionMessage {
         return sb.toString();
     }
 
+    public static StringFormattable humanReadableMessageFormattable(Throwable exception) {
+        return appendable -> appendHumanReadableMessage(exception, appendable);
+    }
+
     public static void appendHumanReadableMessage(Throwable exception, Appendable appendable) {
         List<Throwable> causalChain = Throwables.getCausalChain(exception);
         Throwable parent = null;
