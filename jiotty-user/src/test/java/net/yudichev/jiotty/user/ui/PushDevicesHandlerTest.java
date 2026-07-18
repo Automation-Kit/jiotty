@@ -3,6 +3,8 @@ package net.yudichev.jiotty.user.ui;
 import com.fasterxml.jackson.core.type.TypeReference;
 import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
+import jakarta.servlet.ReadListener;
+import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
@@ -20,10 +22,10 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.PrintWriter;
-import java.io.StringReader;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -34,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -74,8 +77,8 @@ class PushDevicesHandlerTest {
         when(pushDeviceStore.upsert(any())).thenReturn(completedFuture(null));
         configureRequest("POST", "/push/devices");
         when(request.startAsync()).thenReturn(asyncContext);
-        asUnchecked(() -> when(request.getReader()).thenReturn(
-                new BufferedReader(new StringReader("{\"deviceId\":\"dev1\",\"token\":\"tok1\"}"))));
+        asUnchecked(() -> when(request.getInputStream()).thenReturn(
+                servletInputStream("{\"deviceId\":\"dev1\",\"token\":\"tok1\"}")));
 
         handler.handle(request, response);
         clock.tick();
@@ -96,9 +99,8 @@ class PushDevicesHandlerTest {
         when(pushDeviceStore.upsert(any())).thenReturn(completedFuture(null));
         configureRequest("POST", "/push/devices");
         when(request.startAsync()).thenReturn(asyncContext);
-        asUnchecked(() -> when(request.getReader()).thenReturn(
-                new BufferedReader(new StringReader(
-                        "{\"deviceId\":\"dev1\",\"token\":\"tok1\",\"platform\":\"ios\",\"appVersion\":\"2.1.0\"}"))));
+        asUnchecked(() -> when(request.getInputStream()).thenReturn(
+                servletInputStream("{\"deviceId\":\"dev1\",\"token\":\"tok1\",\"platform\":\"ios\",\"appVersion\":\"2.1.0\"}")));
 
         handler.handle(request, response);
         clock.tick();
@@ -114,7 +116,7 @@ class PushDevicesHandlerTest {
         var writer = new StringWriter();
         configureRequest("POST", "/push/devices");
         when(request.startAsync()).thenReturn(asyncContext);
-        asUnchecked(() -> when(request.getReader()).thenReturn(new BufferedReader(new StringReader("not json"))));
+        asUnchecked(() -> when(request.getInputStream()).thenReturn(servletInputStream("not json")));
         asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
 
         handler.handle(request, response);
@@ -125,13 +127,30 @@ class PushDevicesHandlerTest {
     }
 
     @Test
+    void registerReturns413ForOversizedBody() {
+        var writer = new StringWriter();
+        configureRequest("POST", "/push/devices");
+        when(request.startAsync()).thenReturn(asyncContext);
+        String oversizedBody = "{\"deviceId\":\"" + "x".repeat(40 * 1024) + "\"}";
+        asUnchecked(() -> when(request.getInputStream()).thenReturn(servletInputStream(oversizedBody)));
+        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
+
+        handler.handle(request, response);
+
+        verify(response).setStatus(413);
+        verify(asyncContext).complete();
+        verifyNoInteractions(pushDeviceStore);
+        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().contains("too large");
+    }
+
+    @Test
     void registerReturns500WhenUpsertFails() {
         when(pushDeviceStore.upsert(any())).thenReturn(CompletableFuture.failedFuture(new RuntimeException("store down")));
         var writer = new StringWriter();
         configureRequest("POST", "/push/devices");
         when(request.startAsync()).thenReturn(asyncContext);
-        asUnchecked(() -> when(request.getReader()).thenReturn(
-                new BufferedReader(new StringReader("{\"deviceId\":\"dev1\",\"token\":\"tok1\"}"))));
+        asUnchecked(() -> when(request.getInputStream()).thenReturn(
+                servletInputStream("{\"deviceId\":\"dev1\",\"token\":\"tok1\"}")));
         asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
 
         handler.handle(request, response);
@@ -191,5 +210,29 @@ class PushDevicesHandlerTest {
 
     private static Map<String, Object> parseJson(String json) {
         return getAsUnchecked(() -> UIJson.MAPPER.readValue(json, new TypeReference<>() {}));
+    }
+
+    private static ServletInputStream servletInputStream(String body) {
+        var delegate = new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8));
+        return new ServletInputStream() {
+            @Override
+            public int read() {
+                return delegate.read();
+            }
+
+            @Override
+            public boolean isFinished() {
+                return delegate.available() == 0;
+            }
+
+            @Override
+            public boolean isReady() {
+                return true;
+            }
+
+            @Override
+            public void setReadListener(ReadListener readListener) {
+            }
+        };
     }
 }

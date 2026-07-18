@@ -37,6 +37,12 @@ public final class Json {
         return getAsUnchecked(() -> mapper.readValue(json, mapper.getTypeFactory().constructType(type.getType())));
     }
 
+    /// Parses JSON directly from `bytes`, letting Jackson decode UTF-8 in a single streaming pass rather than first allocating an intermediate [String] (a full
+    /// char[] copy). Prefer this over [#parse(String, Class)] when the payload is already a byte array — e.g. a size-capped request body read via `readNBytes`.
+    public static <T> T parse(byte[] bytes, Class<T> type) {
+        return getAsUnchecked(() -> mapper.readValue(bytes, type));
+    }
+
     /// Parses JSON read directly from `reader`, avoiding the intermediate [String]/byte-array copy that reading the whole payload into memory first would
     /// incur. Jackson reads `reader` to completion and closes it. A caller holding a byte stream wraps it in an [InputStreamReader] with the desired charset.
     public static <T> T parse(Reader reader, Class<T> type) {

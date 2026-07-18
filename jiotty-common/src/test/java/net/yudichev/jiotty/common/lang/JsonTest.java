@@ -23,6 +23,11 @@ class JsonTest {
     }
 
     @Test
+    void parsesFromByteArrayIntoClass() {
+        assertThat(Json.parse("{\"x\":1,\"y\":2}".getBytes(UTF_8), Point.class)).isEqualTo(new Point(1, 2));
+    }
+
+    @Test
     void parsesFromReaderIntoGenericType() {
         assertThat(Json.parse(reader("[{\"x\":1,\"y\":2},{\"x\":3,\"y\":4}]", UTF_8), new TypeToken<List<Point>>() {}))
                 .containsExactly(new Point(1, 2), new Point(3, 4));

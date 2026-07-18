@@ -145,6 +145,17 @@ class AdminAlertResolveServletTest {
         assertThat(readResolvedBy(alertId)).contains(AdminBearerAuthFilter.DEFAULT_GRAFANA_USER);
     }
 
+    @Test
+    void oversizedBody_returns413AndDoesNotResolve() {
+        String alertId = raiseActive();
+        String oversizedBody = "{\"note\":\"" + "x".repeat(9 * 1024) + "\"}";
+
+        HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER, oversizedBody);
+
+        assertThat(response.statusCode()).isEqualTo(413);
+        assertThat(readResolvedBy(alertId)).isEmpty();
+    }
+
     private String readDedupKey(String alertId) {
         return readColumnById(alertId, "dedup_key").orElseThrow();
     }
@@ -202,9 +213,13 @@ class AdminAlertResolveServletTest {
     }
 
     private HttpResponse<String> sendResolve(String alertId, String bearerToken, String grafanaUser) {
+        return sendResolve(alertId, bearerToken, grafanaUser, "{}");
+    }
+
+    private HttpResponse<String> sendResolve(String alertId, String bearerToken, String grafanaUser, String body) {
         var requestBuilder = HttpRequest.newBuilder()
                                         .uri(URI.create("http://localhost:" + port + "/admin/api/alerts/" + alertId + "/resolve"))
-                                        .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                                        .POST(HttpRequest.BodyPublishers.ofString(body))
                                         .header("Content-Type", "application/json");
         if (bearerToken != null) {
             requestBuilder.header("Authorization", "Bearer " + bearerToken);

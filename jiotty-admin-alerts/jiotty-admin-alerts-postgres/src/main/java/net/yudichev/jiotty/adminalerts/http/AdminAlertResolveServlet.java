@@ -20,7 +20,6 @@ import java.io.ObjectOutputStream;
 import java.io.Serial;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
-import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -41,6 +40,9 @@ public final class AdminAlertResolveServlet extends HttpServlet {
 
     private static final String RESOLVE_SUFFIX = "/resolve";
     private static final long ASYNC_TIMEOUT_MS = 30_000;
+    /// Hard cap on the resolve-note request body: at most this many bytes are read before parsing, so a huge or
+    /// chunked body cannot be buffered whole (`Content-Length` alone is attacker-controllable).
+    private static final int MAX_NOTE_BYTES = 8 * 1024;
 
     private final AdminAlertService alertService;
 
@@ -73,9 +75,14 @@ public final class AdminAlertResolveServlet extends HttpServlet {
             writeJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Unknown path");
             return;
         }
+        byte[] bodyBytes = request.getInputStream().readNBytes(MAX_NOTE_BYTES + 1);
+        if (bodyBytes.length > MAX_NOTE_BYTES) {
+            writeJsonError(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "Request body too large");
+            return;
+        }
         String resolvedByHeader = (String) request.getAttribute(AdminBearerAuthFilter.GRAFANA_USER_REQUEST_ATTRIBUTE);
         String resolvedBy = resolvedByHeader == null ? AdminBearerAuthFilter.DEFAULT_GRAFANA_USER : resolvedByHeader;
-        Optional<String> note = readOptionalNote(request);
+        Optional<String> note = parseNote(bodyBytes);
 
         AsyncContext asyncContext = request.startAsync();
         asyncContext.setTimeout(ASYNC_TIMEOUT_MS);
@@ -117,12 +124,11 @@ public final class AdminAlertResolveServlet extends HttpServlet {
         }
     }
 
-    private static Optional<String> readOptionalNote(HttpServletRequest request) throws IOException {
-        if (request.getContentLength() <= 0) {
+    private static Optional<String> parseNote(byte[] bodyBytes) {
+        if (bodyBytes.length == 0) {
             return Optional.empty();
         }
-        var body = new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        var parsed = Json.parse(body, ResolveBody.class);
+        var parsed = Json.parse(bodyBytes, ResolveBody.class);
         if (parsed.note() == null || parsed.note().isBlank()) {
             return Optional.empty();
         }

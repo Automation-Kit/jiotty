@@ -33,6 +33,9 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
     private static final String UNREGISTER_PREFIX = PATH + "/";
     private static final Logger logger = LogManager.getLogger(PushDevicesHandler.class);
     private static final ObjectReader REQUEST_READER = UIJson.MAPPER.readerFor(PushDeviceRegisterRequest.class);
+    /// Hard cap on the register request body: at most this many bytes are read before parsing, bounding the
+    /// buffer a malicious client can force the server to hold.
+    private static final int MAX_BODY_BYTES = 32 * 1024;
 
     private final PushDeviceStore pushDeviceStore;
     private final CurrentDateTimeProvider currentDateTimeProvider;
@@ -90,7 +93,13 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
             AsyncContext asyncContext = request.startAsync();
             PushDeviceRegisterRequest body;
             try {
-                body = REQUEST_READER.readValue(request.getReader());
+                byte[] bodyBytes = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
+                if (bodyBytes.length > MAX_BODY_BYTES) {
+                    writeJsonError(response, 413, "Request body too large");
+                    asyncContext.complete();
+                    return;
+                }
+                body = REQUEST_READER.readValue(bodyBytes);
             } catch (IOException e) {
                 writeJsonError(response, 400, "Invalid JSON body");
                 asyncContext.complete();
