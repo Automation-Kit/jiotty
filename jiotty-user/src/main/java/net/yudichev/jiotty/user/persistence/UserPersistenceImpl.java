@@ -82,7 +82,9 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     private final String resolveUserByIdentitySql;
     private final String selectUserByIdSql;
     private final String selectAllUsersSql;
+    private final String selectAllUsersIgnoringDeletionSql;
     private final String userExistsSql;
+    private final String userExistsIgnoringDeletionSql;
     private final String selectIdentityByUserAndProviderSql;
     private final String selectIdentityByProviderUserIdSql;
     private final String selectActiveIdentityProvidersByUserSql;
@@ -138,7 +140,9 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
                             " WHERE id=? AND deleted_at IS NULL";
         selectAllUsersSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable +
                             " WHERE deleted_at IS NULL";
+        selectAllUsersIgnoringDeletionSql = "SELECT id, email, display_name, timezone, created_at, updated_at, deleted_at FROM " + userTable;
         userExistsSql = "SELECT 1 FROM " + userTable + " WHERE id=? AND deleted_at IS NULL";
+        userExistsIgnoringDeletionSql = "SELECT 1 FROM " + userTable + " WHERE id=?";
         selectIdentityByUserAndProviderSql =
                 "SELECT provider_user_id, deleted_at FROM " + identityTable + " WHERE user_id=? AND provider=?";
         selectIdentityByProviderUserIdSql =
@@ -209,6 +213,17 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     @Override
     public CompletableFuture<List<UserProfile>> listAllProfiles() {
         return whenStartedAndNotLifecycling(() -> executor.submit(this::doListAllProfiles));
+    }
+
+    @Override
+    public CompletableFuture<List<UserProfileWithDeletion>> listAllProfilesIgnoringDeletion() {
+        return whenStartedAndNotLifecycling(() -> executor.submit(this::doListAllProfilesIgnoringDeletion));
+    }
+
+    @Override
+    public CompletableFuture<Boolean> existsIgnoringDeletion(String userId) {
+        validateUserId(userId);
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doExistsIgnoringDeletion(userId)));
     }
 
     @Override
@@ -333,20 +348,22 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     }
 
     private List<UserProfile> doListAllProfiles() {
-        try {
-            try (Connection connection = dataSource.getConnection();
-                 PreparedStatement stmt = connection.prepareStatement(selectAllUsersSql)) {
-                try (ResultSet rs = stmt.executeQuery()) {
-                    var result = new ArrayList<UserProfile>();
-                    while (rs.next()) {
-                        result.add(mapUserProfile(rs));
-                    }
-                    return result;
-                }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to list user profiles", e);
-        }
+        return queryList(selectAllUsersSql, _ -> {}, UserPersistenceImpl::mapUserProfile, "Failed to list user profiles");
+    }
+
+    private List<UserProfileWithDeletion> doListAllProfilesIgnoringDeletion() {
+        return queryList(selectAllUsersIgnoringDeletionSql,
+                         _ -> {},
+                         UserPersistenceImpl::mapUserProfileWithDeletion,
+                         "Failed to list user profiles ignoring deletion");
+    }
+
+    private boolean doExistsIgnoringDeletion(String userId) {
+        // The intermediate list holds at most one row (id is the primary key) — the price of reusing the shared query plumbing over a bespoke JDBC block.
+        return !queryList(userExistsIgnoringDeletionSql,
+                          stmt -> stmt.setString(1, userId),
+                          _ -> Boolean.TRUE,
+                          "Failed to check existence of user " + userId).isEmpty();
     }
 
     private UserProfile doUpdateProfile(String userId, UserProfileInput profile) {
@@ -416,20 +433,24 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     }
 
     private List<UserIdentityRecord> doListIdentities(String sql, String userId) {
+        return queryList(sql, stmt -> stmt.setString(1, userId), UserPersistenceImpl::mapIdentityRecord, "Failed to list identities for user " + userId);
+    }
+
+    private <T> List<T> queryList(String sql, SqlConsumer<PreparedStatement> paramSetter, SqlFunction<ResultSet, T> rowMapper, String failureDescription) {
         try {
             try (Connection connection = dataSource.getConnection();
                  PreparedStatement stmt = connection.prepareStatement(sql)) {
-                stmt.setString(1, userId);
+                paramSetter.accept(stmt);
                 try (ResultSet rs = stmt.executeQuery()) {
-                    var result = new ArrayList<UserIdentityRecord>();
+                    var result = ImmutableList.<T>builder();
                     while (rs.next()) {
-                        result.add(mapIdentityRecord(rs));
+                        result.add(rowMapper.apply(rs));
                     }
-                    return result;
+                    return result.build();
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to list identities for user " + userId, e);
+            throw new RuntimeException(failureDescription, e);
         }
     }
 
@@ -682,6 +703,10 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         return new UserProfile(id, Optional.ofNullable(email), Optional.ofNullable(displayName), timezone, createdAt, updatedAt);
     }
 
+    private static UserProfileWithDeletion mapUserProfileWithDeletion(ResultSet rs) throws SQLException {
+        return new UserProfileWithDeletion(mapUserProfile(rs), Optional.ofNullable(rs.getTimestamp("deleted_at")).map(Timestamp::toInstant));
+    }
+
     private static UserIdentityRecord mapIdentityRecord(ResultSet rs) throws SQLException {
         String provider = rs.getString("provider");
         String providerUserId = rs.getString("provider_user_id");
@@ -756,9 +781,12 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         }
     }
 
-    @FunctionalInterface
     private interface SqlConsumer<T> {
         void accept(T target) throws SQLException;
+    }
+
+    private interface SqlFunction<T, R> {
+        R apply(T target) throws SQLException;
     }
 
     private record IdentityLinkRecord(String providerUserId, boolean active) {

@@ -7,6 +7,7 @@ import net.yudichev.jiotty.user.persistence.UserIdentityRecord;
 import net.yudichev.jiotty.user.persistence.UserPersistence;
 import net.yudichev.jiotty.user.persistence.UserProfile;
 import net.yudichev.jiotty.user.persistence.UserProfileInput;
+import net.yudichev.jiotty.user.persistence.UserProfileWithDeletion;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
@@ -116,6 +117,23 @@ public final class FakeUserPersistence implements UserPersistence {
                 }
             });
             return completedFuture(profiles.build());
+        }
+    }
+
+    @Override
+    public CompletableFuture<List<UserProfileWithDeletion>> listAllProfilesIgnoringDeletion() {
+        synchronized (lock) {
+            var profiles = ImmutableList.<UserProfileWithDeletion>builder();
+            usersById.values().forEach(user -> profiles.add(new UserProfileWithDeletion(user.profile(), user.deletedAt())));
+            return completedFuture(profiles.build());
+        }
+    }
+
+    @Override
+    public CompletableFuture<Boolean> existsIgnoringDeletion(String userId) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            return completedFuture(usersById.containsKey(userId));
         }
     }
 
@@ -267,14 +285,18 @@ public final class FakeUserPersistence implements UserPersistence {
         private final Map<String, UserIdentityRecord> activeIdentityRecordsByProvider = new LinkedHashMap<>();
 
         private UserProfile profile;
-        private boolean deleted;
+        private @Nullable Instant deletedAt;
 
         private StoredUser(UserProfile profile) {
             this.profile = checkNotNull(profile, "profile");
         }
 
         public boolean active() {
-            return !deleted;
+            return deletedAt == null;
+        }
+
+        public Optional<Instant> deletedAt() {
+            return Optional.ofNullable(deletedAt);
         }
 
         public UserProfile profile() {
@@ -309,13 +331,13 @@ public final class FakeUserPersistence implements UserPersistence {
         }
 
         public void softDelete(Instant deletedAt) {
-            // Keep the identity records (marked inactive via the deleted flag) so restore() can revive them, mirroring UserPersistenceImpl.
-            deleted = true;
+            // Keep the identity records (marked inactive via the deletion timestamp) so restore() can revive them, mirroring UserPersistenceImpl.
+            this.deletedAt = deletedAt;
             profile = new UserProfile(profile.id(), profile.email(), profile.displayName(), profile.timezone(), profile.createdAt(), deletedAt);
         }
 
         public void restore() {
-            deleted = false;
+            deletedAt = null;
         }
     }
 }

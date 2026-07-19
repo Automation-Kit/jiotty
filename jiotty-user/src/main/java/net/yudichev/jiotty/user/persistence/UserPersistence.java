@@ -44,6 +44,15 @@ public interface UserPersistence {
     /// Lists active user profiles (deleted users are excluded).
     CompletableFuture<List<UserProfile>> listAllProfiles();
 
+    /// Lists all user profiles regardless of soft-delete state — unlike [#listAllProfiles], which excludes soft-deleted users — reporting each user's
+    /// soft-delete time.
+    CompletableFuture<List<UserProfileWithDeletion>> listAllProfilesIgnoringDeletion();
+
+    /// Reports whether a user row exists for `userId`, regardless of soft-delete state; `false` once the user is hard-deleted.
+    ///
+    /// @param userId internal user id
+    CompletableFuture<Boolean> existsIgnoringDeletion(String userId);
+
     /// Updates the active user's profile fields in one transaction.
     ///
     /// @param userId  internal user id
@@ -66,8 +75,8 @@ public interface UserPersistence {
     /// @return active identity records (deleted identities are excluded)
     CompletableFuture<List<UserIdentityRecord>> listIdentities(String userId);
 
-    /// Lists a user's identities regardless of soft-delete state — unlike [#listIdentities], which returns nothing for a soft-deleted user. Lets a caller read
-    /// the identities of a user that has been soft-deleted ([#softDelete]) but not yet hard-deleted ([#hardDelete]).
+    /// Lists a user's identities regardless of soft-delete state — unlike [#listIdentities], which returns nothing for a soft-deleted user. Lets a caller
+    /// read the identities of a user that has been soft-deleted ([#softDelete]) but not yet hard-deleted ([#hardDelete]).
     CompletableFuture<List<UserIdentityRecord>> listIdentitiesIgnoringDeletion(String userId);
 
     /// Soft-deletes the user and all linked identities. Idempotent: a no-op if the user is already soft-deleted.

@@ -149,6 +149,32 @@ class UserPersistenceImplTest {
     }
 
     @Test
+    void existsIgnoringDeletionSeesSoftDeletedButNotHardDeletedUsers() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var created = userPersistence.getOrCreateByIdentity(new UserIdentity("firebase", "uid-1"),
+                                                            createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+
+        assertThat(userPersistence.existsIgnoringDeletion(created.id()).get(5, SECONDS)).isTrue();
+        assertThat(userPersistence.existsIgnoringDeletion("u-does-not-exist").get(5, SECONDS)).isFalse();
+
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        assertThat(userPersistence.existsIgnoringDeletion(created.id()).get(5, SECONDS)).isTrue();
+
+        userPersistence.hardDelete(created.id()).get(5, SECONDS);
+        assertThat(userPersistence.existsIgnoringDeletion(created.id()).get(5, SECONDS)).isFalse();
+    }
+
+    @Test
+    void failsListingProfilesIgnoringDeletionWhenUserTableMissing() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        dropUserTable(dataSource, domain);
+
+        assertThatThrownBy(() -> userPersistence.listAllProfilesIgnoringDeletion().get(5, SECONDS))
+                .hasCauseInstanceOf(RuntimeException.class)
+                .hasRootCauseInstanceOf(SQLException.class);
+    }
+
+    @Test
     void failsWhenConnectionUnavailable() {
         var toggleableDataSource = new ToggleableDataSource(dataSource);
         DataSourceFactory failingFactory = () -> toggleableDataSource;
@@ -216,6 +242,37 @@ class UserPersistenceImplTest {
         var remaining = userPersistence.listAllProfiles().get(5, SECONDS);
         assertThat(remaining).hasSize(1);
         assertThat(remaining.getFirst().id()).isEqualTo(user2.id());
+    }
+
+    @Test
+    void listsAllProfilesIgnoringDeletionWithDeletedAt() throws Exception {
+        var clock = new ProgrammableClock();
+        var softDeleteTime = Instant.parse("2026-01-02T03:04:05Z");
+        clock.setTime(softDeleteTime);
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var active = userPersistence.getOrCreateByIdentity(new UserIdentity("firebase", "uid-1"),
+                                                           createProfileInput("user1@example.com", "User One", UTC)).get(5, SECONDS);
+        var deleted = userPersistence.getOrCreateByIdentity(new UserIdentity("google.com", "uid-2"),
+                                                            createProfileInput("user2@example.com", "User Two", UTC)).get(5, SECONDS);
+
+        userPersistence.softDelete(deleted.id()).get(5, SECONDS);
+
+        // the soft-deleted user is hidden from listAllProfiles but reported by the ignoring-deletion list with its deletion time
+        assertThat(userPersistence.listAllProfiles().get(5, SECONDS)).extracting(UserProfile::id).containsExactly(active.id());
+        var all = userPersistence.listAllProfilesIgnoringDeletion().get(5, SECONDS);
+        assertThat(all).extracting(withDeletion -> withDeletion.profile().id()).containsExactlyInAnyOrder(active.id(), deleted.id());
+        assertThat(all).filteredOn(withDeletion -> withDeletion.profile().id().equals(active.id()))
+                       .singleElement()
+                       .satisfies(withDeletion -> assertThat(withDeletion.deletedAt()).isEmpty());
+        assertThat(all).filteredOn(withDeletion -> withDeletion.profile().id().equals(deleted.id()))
+                       .singleElement()
+                       .satisfies(withDeletion -> assertThat(withDeletion.deletedAt()).contains(softDeleteTime));
+
+        // once hard-deleted the row is physically gone even from the ignoring-deletion list
+        userPersistence.hardDelete(deleted.id()).get(5, SECONDS);
+        assertThat(userPersistence.listAllProfilesIgnoringDeletion().get(5, SECONDS))
+                .extracting(withDeletion -> withDeletion.profile().id())
+                .containsExactly(active.id());
     }
 
     @Test
