@@ -48,8 +48,7 @@ class InitModuleTest {
     void withMetricsInstallsMetricsModuleAtRoot() {
         int withoutMetrics = lifecycleComponentCount(baseBuilder());
         int withMetrics = lifecycleComponentCount(baseBuilder().withMetrics("test-app"));
-        // Enabling metrics installs MetricsModule at the root injector, contributing its lifecycle components (registry scrape server, JVM binder) there — the
-        //  root placement is what lets the root executor factory see the MeterRegistry (asserted directly in jiotty-common's ExecutorModuleTest).
+        // Enabling metrics installs MetricsModule at the root injector, adding its lifecycle components there.
         assertThat(withMetrics).isGreaterThan(withoutMetrics);
     }
 

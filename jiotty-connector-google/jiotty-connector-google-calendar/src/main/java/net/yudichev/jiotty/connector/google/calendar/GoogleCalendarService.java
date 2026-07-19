@@ -96,8 +96,10 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
 
     @Override
     protected void doStart() {
-        // Tag the executor thread with the subject id so [%t] in the log pattern distinguishes concurrent per-user instances; mirrors car-engine's "Car-<id>".
-        executor = executorFactory.createSingleThreadedSchedulingExecutor(logSubjectId.isBlank() ? "Google-Calendar" : "Google-Calendar-" + logSubjectId);
+        // Tag the executor thread with the subject id so [%t] in the log pattern distinguishes concurrent per-user instances.
+        // The family is the coarse "Google-Calendar", shared across per-user instances.
+        executor = executorFactory.createSingleThreadedSchedulingExecutor(
+                logSubjectId.isBlank() ? "Google-Calendar" : "Google-Calendar-" + logSubjectId, "Google-Calendar", ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE);
         HttpRequestInitializer requestInitializer = request -> {
             request.setConnectTimeout(timeoutMillis).setReadTimeout(timeoutMillis);
             if (accessToken != null) {

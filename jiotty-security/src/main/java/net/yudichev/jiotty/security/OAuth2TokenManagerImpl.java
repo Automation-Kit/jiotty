@@ -106,7 +106,8 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     @Override
     protected void doStart() {
         httpClient = createHttpClient();
-        executor = executorFactory.createSingleThreadedSchedulingExecutor(apiName + "-oauth2");
+        // Per-API (often per-user) thread name for log disambiguation; coarse "oauth2" family shared across all token executors.
+        executor = executorFactory.createSingleThreadedSchedulingExecutor(apiName + "-oauth2", "oauth2", ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE);
         // The backoff reads elapsed time through the injected clock (so tests drive it deterministically via ProgrammableClock), not the wall clock.
         tokenRequestBackOff = new ExponentialBackOff.Builder()
                 .setInitialIntervalMillis(toIntExact(TOKEN_RETRY_INITIAL_INTERVAL.toMillis()))

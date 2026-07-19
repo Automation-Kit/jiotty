@@ -84,6 +84,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                                                               .setThreadName(threadNameSuffixSpec.map(TypeToken.of(String.class),
                                                                                                       TypeToken.of(String.class),
                                                                                                       UIServerModule::executorThreadName))
+                                                              .withFamily(literally("ui"))
                                                               .withAnnotation(forAnnotation(UIExecutor.class))
                                                               .build());
 

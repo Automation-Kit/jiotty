@@ -37,8 +37,7 @@ class ExecutorModuleTest {
 
     @Test
     void meterRegistryExposedFromSiblingPrivateModuleReachesTheFactory() {
-        // Reproduces the real app topology: ExecutorModule's OptionalBinder and the MeterRegistry live in the same injector, but the registry is contributed by
-        //  a sibling PrivateModule that exposes it (as MetricsModule does) rather than bound directly. The OptionalBinder must still resolve it as present.
+        // The registry is exposed from a sibling PrivateModule (as MetricsModule does), not bound directly — the OptionalBinder must still resolve it.
         var registry = new SimpleMeterRegistry();
         var module = new ExecutorModule();
         Injector injector = Guice.createInjector(module, new PrivateModule() {

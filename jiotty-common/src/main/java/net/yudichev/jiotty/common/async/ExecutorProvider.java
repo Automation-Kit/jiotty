@@ -22,12 +22,16 @@ final class ExecutorProvider extends BaseLifecycleComponent implements Provider<
 
     private final ExecutorFactory executorFactory;
     private final String threadName;
+    private final String family;
+    private final int maxQueueSize;
     private SchedulingExecutor executor;
 
     @Inject
-    public ExecutorProvider(ExecutorFactory executorFactory, @ThreadName String threadName) {
+    public ExecutorProvider(ExecutorFactory executorFactory, @ThreadName String threadName, @Family String family, @MaxQueueSize int maxQueueSize) {
         this.executorFactory = checkNotNull(executorFactory);
         this.threadName = checkNotNull(threadName);
+        this.family = checkNotNull(family);
+        this.maxQueueSize = maxQueueSize;
     }
 
     @Override
@@ -42,7 +46,7 @@ final class ExecutorProvider extends BaseLifecycleComponent implements Provider<
 
     @Override
     protected void doStart() {
-        executor = executorFactory.createSingleThreadedSchedulingExecutor(threadName);
+        executor = executorFactory.createSingleThreadedSchedulingExecutor(threadName, family, maxQueueSize);
     }
 
     @Override
@@ -54,5 +58,17 @@ final class ExecutorProvider extends BaseLifecycleComponent implements Provider<
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface ThreadName {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Family {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface MaxQueueSize {
     }
 }
