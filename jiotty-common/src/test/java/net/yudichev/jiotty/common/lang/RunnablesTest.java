@@ -62,4 +62,24 @@ class RunnablesTest {
 
         verify(logger).error("Failed while {}", "doing the thing", failure);
     }
+
+    @Test
+    void runGuardedRunsDelegateOnSuccessPath() {
+        Runnables.runGuarded(logger, "doing the thing", delegate, exceptionHandler);
+
+        verify(delegate).run();
+        verifyNoInteractions(exceptionHandler);
+        verifyNoInteractions(logger);
+    }
+
+    @Test
+    void runGuardedRoutesFailureToHandler() {
+        RuntimeException failure = new RuntimeException("boom");
+        doThrow(failure).when(delegate).run();
+
+        Runnables.runGuarded(logger, "doing the thing", delegate, exceptionHandler);
+
+        verify(exceptionHandler).accept("doing the thing", failure);
+        verifyNoInteractions(logger);
+    }
 }

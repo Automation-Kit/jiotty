@@ -99,8 +99,9 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
     }
 
     @Override
-    public SchedulingExecutor createSingleThreadedSchedulingExecutor(String threadNameBase) {
-        return new DeterministicExecutor(this, threadNameBase);
+    public SchedulingExecutor createSingleThreadedSchedulingExecutor(String name, String family, int maxQueueSize) {
+        // Deterministic test executor: runs tasks under this clock's control, so the queue bound and metric family are irrelevant.
+        return new DeterministicExecutor(this, name);
     }
 
     Closeable schedule(DeterministicExecutor executor, TemporalAmount delay, Runnable command) {
@@ -212,12 +213,12 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
         public void schedule(Instant due) {
             checkState(this.due == null, "already scheduled");
             this.due = due;
-            tasksByTriggerTime.computeIfAbsent(due, instant -> new ArrayList<>()).add(this);
+            tasksByTriggerTime.computeIfAbsent(due, _ -> new ArrayList<>()).add(this);
         }
 
         public final Instant unSchedule() {
             if (due != null) {
-                tasksByTriggerTime.compute(due, (duration, tasks) -> {
+                tasksByTriggerTime.compute(due, (_, tasks) -> {
                     if (tasks != null) { // can be null if the executor was shut down in the meantime, which eventually removes all its tasks
                         tasks.remove(this);
                         if (tasks.isEmpty()) {
