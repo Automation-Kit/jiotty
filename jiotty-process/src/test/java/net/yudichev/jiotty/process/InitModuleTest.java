@@ -3,12 +3,16 @@ package net.yudichev.jiotty.process;
 import com.google.inject.AbstractModule;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
+import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
+import net.yudichev.jiotty.common.app.ApplicationLifecycleControl;
+import net.yudichev.jiotty.common.inject.LifecycleComponent;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccess;
 import net.yudichev.jiotty.logging.LoggingLevelConfigurator;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.db.DbConnectionConfig;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -18,20 +22,18 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class InitModuleTest {
+    private static final Module LIFECYCLE_CONTROL = new AbstractModule() {
+        @Override
+        protected void configure() {
+            // Provided by Application at runtime; MetricsModule's lifecycle components need it bound.
+            bind(ApplicationLifecycleControl.class).toInstance(ApplicationLifecycleControl.NOOP);
+        }
+    };
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void configure(boolean withVarStorePath) {
-        InitModule.Builder builder = InitModule.builder()
-                                               .setPathToKeystore(literally(Paths.get(",")))
-                                               .setKeystorePass(literally("pass"))
-                                               .setDbConnectionConfig(DbConnectionConfig.builder()
-                                                                                        .setHost("H")
-                                                                                        .setPort(13)
-                                                                                        .setUsername("user")
-                                                                                        .setPasswordSpec(literally("pass"))
-                                                                                        .setDbName("dbNamt")
-                                                                                        .build())
-                                               .setAppModuleFactory(_ -> new AbstractModule() {});
+        InitModule.Builder builder = baseBuilder();
         if (withVarStorePath) {
             builder.withVarStorePath(literally(Paths.get(",")));
         }
@@ -40,5 +42,32 @@ class InitModuleTest {
         assertThat(injector.findBindingsByType(new TypeLiteral<DataSourceFactory>() {})).isNotEmpty();
         assertThat(injector.findBindingsByType(new TypeLiteral<KeyStoreAccess>() {})).isNotEmpty();
         assertThat(injector.findBindingsByType(new TypeLiteral<LoggingLevelConfigurator>() {})).isNotEmpty();
+    }
+
+    @Test
+    void withMetricsInstallsMetricsModuleAtRoot() {
+        int withoutMetrics = lifecycleComponentCount(baseBuilder());
+        int withMetrics = lifecycleComponentCount(baseBuilder().withMetrics("test-app"));
+        // Enabling metrics installs MetricsModule at the root injector, contributing its lifecycle components (registry scrape server, JVM binder) there — the
+        //  root placement is what lets the root executor factory see the MeterRegistry (asserted directly in jiotty-common's ExecutorModuleTest).
+        assertThat(withMetrics).isGreaterThan(withoutMetrics);
+    }
+
+    private static int lifecycleComponentCount(InitModule.Builder builder) {
+        return Guice.createInjector(builder.build(), LIFECYCLE_CONTROL).findBindingsByType(new TypeLiteral<LifecycleComponent>() {}).size();
+    }
+
+    private static InitModule.Builder baseBuilder() {
+        return InitModule.builder()
+                         .setPathToKeystore(literally(Paths.get(",")))
+                         .setKeystorePass(literally("pass"))
+                         .setDbConnectionConfig(DbConnectionConfig.builder()
+                                                                  .setHost("H")
+                                                                  .setPort(13)
+                                                                  .setUsername("user")
+                                                                  .setPasswordSpec(literally("pass"))
+                                                                  .setDbName("dbNamt")
+                                                                  .build())
+                         .setAppModuleFactory(_ -> new AbstractModule() {});
     }
 }

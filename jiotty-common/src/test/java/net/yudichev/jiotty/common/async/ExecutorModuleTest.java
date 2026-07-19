@@ -2,6 +2,7 @@ package net.yudichev.jiotty.common.async;
 
 import com.google.inject.Guice;
 import com.google.inject.Injector;
+import com.google.inject.PrivateModule;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,28 @@ class ExecutorModuleTest {
         var registry = new SimpleMeterRegistry();
         var module = new ExecutorModule();
         Injector injector = Guice.createInjector(module, binder -> binder.bind(MeterRegistry.class).toInstance(registry));
+
+        SchedulingExecutor executor = injector.getInstance(module.getExposedKey()).createSingleThreadedSchedulingExecutor("wired", "wiredfam", 10);
+        try {
+            assertThat(registry.find("executor.queued").tags("name", "wired", "family", "wiredfam").gauge()).isNotNull();
+        } finally {
+            closeIfNotNull(executor);
+        }
+    }
+
+    @Test
+    void meterRegistryExposedFromSiblingPrivateModuleReachesTheFactory() {
+        // Reproduces the real app topology: ExecutorModule's OptionalBinder and the MeterRegistry live in the same injector, but the registry is contributed by
+        //  a sibling PrivateModule that exposes it (as MetricsModule does) rather than bound directly. The OptionalBinder must still resolve it as present.
+        var registry = new SimpleMeterRegistry();
+        var module = new ExecutorModule();
+        Injector injector = Guice.createInjector(module, new PrivateModule() {
+            @Override
+            protected void configure() {
+                bind(MeterRegistry.class).toInstance(registry);
+                expose(MeterRegistry.class);
+            }
+        });
 
         SchedulingExecutor executor = injector.getInstance(module.getExposedKey()).createSingleThreadedSchedulingExecutor("wired", "wiredfam", 10);
         try {

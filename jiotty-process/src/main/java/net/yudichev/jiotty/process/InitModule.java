@@ -10,6 +10,7 @@ import net.yudichev.jiotty.common.inject.LifecycleComponent;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccessModule;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.metrics.MetricsModule;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.logging.PersistingLog4jLevelConfiguratorModule;
 import net.yudichev.jiotty.persistence.db.DbConnectionConfig;
@@ -37,6 +38,7 @@ public final class InitModule extends AbstractModule {
     private final @Nullable SpecifiedAnnotation varStoreAnnotation;
     private final BindingSpec<String> varStoreTableNameSpec;
     private final @Nullable BindingSpec<String> varStoreEncryptionKeyAliasSpec;
+    private final @Nullable String applicationName;
 
     private InitModule(DbConnectionConfig dbConnectionConfig,
                        @Nullable BindingSpec<Path> varStorePathSpec,
@@ -46,7 +48,8 @@ public final class InitModule extends AbstractModule {
                        Function<Injector, Module> appModuleFactory,
                        @Nullable SpecifiedAnnotation varStoreAnnotation,
                        BindingSpec<String> varStoreTableNameSpec,
-                       @Nullable BindingSpec<String> varStoreEncryptionKeyAliasSpec) {
+                       @Nullable BindingSpec<String> varStoreEncryptionKeyAliasSpec,
+                       @Nullable String applicationName) {
         this.dbConnectionConfig = checkNotNull(dbConnectionConfig);
         this.varStorePathSpec = varStorePathSpec;
         this.pathToKeystoreSpec = checkNotNull(pathToKeystoreSpec);
@@ -56,11 +59,17 @@ public final class InitModule extends AbstractModule {
         this.varStoreAnnotation = varStoreAnnotation;
         this.varStoreTableNameSpec = checkNotNull(varStoreTableNameSpec);
         this.varStoreEncryptionKeyAliasSpec = varStoreEncryptionKeyAliasSpec;
+        this.applicationName = applicationName;
     }
 
     @Override
     protected void configure() {
         install(new ExecutorModule());
+        if (applicationName != null) {
+            install(MetricsModule.builder()
+                                 .withCommonTag("application", applicationName)
+                                 .build());
+        }
         install(new TimeModule());
         var keyStoreAccessModule = KeyStoreAccessModule.builder()
                                                        .setPathToKeystore(pathToKeystoreSpec)
@@ -111,6 +120,7 @@ public final class InitModule extends AbstractModule {
         private BindingSpec<String> varStoreTableNameSpec = literally("var_store");
         private SpecifiedAnnotation varStoreAnnotation;
         private BindingSpec<String> varStoreEncryptionKeyAliasSpec;
+        private String applicationName;
 
         public Builder setDbConnectionConfig(DbConnectionConfig dbConnectionConfig) {
             this.dbConnectionConfig = checkNotNull(dbConnectionConfig);
@@ -157,6 +167,14 @@ public final class InitModule extends AbstractModule {
             return this;
         }
 
+        /// Triggers installation of [MetricsModule] at the **root** injector.
+        ///
+        /// @param applicationName the `application` metric common tag.
+        public Builder withMetrics(String applicationName) {
+            this.applicationName = checkNotNull(applicationName);
+            return this;
+        }
+
         @Override
         public InitModule build() {
             return new InitModule(dbConnectionConfig,
@@ -167,7 +185,8 @@ public final class InitModule extends AbstractModule {
                                   appModuleFactory,
                                   varStoreAnnotation,
                                   varStoreTableNameSpec,
-                                  varStoreEncryptionKeyAliasSpec);
+                                  varStoreEncryptionKeyAliasSpec,
+                                  applicationName);
         }
     }
 }
