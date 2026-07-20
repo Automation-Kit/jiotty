@@ -4,7 +4,8 @@ import com.google.common.collect.ImmutableMap;
 import com.google.inject.BindingAnnotation;
 import com.sun.net.httpserver.HttpServer;
 import jakarta.inject.Inject;
-import net.yudichev.jiotty.common.async.ExecutorFactory;
+import jakarta.inject.Provider;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import org.jspecify.annotations.Nullable;
@@ -51,7 +52,7 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
     private volatile @Nullable String codeVerifier;
 
     @Inject
-    public LocalLoginOAuth2TokenManager(ExecutorFactory executorFactory,
+    public LocalLoginOAuth2TokenManager(@Dependency Provider<SchedulingExecutor> executorProvider,
                                         CurrentDateTimeProvider currentDateTimeProvider,
                                         @Dependency VarStore varStore,
                                         @ClientID String clientId,
@@ -62,7 +63,7 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
                                         @LoginUrl String loginUrl,
                                         @FixedCallbackHttpPort Optional<Integer> fixedCallbackHttpPort,
                                         @ExtraLoginParams Map<String, String> extraLoginParams) {
-        super(executorFactory, currentDateTimeProvider, varStore, clientId, clientSecret, apiName, tokenUrl, scope);
+        super(executorProvider, currentDateTimeProvider, varStore, clientId, clientSecret, apiName, tokenUrl, scope);
         this.loginUrl = checkNotNull(loginUrl);
         this.fixedCallbackHttpPort = checkNotNull(fixedCallbackHttpPort);
         this.extraLoginParams = ImmutableMap.copyOf(extraLoginParams);
@@ -90,8 +91,6 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
                         exchange.sendResponseHeaders(200, response.length());
                     } else {
                         // probably token callback? TODO test miele
-//                        response = "No 'code' in query " + query;
-//                        exchange.sendResponseHeaders(400, response.length());
                         logger.info("[{}/{}] token callback received?", apiName, clientId);
                         response = "No Code - token callback?";
                         exchange.sendResponseHeaders(200, response.length());

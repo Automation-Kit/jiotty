@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.user.push;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStoreEncryption;
 import org.junit.jupiter.api.AfterEach;
@@ -20,6 +21,7 @@ class PushDeviceStoreImplTest {
 
     private ProgrammableClock clock;
     private InMemoryVarStore varStore;
+    private SchedulingExecutor executor;
     private PushDeviceStoreImpl store;
 
     @BeforeEach
@@ -27,7 +29,8 @@ class PushDeviceStoreImplTest {
         clock = new ProgrammableClock().withMdc();
         clock.setTimeAndTick(START);
         varStore = new InMemoryVarStore();
-        store = new PushDeviceStoreImpl(clock, varStore);
+        executor = clock.createSingleThreadedSchedulingExecutor("push-device-store");
+        store = new PushDeviceStoreImpl(() -> executor, varStore);
         store.start();
     }
 

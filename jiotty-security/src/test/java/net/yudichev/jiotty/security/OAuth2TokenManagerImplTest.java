@@ -2,6 +2,7 @@ package net.yudichev.jiotty.security;
 
 import com.google.common.collect.ImmutableMap;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStoreEncryption;
@@ -483,7 +484,8 @@ class OAuth2TokenManagerImplTest {
     }
 
     private void startTokenManager(Optional<String> clientSecret) {
-        tokenManager = new OAuth2TokenManagerImpl(clock, clock, varStore, CLIENT_ID, clientSecret, API_NAME, TOKEN_URL, SCOPE) {
+        SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor(API_NAME + "-oauth2");
+        tokenManager = new OAuth2TokenManagerImpl(() -> executor, clock, varStore, CLIENT_ID, clientSecret, API_NAME, TOKEN_URL, SCOPE) {
             @Override
             OkHttpClient createHttpClient() {
                 return httpClient;

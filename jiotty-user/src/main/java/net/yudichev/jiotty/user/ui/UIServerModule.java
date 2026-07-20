@@ -30,6 +30,7 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.common.inject.BindingSpec.annotatedWith;
 import static net.yudichev.jiotty.common.inject.BindingSpec.boundTo;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
@@ -75,11 +76,8 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                              .annotatedWith(AdminAlert.class)
                              .installedBy(this::installLifecycleComponentModule);
 
-        installLifecycleComponentModule(PushDeviceModule.builder()
-                                                        .withVarStore(varStoreSpec)
-                                                        .build());
-        expose(PushDeviceStore.class);
-
+        // Registered ahead of every component that resolves the executor in its doStart(): lifecycle components start in registration order, and
+        // ExecutorProvider supplies the executor only once it has started itself.
         installLifecycleComponentModule(ExecutorProviderModule.builder()
                                                               .setThreadName(threadNameSuffixSpec.map(TypeToken.of(String.class),
                                                                                                       TypeToken.of(String.class),
@@ -87,6 +85,12 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                                                               .withFamily(literally("ui"))
                                                               .withAnnotation(forAnnotation(UIExecutor.class))
                                                               .build());
+
+        installLifecycleComponentModule(PushDeviceModule.builder()
+                                                        .withVarStore(varStoreSpec)
+                                                        .withExecutor(annotatedWith(UIExecutor.class))
+                                                        .build());
+        expose(PushDeviceStore.class);
 
         optionsThrottlingPeriodSpec.bind(Duration.class)
                                    .annotatedWith(SseServiceImpl.OptionsThrottlingPeriod.class)

@@ -1,12 +1,15 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
+import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.security.OAuth2TokenManagerModule;
@@ -20,28 +23,57 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class TeslaFleetModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TeslaFleet> {
+    private static final String BASE_API_NAME = "TeslaFleet";
+    private static final String OFFLINE_ACCESS_SCOPE = "offline_access";
+
     private final BindingSpec<String> clientIdSpec;
     private final BindingSpec<String> clientSecretSpec;
     private final BindingSpec<String> baseUrlSpec;
     private final BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec;
     private final BindingSpec<Set<String>> oauthScopesSpec;
+    private final BindingSpec<String> logSubjectIdSpec;
     private final @Nullable BindingSpec<VarStore> varStoreSpec;
     private final boolean localLogin;
+    private final Key<TeslaFleet> exposedKey;
 
     private TeslaFleetModule(BindingSpec<String> clientIdSpec,
                              BindingSpec<String> clientSecretSpec,
                              BindingSpec<String> baseUrlSpec,
                              BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec,
                              BindingSpec<Set<String>> oauthScopesSpec,
+                             BindingSpec<String> logSubjectIdSpec,
                              @Nullable BindingSpec<VarStore> varStoreSpec,
-                             boolean localLogin) {
+                             boolean localLogin,
+                             SpecifiedAnnotation specifiedAnnotation) {
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.clientSecretSpec = checkNotNull(clientSecretSpec);
         this.baseUrlSpec = checkNotNull(baseUrlSpec);
         this.sslCustomisationSpec = checkNotNull(sslCustomisationSpec);
         this.oauthScopesSpec = checkNotNull(oauthScopesSpec);
+        this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
         this.varStoreSpec = varStoreSpec;
         this.localLogin = localLogin;
+        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+    }
+
+    /// The API name for the embedded token manager: tags its logs with the supplied subject id, and flows into its executor thread name, so concurrent
+    /// per-user instances stay distinguishable. Falls back to a bare {@value #BASE_API_NAME} when no subject id is supplied.
+    @VisibleForTesting
+    static String apiName(String logSubjectId) {
+        return logSubjectId.isBlank() ? BASE_API_NAME : BASE_API_NAME + '-' + logSubjectId;
+    }
+
+    /// The space-separated OAuth2 scope string. Always carries {@value #OFFLINE_ACCESS_SCOPE}, which is what makes the token endpoint return a refresh token,
+    /// so a caller that omits it from its requested scopes still gets a credential that survives the first access-token expiry.
+    @VisibleForTesting
+    static String scope(Set<String> scopeSet) {
+        String joined = String.join(" ", scopeSet);
+        return scopeSet.contains(OFFLINE_ACCESS_SCOPE) ? joined : joined + ' ' + OFFLINE_ACCESS_SCOPE;
+    }
+
+    @Override
+    public Key<TeslaFleet> getExposedKey() {
+        return exposedKey;
     }
 
     @Override
@@ -50,17 +82,9 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
                 .builder()
                 .setClientId(clientIdSpec)
                 .withClientSecret(clientSecretSpec)
-                .setApiName(literally("TeslaFleet"))
+                .setApiName(logSubjectIdSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, TeslaFleetModule::apiName))
                 .setTokenUrl(literally("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"))
-                .setScope(oauthScopesSpec.map(new TypeToken<>() {},
-                                              new TypeToken<>() {},
-                                              scopeSet -> {
-                                                  String result = String.join(" ", scopeSet);
-                                                  if (!scopeSet.contains("offline_access")) {
-                                                      result += " offline_access";
-                                                  }
-                                                  return result;
-                                              }))
+                .setScope(oauthScopesSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, TeslaFleetModule::scope))
                 .withAnnotation(forAnnotation(TeslaFleetImpl.Dependency.class));
         if (varStoreSpec != null) {
             tokenManagerModuleBuilder.withVarStore(varStoreSpec);
@@ -72,20 +96,21 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
         installLifecycleComponentModule(tokenManagerModuleBuilder.build());
         baseUrlSpec.bind(String.class).annotatedWith(TeslaFleetImpl.BaseUrl.class).installedBy(this::installLifecycleComponentModule);
         sslCustomisationSpec.bind(new TypeLiteral<>() {}).annotatedWith(TeslaFleetImpl.Dependency.class).installedBy(this::installLifecycleComponentModule);
-        bind(getExposedKey()).to(registerLifecycleComponent(TeslaFleetImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(TeslaFleetImpl.class));
+        expose(exposedKey);
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<TeslaFleet>> {
+    public static final class Builder extends BaseModuleBuilder<TeslaFleet, Builder> {
         private BindingSpec<String> clientIdSpec;
         private BindingSpec<String> clientSecretSpec;
         private BindingSpec<String> baseUrlSpec = literally(TeslaHttp.AUDIENCE + "/api/1");
         private BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec = literally(Optional.empty());
-        private BindingSpec<Set<String>> oauthScopesSpec = literally(ImmutableSet.of("offline_access"));
+        private BindingSpec<Set<String>> oauthScopesSpec = literally(ImmutableSet.of(OFFLINE_ACCESS_SCOPE));
+        private BindingSpec<String> logSubjectIdSpec = literally("");
         private BindingSpec<VarStore> varStoreSpec;
         private boolean localLogin;
 
@@ -119,8 +144,14 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
             return this;
         }
 
+        /// A GDPR-safe subject id (e.g. the internal user id) used to tag this instance's token-manager logs and its executor thread name, so concurrent
+        /// per-user instances stay distinguishable in a shared log and in the executor metrics. Defaults to empty (single-instance use).
+        public Builder withLogSubjectId(BindingSpec<String> logSubjectIdSpec) {
+            this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
+            return this;
+        }
+
         /// installs a local login redirect server that listens on `http://localhost:<port>/callback`
-        @SuppressWarnings("JavadocLinkAsPlainText")
         public Builder withLocalLogin(boolean localLogin) {
             this.localLogin = localLogin;
             return this;
@@ -128,7 +159,15 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
 
         @Override
         public ExposedKeyModule<TeslaFleet> build() {
-            return new TeslaFleetModule(clientIdSpec, clientSecretSpec, baseUrlSpec, sslCustomisationSpec, oauthScopesSpec, varStoreSpec, localLogin);
+            return new TeslaFleetModule(clientIdSpec,
+                                        clientSecretSpec,
+                                        baseUrlSpec,
+                                        sslCustomisationSpec,
+                                        oauthScopesSpec,
+                                        logSubjectIdSpec,
+                                        varStoreSpec,
+                                        localLogin,
+                                        specifiedAnnotation());
         }
     }
 }

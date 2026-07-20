@@ -2,7 +2,7 @@ package net.yudichev.jiotty.security;
 
 import com.google.common.annotations.VisibleForTesting;
 import jakarta.inject.Inject;
-import net.yudichev.jiotty.common.async.ExecutorFactory;
+import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -62,7 +62,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     protected final String clientId;
     protected final String apiName;
     protected final String scope;
-    private final ExecutorFactory executorFactory;
+    private final Provider<SchedulingExecutor> executorProvider;
     private final VarStore varStore;
     private final Optional<String> clientSecret;
     private final CurrentDateTimeProvider currentDateTimeProvider;
@@ -84,7 +84,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     private @Nullable Closeable pendingScheduledTokenRequest;
 
     @Inject
-    public OAuth2TokenManagerImpl(ExecutorFactory executorFactory,
+    public OAuth2TokenManagerImpl(@Dependency Provider<SchedulingExecutor> executorProvider,
                                   CurrentDateTimeProvider currentDateTimeProvider,
                                   @Dependency VarStore varStore,
                                   @ClientID String clientId,
@@ -94,7 +94,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                   @Scope String scope) {
         this.clientId = checkNotNull(clientId);
         this.clientSecret = checkNotNull(clientSecret);
-        this.executorFactory = checkNotNull(executorFactory);
+        this.executorProvider = checkNotNull(executorProvider);
         this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider);
         this.varStore = checkNotNull(varStore);
         this.apiName = checkNotNull(apiName);
@@ -106,8 +106,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     @Override
     protected void doStart() {
         httpClient = createHttpClient();
-        // Per-API (often per-user) thread name for log disambiguation; coarse "oauth2" family shared across all token executors.
-        executor = executorFactory.createSingleThreadedSchedulingExecutor(apiName + "-oauth2", "oauth2", ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE);
+        executor = executorProvider.get();
         // The backoff reads elapsed time through the injected clock (so tests drive it deterministically via ProgrammableClock), not the wall clock.
         tokenRequestBackOff = new ExponentialBackOff.Builder()
                 .setInitialIntervalMillis(toIntExact(TOKEN_RETRY_INITIAL_INTERVAL.toMillis()))
@@ -159,10 +158,10 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     @Override
     protected void doStop() {
-        // Release the pending scheduled retry/refresh on the executor (the field is confined to it); the executor is still live here, and its graceful
-        // shutdown below drains this task before terminating.
+        // The pending retry/refresh field is confined to the executor, so release it there. A retry/refresh that fires after this point is dropped by the
+        // isStarted() guard on the request path.
         executor.execute(this::cancelPendingTokenRequest);
-        Closeable.closeSafelyIfNotNull(logger, executor, () -> shutdown(httpClient));
+        Closeable.closeSafelyIfNotNull(logger, () -> shutdown(httpClient));
     }
 
     @Override

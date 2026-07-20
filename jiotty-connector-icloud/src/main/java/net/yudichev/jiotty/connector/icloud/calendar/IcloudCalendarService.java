@@ -8,7 +8,7 @@ import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
-import net.yudichev.jiotty.common.async.ExecutorFactory;
+import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -51,7 +51,6 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
 
 final class IcloudCalendarService extends BaseLifecycleComponent implements CalendarService {
@@ -61,16 +60,16 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
     private static final String URI_WELL_KNONWN_CALDAV = ICLOUD_BASE + "/.well-known/caldav";
     private static final int HTTP_TIMEOUT_MS = 10_000;
 
-    private final ExecutorFactory executorFactory;
+    private final Provider<SchedulingExecutor> executorProvider;
     private final Supplier<CloseableHttpClient> httpClientFactory;
     private final ObservableValue<AuthState> apiKeyState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"));
     private SchedulingExecutor executor;
 
     @Inject
-    public IcloudCalendarService(ExecutorFactory executorFactory,
+    public IcloudCalendarService(@Dependency Provider<SchedulingExecutor> executorProvider,
                                  @Username String username,
                                  @Password String password) {
-        this.executorFactory = checkNotNull(executorFactory);
+        this.executorProvider = checkNotNull(executorProvider);
         var credentialsProvider = new BasicCredentialsProvider();
         credentialsProvider.setCredentials(AuthScope.ANY, new UsernamePasswordCredentials(checkNotNull(username), checkNotNull(password)));
         httpClientFactory = () -> {
@@ -90,12 +89,7 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
 
     @Override
     protected void doStart() {
-        executor = executorFactory.createSingleThreadedSchedulingExecutor("Icloud-Calendar");
-    }
-
-    @Override
-    protected void doStop() {
-        closeSafelyIfNotNull(logger, executor);
+        executor = executorProvider.get();
     }
 
     @Override
@@ -187,5 +181,17 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface Password {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface LogSubjectId {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Dependency {
     }
 }

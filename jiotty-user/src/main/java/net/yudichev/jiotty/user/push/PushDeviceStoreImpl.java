@@ -4,12 +4,10 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
-import net.yudichev.jiotty.common.async.ExecutorFactory;
+import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -23,31 +21,24 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
-import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 
 public final class PushDeviceStoreImpl extends BaseLifecycleComponent implements PushDeviceStore {
-    private static final Logger logger = LogManager.getLogger(PushDeviceStoreImpl.class);
     private static final String STORE_KEY = "push.devices";
     private static final TypeToken<Map<String, PushDeviceRecord>> STORE_TYPE = new TypeToken<>() {};
 
-    private final ExecutorFactory executorFactory;
+    private final Provider<SchedulingExecutor> executorProvider;
     private final VarStore varStore;
     private SchedulingExecutor executor;
 
     @Inject
-    public PushDeviceStoreImpl(ExecutorFactory executorFactory, @Dependency VarStore varStore) {
-        this.executorFactory = checkNotNull(executorFactory);
+    public PushDeviceStoreImpl(@Dependency Provider<SchedulingExecutor> executorProvider, @Dependency VarStore varStore) {
+        this.executorProvider = checkNotNull(executorProvider);
         this.varStore = checkNotNull(varStore);
     }
 
     @Override
     protected void doStart() {
-        executor = executorFactory.createSingleThreadedSchedulingExecutor("push-device-store");
-    }
-
-    @Override
-    protected void doStop() {
-        closeSafelyIfNotNull(logger, executor);
+        executor = executorProvider.get();
     }
 
     @Override

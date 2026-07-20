@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.google.calendar;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
@@ -28,6 +29,7 @@ import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotatio
 public final class GoogleCalendarModule extends BaseLifecycleComponentModule implements ExposedKeyModule<CalendarService> {
     private static final String TOKEN_URL = "https://oauth2.googleapis.com/token";
     private static final String AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+    private static final String BASE_API_NAME = "GoogleCalendar";
 
     private final BindingSpec<String> clientIdSpec;
     private final BindingSpec<String> redirectUriSpec;
@@ -63,9 +65,10 @@ public final class GoogleCalendarModule extends BaseLifecycleComponentModule imp
     }
 
     /// The API name (and its log/executor-name discriminator) for the embedded token manager: tags its logs with the supplied subject id so concurrent
-    /// per-user instances stay distinguishable. Falls back to a bare `"GoogleCalendar"` when no subject id is supplied.
-    private static String apiName(String logSubjectId) {
-        return logSubjectId.isBlank() ? "GoogleCalendar" : "GoogleCalendar-" + logSubjectId;
+    /// per-user instances stay distinguishable. Falls back to a bare {@value #BASE_API_NAME} when no subject id is supplied.
+    @VisibleForTesting
+    static String apiName(String logSubjectId) {
+        return logSubjectId.isBlank() ? BASE_API_NAME : BASE_API_NAME + '-' + logSubjectId;
     }
 
     public static Builder builder() {

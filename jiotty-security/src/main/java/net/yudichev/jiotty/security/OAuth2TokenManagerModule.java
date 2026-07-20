@@ -3,12 +3,13 @@ package net.yudichev.jiotty.security;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
+import net.yudichev.jiotty.common.async.ExecutorProviderModule;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import org.jspecify.annotations.Nullable;
 
@@ -17,6 +18,10 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.BindingSpec.boundTo;
+import static net.yudichev.jiotty.common.inject.BindingSpec.exposedBy;
+import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
+import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
+import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
 import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
@@ -34,6 +39,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
     private final BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec;
     private final BindingSpec<Map<String, String>> loginExtraParamsSpec;
     private final BindingSpec<VarStore> varStoreSpec;
+    private final BindingSpec<SchedulingExecutor> executorSpec;
     private final Key<OAuth2TokenManager> exposedKey;
 
     private OAuth2TokenManagerModule(BindingSpec<String> clientIdSpec,
@@ -45,6 +51,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                      BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec,
                                      BindingSpec<Map<String, String>> loginExtraParamsSpec,
                                      BindingSpec<VarStore> varStoreSpec,
+                                     BindingSpec<SchedulingExecutor> executorSpec,
                                      SpecifiedAnnotation specifiedAnnotation) {
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.clientSecretSpec = checkNotNull(clientSecretSpec);
@@ -55,7 +62,8 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         this.fixedCallbackHttpPortSpec = checkNotNull(fixedCallbackHttpPortSpec);
         this.loginExtraParamsSpec = checkNotNull(loginExtraParamsSpec);
         this.varStoreSpec = checkNotNull(varStoreSpec);
-        exposedKey = specifiedAnnotation.specify(OAuth2TokenManager.class);
+        this.executorSpec = checkNotNull(executorSpec);
+        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
     @Override
@@ -83,6 +91,9 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         varStoreSpec.bind(new TypeLiteral<>() {})
                     .annotatedWith(Dependency.class)
                     .installedBy(this::installLifecycleComponentModule);
+        executorSpec.bind(SchedulingExecutor.class)
+                    .annotatedWith(Dependency.class)
+                    .installedBy(this::installLifecycleComponentModule);
         if (loginUrlSpec != null) {
             loginUrlSpec.bind(String.class)
                         .annotatedWith(LocalLoginOAuth2TokenManager.LoginUrl.class)
@@ -105,7 +116,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<OAuth2TokenManager>>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<OAuth2TokenManager, Builder> {
         private BindingSpec<String> clientIdSpec;
         private BindingSpec<Optional<String>> clientSecretSpec = BindingSpec.literally(Optional.empty());
         private BindingSpec<String> apiNameSpec;
@@ -113,7 +124,15 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         private BindingSpec<String> tokenUrlSpec;
         private BindingSpec<String> scopeSpec;
         private BindingSpec<VarStore> varStoreSpec = boundTo(VarStore.class);
-        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
+        /// The thread name follows the injected API name, so the default executor is distinguishable per API — and per user, where the API name carries a
+        /// subject id.
+        private BindingSpec<SchedulingExecutor> executorSpec =
+                exposedBy(ExecutorProviderModule.builder()
+                                                .setThreadName(BindingSpec.<String>annotatedWith(ApiName.class)
+                                                                          .map(new TypeToken<>() {}, new TypeToken<>() {}, apiName -> apiName + "-oauth2"))
+                                                .withFamily(literally("oauth2"))
+                                                .withAnnotation(forAnnotation(uniqueAnnotation()))
+                                                .build());
         private BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec = BindingSpec.literally(Optional.empty());
         private BindingSpec<Map<String, String>> loginExtraParamsSpec = BindingSpec.literally(Map.of());
 
@@ -167,9 +186,9 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
             return this;
         }
 
-        @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
+        /// Runs token refresh and retry scheduling on the specified executor. If not specified, uses its own dedicated thread.
+        public Builder withExecutor(BindingSpec<SchedulingExecutor> executorSpec) {
+            this.executorSpec = checkNotNull(executorSpec);
             return this;
         }
 
@@ -184,7 +203,8 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                                 fixedCallbackHttpPortSpec,
                                                 loginExtraParamsSpec,
                                                 varStoreSpec,
-                                                specifiedAnnotation);
+                                                executorSpec,
+                                                specifiedAnnotation());
         }
     }
 }

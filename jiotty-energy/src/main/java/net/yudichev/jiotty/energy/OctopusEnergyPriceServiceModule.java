@@ -14,13 +14,14 @@ import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
-import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.inject.BindingSpec.annotatedWith;
 import static net.yudichev.jiotty.common.inject.BindingSpec.exposedBy;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
+import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 import static net.yudichev.jiotty.energy.Bindings.ExecutorProvider;
 
@@ -31,16 +32,16 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
     private final Key<EnergyProviderService> exposedKey;
     private final BindingSpec<String> octopusApiKeySpec;
     private final BindingSpec<String> octopusAccountIdSpec;
-    private final @Nullable BindingSpec<SchedulingExecutor> executorSpec;
+    private final BindingSpec<SchedulingExecutor> executorSpec;
 
     private OctopusEnergyPriceServiceModule(SpecifiedAnnotation specifiedAnnotation,
                                             BindingSpec<String> octopusApiKeySpec,
                                             BindingSpec<String> octopusAccountIdSpec,
-                                            @Nullable BindingSpec<SchedulingExecutor> executorSpec) {
+                                            BindingSpec<SchedulingExecutor> executorSpec) {
         exposedKey = checkNotNull(specifiedAnnotation).specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.octopusApiKeySpec = checkNotNull(octopusApiKeySpec);
         this.octopusAccountIdSpec = checkNotNull(octopusAccountIdSpec);
-        this.executorSpec = executorSpec;
+        this.executorSpec = checkNotNull(executorSpec);
     }
 
     public static Builder builder() {
@@ -54,14 +55,7 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
 
     @Override
     protected void configure() {
-        if (executorSpec == null) {
-            installLifecycleComponentModule(ExecutorProviderModule.builder()
-                                                                  .setThreadName(literally("Energy"))
-                                                                  .withAnnotation(forAnnotation(ExecutorProvider.class))
-                                                                  .build());
-        } else {
-            executorSpec.bind(SchedulingExecutor.class).annotatedWith(ExecutorProvider.class).installedBy(this::installLifecycleComponentModule);
-        }
+        executorSpec.bind(SchedulingExecutor.class).annotatedWith(ExecutorProvider.class).installedBy(this::installLifecycleComponentModule);
         // Retry the account fetch with exponential backoff capped at half the poll interval (≈6h) — long enough to ride out lengthy Octopus outages without
         // leaving the user stuck for the full ACCOUNT_POLL_INTERVAL between polls. Predicate always returns true: permanent 401/403 failures surface via
         // OctopusAccountService.subscribeToAuthState (per Stage C task 8), so wasting one backoff window on those is acceptable and avoids a custom predicate.
@@ -74,9 +68,10 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
                                                                          .setRetryableExceptionPredicate(literally(_ -> true))
                                                                          .withConfig(literally(backoffConfig))
                                                                          .build());
-        installRetryable(RetryableOperationExecutorModule.builder()
-                                                         .withAnnotation(forAnnotation(OctopusEnergyProviderService.PollRetry.class))
-                                                         .setBackingOffExceptionHandler(pollRetryHandler));
+        installLifecycleComponentModule(RetryableOperationExecutorModule.builder()
+                                                                        .withAnnotation(forAnnotation(OctopusEnergyProviderService.PollRetry.class))
+                                                                        .setBackingOffExceptionHandler(pollRetryHandler)
+                                                                        .withExecutor(annotatedWith(ExecutorProvider.class)).build());
         // Separate, short-window executor for the on-demand query* calls: ride out a momentary Octopus 5xx / network blip, but give up within seconds (an
         // interactive caller can't be left waiting) and never retry a permanent 4xx — hence the transient-only predicate, unlike the always-true poll
         // predicate above.
@@ -90,9 +85,10 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
                                                 .setRetryableExceptionPredicate(literally(OctopusEnergyProviderService::isTransientFailure))
                                                 .withConfig(literally(queryBackoffConfig))
                                                 .build());
-        installRetryable(RetryableOperationExecutorModule.builder()
-                                                         .withAnnotation(forAnnotation(OctopusEnergyProviderService.QueryRetry.class))
-                                                         .setBackingOffExceptionHandler(queryRetryHandler));
+        installLifecycleComponentModule(RetryableOperationExecutorModule.builder()
+                                                                        .withAnnotation(forAnnotation(OctopusEnergyProviderService.QueryRetry.class))
+                                                                        .setBackingOffExceptionHandler(queryRetryHandler)
+                                                                        .withExecutor(annotatedWith(ExecutorProvider.class)).build());
         octopusApiKeySpec.bind(String.class)
                          .annotatedWith(OctopusEnergyProviderService.ApiKey.class)
                          .installedBy(this::installLifecycleComponentModule);
@@ -103,18 +99,14 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
         expose(exposedKey);
     }
 
-    private void installRetryable(RetryableOperationExecutorModule.Builder builder) {
-        if (executorSpec != null) {
-            builder.withExecutor(executorSpec);
-        }
-        installLifecycleComponentModule(builder.build());
-    }
-
     public static final class Builder implements TypedBuilder<ExposedKeyModule<EnergyProviderService>>, HasWithAnnotation {
         private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
         private BindingSpec<String> octopusApiKeySpec;
         private BindingSpec<String> octopusAccountIdSpec;
-        private BindingSpec<SchedulingExecutor> executorSpec;
+        private BindingSpec<SchedulingExecutor> executorSpec = exposedBy(ExecutorProviderModule.builder()
+                                                                                               .setThreadName(literally("Energy"))
+                                                                                               .withAnnotation(forAnnotation(uniqueAnnotation()))
+                                                                                               .build());
 
         public Builder setOctopusAccountId(BindingSpec<String> octopusAccountIdSpec) {
             this.octopusAccountIdSpec = checkNotNull(octopusAccountIdSpec);
