@@ -56,13 +56,6 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
-    /// The API name for the embedded token manager: tags its logs with the supplied subject id, and flows into its executor thread name, so concurrent
-    /// per-user instances stay distinguishable. Falls back to a bare {@value #BASE_API_NAME} when no subject id is supplied.
-    @VisibleForTesting
-    static String apiName(String logSubjectId) {
-        return logSubjectId.isBlank() ? BASE_API_NAME : BASE_API_NAME + '-' + logSubjectId;
-    }
-
     /// The space-separated OAuth2 scope string. Always carries {@value #OFFLINE_ACCESS_SCOPE}, which is what makes the token endpoint return a refresh token,
     /// so a caller that omits it from its requested scopes still gets a credential that survives the first access-token expiry.
     @VisibleForTesting
@@ -82,7 +75,8 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
                 .builder()
                 .setClientId(clientIdSpec)
                 .withClientSecret(clientSecretSpec)
-                .setApiName(logSubjectIdSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, TeslaFleetModule::apiName))
+                .setApiName(literally(BASE_API_NAME))
+                .withLogSubjectId(logSubjectIdSpec)
                 .setTokenUrl(literally("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"))
                 .setScope(oauthScopesSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, TeslaFleetModule::scope))
                 .withAnnotation(forAnnotation(TeslaFleetImpl.Dependency.class));

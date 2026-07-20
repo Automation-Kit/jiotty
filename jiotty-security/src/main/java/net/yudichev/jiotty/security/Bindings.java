@@ -49,4 +49,10 @@ final class Bindings {
     @Retention(RUNTIME)
     @interface Dependency {
     }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface LogSubjectId {
+    }
 }

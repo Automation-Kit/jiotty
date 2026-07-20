@@ -1,7 +1,5 @@
 package net.yudichev.jiotty.connector.google.calendar;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.reflect.TypeToken;
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
@@ -64,13 +62,6 @@ public final class GoogleCalendarModule extends BaseLifecycleComponentModule imp
         this.localLogin = localLogin;
     }
 
-    /// The API name (and its log/executor-name discriminator) for the embedded token manager: tags its logs with the supplied subject id so concurrent
-    /// per-user instances stay distinguishable. Falls back to a bare {@value #BASE_API_NAME} when no subject id is supplied.
-    @VisibleForTesting
-    static String apiName(String logSubjectId) {
-        return logSubjectId.isBlank() ? BASE_API_NAME : BASE_API_NAME + '-' + logSubjectId;
-    }
-
     public static Builder builder() {
         return new Builder();
     }
@@ -85,9 +76,8 @@ public final class GoogleCalendarModule extends BaseLifecycleComponentModule imp
         // No client secret: this is a public client that authenticates via PKCE (code verifier supplied per auth-code exchange).
         var tokenManagerModuleBuilder = OAuth2TokenManagerModule.builder()
                                                                 .setClientId(clientIdSpec)
-                                                                .setApiName(logSubjectIdSpec.map(new TypeToken<>() {},
-                                                                                                 new TypeToken<>() {},
-                                                                                                 GoogleCalendarModule::apiName))
+                                                                .setApiName(literally(BASE_API_NAME))
+                                                                .withLogSubjectId(logSubjectIdSpec)
                                                                 .setTokenUrl(literally(TOKEN_URL))
                                                                 .setScope(literally(GoogleCalendarScopes.CALENDAR_READONLY))
                                                                 .withVarStore(varStoreSpec)

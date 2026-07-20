@@ -11,7 +11,6 @@ import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.lang.annotation.Annotation;
@@ -22,15 +21,6 @@ import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotatio
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TeslaFleetModuleTest {
-    /// The subject id must reach the embedded token manager's API name, since that is what keeps concurrent per-user instances apart in the log and in the
-    /// token manager's own executor thread name. A blank subject id means single-instance use, where the bare name is unambiguous.
-    @ParameterizedTest
-    @CsvSource({"user-1, TeslaFleet-user-1",
-            "'',     TeslaFleet"})
-    void apiNameCarriesTheSubjectId(String logSubjectId, String expectedApiName) {
-        assertThat(TeslaFleetModule.apiName(logSubjectId)).isEqualTo(expectedApiName);
-    }
-
     /// Requesting `offline_access` is what makes the token endpoint return a refresh token, so it is appended when the caller omits it and left alone when the
     /// caller already asked for it — no duplicate.
     @Test

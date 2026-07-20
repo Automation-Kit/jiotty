@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.security;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
@@ -26,6 +27,7 @@ import static net.yudichev.jiotty.security.Bindings.ApiName;
 import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
 import static net.yudichev.jiotty.security.Bindings.Dependency;
+import static net.yudichev.jiotty.security.Bindings.LogSubjectId;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
@@ -39,6 +41,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
     private final BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec;
     private final BindingSpec<Map<String, String>> loginExtraParamsSpec;
     private final BindingSpec<VarStore> varStoreSpec;
+    private final BindingSpec<String> logSubjectIdSpec;
     private final BindingSpec<SchedulingExecutor> executorSpec;
     private final Key<OAuth2TokenManager> exposedKey;
 
@@ -51,6 +54,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                      BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec,
                                      BindingSpec<Map<String, String>> loginExtraParamsSpec,
                                      BindingSpec<VarStore> varStoreSpec,
+                                     BindingSpec<String> logSubjectIdSpec,
                                      BindingSpec<SchedulingExecutor> executorSpec,
                                      SpecifiedAnnotation specifiedAnnotation) {
         this.clientIdSpec = checkNotNull(clientIdSpec);
@@ -62,6 +66,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         this.fixedCallbackHttpPortSpec = checkNotNull(fixedCallbackHttpPortSpec);
         this.loginExtraParamsSpec = checkNotNull(loginExtraParamsSpec);
         this.varStoreSpec = checkNotNull(varStoreSpec);
+        this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
         this.executorSpec = checkNotNull(executorSpec);
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
@@ -69,6 +74,14 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
     @Override
     public Key<OAuth2TokenManager> getExposedKey() {
         return exposedKey;
+    }
+
+    /// The executor thread name: `{apiName}-oauth2`, carrying the subject id when one is supplied so concurrent per-user instances stay distinguishable in a
+    /// shared log and in the executor metrics. The subject id reaches this name only — [OAuth2TokenManagerImpl] keys its persisted token by the API name, so
+    /// folding a per-user value into that name would orphan every stored token.
+    @VisibleForTesting
+    static String executorThreadName(String apiName, String logSubjectId) {
+        return logSubjectId.isBlank() ? apiName + "-oauth2" : apiName + '-' + logSubjectId + "-oauth2";
     }
 
     @Override
@@ -91,6 +104,9 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         varStoreSpec.bind(new TypeLiteral<>() {})
                     .annotatedWith(Dependency.class)
                     .installedBy(this::installLifecycleComponentModule);
+        logSubjectIdSpec.bind(String.class)
+                        .annotatedWith(LogSubjectId.class)
+                        .installedBy(this::installLifecycleComponentModule);
         executorSpec.bind(SchedulingExecutor.class)
                     .annotatedWith(Dependency.class)
                     .installedBy(this::installLifecycleComponentModule);
@@ -124,12 +140,18 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         private BindingSpec<String> tokenUrlSpec;
         private BindingSpec<String> scopeSpec;
         private BindingSpec<VarStore> varStoreSpec = boundTo(VarStore.class);
-        /// The thread name follows the injected API name, so the default executor is distinguishable per API — and per user, where the API name carries a
-        /// subject id.
+        private BindingSpec<String> logSubjectIdSpec = literally("");
+        /// The thread name combines the API name with the subject id, so the default executor is distinguishable per API and per user. It is built from the
+        /// injected bindings rather than the API name alone, because the API name also keys this manager's persisted token and must stay stable.
         private BindingSpec<SchedulingExecutor> executorSpec =
                 exposedBy(ExecutorProviderModule.builder()
-                                                .setThreadName(BindingSpec.<String>annotatedWith(ApiName.class)
-                                                                          .map(new TypeToken<>() {}, new TypeToken<>() {}, apiName -> apiName + "-oauth2"))
+                                                .setThreadName(BindingSpec.<String>annotatedWith(LogSubjectId.class)
+                                                                          .map(new TypeToken<>() {},
+                                                                               new TypeToken<>() {},
+                                                                               BindingSpec.<String>annotatedWith(ApiName.class)
+                                                                                          .map(new TypeToken<>() {},
+                                                                                               new TypeToken<>() {},
+                                                                                               apiName -> subjectId -> executorThreadName(apiName, subjectId))))
                                                 .withFamily(literally("oauth2"))
                                                 .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                 .build());
@@ -186,6 +208,14 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
             return this;
         }
 
+        /// A GDPR-safe subject id (e.g. the internal user id) that tags this instance's executor thread name, so concurrent per-user instances stay
+        /// distinguishable in a shared log and in the executor metrics. It reaches the thread name only — the API name keys the persisted token, so it stays
+        /// out of that. Defaults to empty (single-instance use).
+        public Builder withLogSubjectId(BindingSpec<String> logSubjectIdSpec) {
+            this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
+            return this;
+        }
+
         /// Runs token refresh and retry scheduling on the specified executor. If not specified, uses its own dedicated thread.
         public Builder withExecutor(BindingSpec<SchedulingExecutor> executorSpec) {
             this.executorSpec = checkNotNull(executorSpec);
@@ -203,6 +233,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                                 fixedCallbackHttpPortSpec,
                                                 loginExtraParamsSpec,
                                                 varStoreSpec,
+                                                logSubjectIdSpec,
                                                 executorSpec,
                                                 specifiedAnnotation());
         }
