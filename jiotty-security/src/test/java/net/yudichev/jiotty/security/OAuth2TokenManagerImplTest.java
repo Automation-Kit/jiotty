@@ -179,6 +179,30 @@ class OAuth2TokenManagerImplTest {
     }
 
     @Test
+    void startupWithNoStoredToken_publishesPermanentFailure() {
+        // With nothing stored the manager stays dormant until a login supplies an auth code, which is what a permanent failure tells the owning integration.
+        startTokenManager();
+
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.PermanentFailure.class,
+                                                           failure -> assertThat(failure.description()).isEqualTo("not authenticated"));
+        assertThat(requestLog).isEmpty();
+    }
+
+    @Test
+    void subscriberAttachingAfterStateWasPublished_isGivenTheLatestState() {
+        // A subscriber commonly attaches once the manager has already started, so a state published during startup has to reach it.
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        startTokenManager();
+
+        var lateStates = new ArrayList<AuthState>();
+        tokenManager.subscribeToAccessTokenState(lateStates::add);
+        clock.tick();
+
+        assertThat(lateStates).singleElement()
+                              .isInstanceOfSatisfying(AuthState.Success.class, success -> assertThat(success.authInfo()).isEqualTo("stored-at"));
+    }
+
+    @Test
     void startupWithExpiredStoredToken_triggersRefresh() {
         varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", NOW.minusSeconds(60)));
         respondWithToken("new-at", "new-rt", 7200);
@@ -436,9 +460,11 @@ class OAuth2TokenManagerImplTest {
         tokenManager.onNewAuthCode("code", "http://r");
         captureOnly = false;
 
+        int statesBeforeInvalidate = authStates.size();
         tokenManager.invalidate("anything", "API rejected the credential");
         clock.tick();
-        assertThat(authStates).noneMatch(AuthState.PermanentFailure.class::isInstance);
+        // the rejection is a no-op, so it publishes nothing and the in-flight exchange survives
+        assertThat(authStates).hasSize(statesBeforeInvalidate);
 
         deliverPending();
         clock.tick();

@@ -8,7 +8,7 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.lang.Json;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.security.AuthState;
@@ -66,7 +66,13 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     private final VarStore varStore;
     private final Optional<String> clientSecret;
     private final CurrentDateTimeProvider currentDateTimeProvider;
-    private final Listeners<AuthState> listeners = new Listeners<>();
+    /// The authentication state. Holds the latest value and hands it to each subscriber on subscription, so a subscriber that attaches once this component has
+    /// already started — the common case, as the application starts this component before the service that consumes it — learns the state published during
+    /// [#doStart].
+    ///
+    /// Confined to [#executor]: [#publishAuthState] and [#subscribeToAccessTokenState] dispatch onto it, which lets this hold the single-threaded
+    /// implementation.
+    private final ObservableValue<AuthState> authState = ObservableValue.simple(new AuthState.TransientFailure("Initialising"));
     private final String varStoreKey;
     private final String tokenUrl;
 
@@ -126,8 +132,13 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                  this::obtainAccessToken);
     }
 
+    /// Handles a start with no usable stored token: the manager stays dormant until a login supplies an auth code, so it publishes
+    /// [AuthState.PermanentFailure] to tell the owning integration that the user has to re-authorise.
+    ///
+    /// Subclasses that obtain a token by themselves override this.¬
     protected void obtainAccessToken() {
         logger.info("[{}] No valid access token, awaiting login authCode ", apiName);
+        publishAuthState(new AuthState.PermanentFailure("not authenticated"));
     }
 
     /// Creates the HTTP client used for token requests. Overridden in tests to inject a deterministic fake.
@@ -166,11 +177,16 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     @Override
     public Closeable subscribeToAccessTokenState(Consumer<? super AuthState> handler) {
-        return whenStartedAndNotLifecycling(() -> listeners.addListener(executor,
-                                                                        () -> Optional.ofNullable(currentToken)
-                                                                                      .map(token -> new AuthState.Success(
-                                                                                              token.accessToken())),
-                                                                        handler));
+        return whenStartedAndNotLifecycling(() -> {
+            CompletableFuture<Closeable> subscription = executor.submit(() -> authState.subscribe(handler));
+            return Closeable.idempotent(() -> subscription.thenAcceptAsync(Closeable::close, executor));
+        });
+    }
+
+    /// Publishes `newAuthState` on [#executor], which owns [#authState]. Callers already running there get the same ordering as any other work they queue,
+    /// and [#doStart] — which runs on the starting thread — reaches it safely.
+    private void publishAuthState(AuthState newAuthState) {
+        executor.execute(() -> authState.accept(newAuthState));
     }
 
     public static Map<String, String> splitQuery(String query) {
@@ -313,10 +329,10 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         if (backOffMillis == BackOff.STOP) {
             retryingTokenRequest = false;
             logger.info("[{}] giving up obtaining token after retrying for {}ms: {}", apiName, tokenRequestBackOff.getMaxElapsedTimeMillis(), description);
-            listeners.notify(new AuthState.PermanentFailure(description));
+            publishAuthState(new AuthState.PermanentFailure(description));
         } else {
             logger.info("[{}] token request failed ({}); retrying in {}ms", apiName, description, backOffMillis);
-            listeners.notify(new AuthState.TransientFailure(description));
+            publishAuthState(new AuthState.TransientFailure(description));
             scheduleTokenRequest(Duration.ofMillis(backOffMillis), () -> requestToken(formBody, fallbackRefreshToken));
         }
     }
@@ -353,7 +369,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         retryingTokenRequest = false;
         currentToken = null;
         varStore.clearValue(varStoreKey);
-        listeners.notify(new AuthState.PermanentFailure(reason));
+        publishAuthState(new AuthState.PermanentFailure(reason));
     }
 
     private OauthAccessToken responseToToken(Instant currentTime, OauthAccessTokenResponse response, @Nullable String fallbackRefreshToken) {
@@ -375,7 +391,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     protected void setCurrentToken(OauthAccessToken accessToken) {
         logger.debug("[{}] token set, expires at {}", apiName, accessToken.expiryTime());
         currentToken = accessToken;
-        listeners.notify(new AuthState.Success(currentToken.accessToken()));
+        publishAuthState(new AuthState.Success(currentToken.accessToken()));
     }
 
     private void scheduleTokenRefresh() {

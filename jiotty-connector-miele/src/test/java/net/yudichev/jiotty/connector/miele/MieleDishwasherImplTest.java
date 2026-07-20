@@ -45,10 +45,19 @@ class MieleDishwasherImplTest {
     private static final String ACCESS_TOKEN = "mock-access-token";
 
     private MieleDishwasherImpl mieleDishwasher;
+    private String baseUrl;
+    /// The states the token manager delivers, in order, when the dishwasher subscribes on start. A real manager holds its latest state and hands it over on
+    /// subscription, so a subscriber can receive a yet-to-be-resolved state ahead of the one that resolves it.
+    private List<AuthState> authStatesOnSubscribe = List.of(new AuthState.Success(ACCESS_TOKEN));
 
     @BeforeEach
     void setUp(WireMockRuntimeInfo wmRuntimeInfo) {
-        String baseUrl = wmRuntimeInfo.getHttpBaseUrl();
+        baseUrl = wmRuntimeInfo.getHttpBaseUrl();
+        mieleDishwasher = createDishwasher();
+        mieleDishwasher.start();
+    }
+
+    private MieleDishwasherImpl createDishwasher() {
         OAuth2TokenManager mockTokenManager = new OAuth2TokenManager() {
             @Override
             public Optional<String> clientSecret() {
@@ -67,7 +76,7 @@ class MieleDishwasherImplTest {
 
             @Override
             public Closeable subscribeToAccessTokenState(Consumer<? super AuthState> handler) {
-                handler.accept(new AuthState.Success(ACCESS_TOKEN));
+                authStatesOnSubscribe.forEach(handler);
                 return () -> {};
             }
 
@@ -80,7 +89,7 @@ class MieleDishwasherImplTest {
             }
         };
 
-        mieleDishwasher = new MieleDishwasherImpl(
+        return new MieleDishwasherImpl(
                 DEVICE_ID,
                 mockTokenManager,
                 new ExecutorFactoryImpl(),
@@ -93,12 +102,56 @@ class MieleDishwasherImplTest {
                                   .writeTimeout(Duration.ofSeconds(1)),
                 _ -> {},
                 1);
-        mieleDishwasher.start();
     }
 
     @AfterEach
     void tearDown() {
         Closeable.closeSafelyIfNotNull(logger, () -> mieleDishwasher.stop());
+    }
+
+    @Test
+    void start_transientFailureThenToken_starts() {
+        // The manager hands its current state to a new subscriber, and until it resolves a token that state is a transient failure; the token that follows
+        // completes the start.
+        mieleDishwasher.stop();
+        authStatesOnSubscribe = List.of(new AuthState.TransientFailure("Initialising"), new AuthState.Success(ACCESS_TOKEN));
+        mieleDishwasher = createDishwasher();
+
+        mieleDishwasher.start();
+
+        stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
+                        .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
+                        .willReturn(aResponse().withStatus(200)
+                                               .withHeader("Content-Type", "application/json")
+                                               .withBody("[]")));
+        assertThat(mieleDishwasher.getPrograms().join()).isEmpty();
+    }
+
+    @Test
+    void refreshedToken_isUsedForSubsequentRequests() {
+        // The manager publishes a fresh token whenever it refreshes one, and every later request carries it.
+        mieleDishwasher.stop();
+        authStatesOnSubscribe = List.of(new AuthState.Success("first-token"), new AuthState.Success("refreshed-token"));
+        mieleDishwasher = createDishwasher();
+
+        mieleDishwasher.start();
+
+        stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
+                        .withHeader("Authorization", equalTo("Bearer refreshed-token"))
+                        .willReturn(aResponse().withStatus(200)
+                                               .withHeader("Content-Type", "application/json")
+                                               .withBody("[]")));
+        assertThat(mieleDishwasher.getPrograms().join()).isEmpty();
+    }
+
+    @Test
+    void start_permanentFailure_fails() {
+        mieleDishwasher.stop();
+        authStatesOnSubscribe = List.of(new AuthState.PermanentFailure("not authenticated"));
+        mieleDishwasher = createDishwasher();
+
+        assertThatThrownBy(() -> mieleDishwasher.start())
+                .hasRootCauseMessage("Failed to obtain access token: not authenticated");
     }
 
     @Test

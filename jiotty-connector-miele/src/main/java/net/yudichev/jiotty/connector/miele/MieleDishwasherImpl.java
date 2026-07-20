@@ -129,20 +129,27 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
         commandClient = newClient(commandClientCustomiser);
         CompletableFuture<Void> firstToken = new CompletableFuture<>();
         tokenSubscription = tokenManager.subscribeToAccessTokenState(authState -> {
-            boolean firstTime = accessToken == null;
-            accessToken = switch (authState) {
-                case AuthState.Success success -> success.authInfo();
-                case AuthState.Failure failure -> throw new RuntimeException("Failed to obtain access token: " + failure.description());
-            };
-            if (firstTime) {
-                firstToken.complete(null);
+            switch (authState) {
+                case AuthState.Success success -> {
+                    boolean firstTime = accessToken == null;
+                    accessToken = success.authInfo();
+                    if (firstTime) {
+                        firstToken.complete(null);
+                    }
+                }
+                // A transient failure — the state the manager holds until it resolves a token — can be followed by a token, so keep waiting for one. A
+                // permanent failure means the user has to re-authorise, so fail the start at once.
+                case AuthState.TransientFailure _ -> {}
+                case AuthState.PermanentFailure failure ->
+                        firstToken.completeExceptionally(new RuntimeException("Failed to obtain access token: " + failure.description()));
             }
         });
         if (!firstToken.isDone()) {
             logger.info("Awaiting for the access token to be delivered...");
-            asUnchecked(() -> firstToken.get(5, TimeUnit.MINUTES));
-            logger.info("Access token obtained");
         }
+        // Awaited on every path, so that a permanent failure delivered synchronously on subscription propagates and fails the start.
+        asUnchecked(() -> firstToken.get(5, TimeUnit.MINUTES));
+        logger.info("Access token obtained");
     }
 
     @Override
