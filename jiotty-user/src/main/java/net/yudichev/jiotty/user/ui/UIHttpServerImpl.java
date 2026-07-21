@@ -61,8 +61,6 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     /// `path` tag derived by this server's request-timing hook from the URL. The value, if present, must be a [String]; the bounded set of legal values
     /// is the union of registered [ApiPathHandler#pathPrefix] values.
     static final String ROUTE_NAME_ATTRIBUTE = "metrics.routeName";
-    private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
-
     /// Bounded request-handling thread pool. SSE streams run async — their writes are marshalled onto the
     /// UI executor, never held on a Jetty thread — so they do not occupy this pool per-stream; the max is
     /// sized for concurrent short requests across the user base, not for stream count.
@@ -70,10 +68,13 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     static final int MAX_THREADS = 32;
     @VisibleForTesting
     static final int MIN_THREADS = 8;
+    private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
     /// Accept backlog bound: excess inbound connections are refused by the OS rather than queued unbounded.
     private static final int ACCEPT_QUEUE_SIZE = 128;
     /// Request header size cap — app-side defence-in-depth alongside the Caddy edge header cap.
     private static final int REQUEST_HEADER_SIZE_BYTES = 16 * 1024;
+    /// Listen port asking the OS to pick a free one, which [#listenPort] then reports.
+    private static final int EPHEMERAL_PORT = 0;
 
     private final Set<ServletMount> servletMounts;
     private final MeterRegistry meterRegistry;
@@ -95,6 +96,13 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         connector = new ServerConnector(server, new HttpConnectionFactory(httpConfig));
         connector.setPort(listenPort);
         connector.setAcceptQueueSize(ACCEPT_QUEUE_SIZE);
+        if (listenPort == EPHEMERAL_PORT) {
+            // SO_REUSEADDR earns its keep on a configured port, where it allows a restart to re-bind while old connections linger in TIME_WAIT. An
+            // ephemeral port has nothing to re-bind, and on BSD the flag lets this wildcard bind coexist with a process already listening on
+            // 127.0.0.1 at the same port — the kernel then routes localhost connections to that more specific listener, so callers reach it instead
+            // of this server.
+            connector.setReuseAddress(false);
+        }
         server.addConnector(connector);
     }
 

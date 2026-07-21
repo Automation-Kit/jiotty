@@ -17,13 +17,22 @@ import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<UIHttpServer> {
     private final BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec;
     private final BindingSpec<Integer> listenPortSpec;
+    private final BindingSpec<Double> preAuthRequestsPerSecondSpec;
+    private final BindingSpec<Integer> maxInFlightVerificationsSpec;
+    private final BindingSpec<Boolean> trustProxyHeadersSpec;
     private final List<BindingSpec<ServletMount>> servletMountSpecs;
 
     private AuthenticatedHttpServerModule(BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec,
                                           BindingSpec<Integer> listenPortSpec,
+                                          BindingSpec<Double> preAuthRequestsPerSecondSpec,
+                                          BindingSpec<Integer> maxInFlightVerificationsSpec,
+                                          BindingSpec<Boolean> trustProxyHeadersSpec,
                                           List<BindingSpec<ServletMount>> servletMountSpecs) {
         this.userTokenAuthoriserSpec = checkNotNull(userTokenAuthoriserSpec, "userTokenAuthoriserSpec");
         this.listenPortSpec = checkNotNull(listenPortSpec, "listenPortSpec");
+        this.preAuthRequestsPerSecondSpec = checkNotNull(preAuthRequestsPerSecondSpec, "preAuthRequestsPerSecondSpec");
+        this.maxInFlightVerificationsSpec = checkNotNull(maxInFlightVerificationsSpec, "maxInFlightVerificationsSpec");
+        this.trustProxyHeadersSpec = checkNotNull(trustProxyHeadersSpec, "trustProxyHeadersSpec");
         this.servletMountSpecs = ImmutableList.copyOf(servletMountSpecs);
     }
 
@@ -37,6 +46,15 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
                                .annotatedWith(AuthenticatedUIRequestAuthoriser.Dependency.class)
                                .installedBy(this::installLifecycleComponentModule);
         listenPortSpec.bind(int.class).annotatedWith(UIHttpServerImpl.ListenPort.class).installedBy(this::installLifecycleComponentModule);
+        preAuthRequestsPerSecondSpec.bind(Double.class)
+                                    .annotatedWith(PreAuthAdmissionControl.RequestsPerSecond.class)
+                                    .installedBy(this::installLifecycleComponentModule);
+        maxInFlightVerificationsSpec.bind(Integer.class)
+                                    .annotatedWith(PreAuthAdmissionControl.MaxInFlightVerifications.class)
+                                    .installedBy(this::installLifecycleComponentModule);
+        trustProxyHeadersSpec.bind(Boolean.class)
+                             .annotatedWith(PreAuthAdmissionControl.TrustProxyHeaders.class)
+                             .installedBy(this::installLifecycleComponentModule);
         bind(UIRequestAuthoriser.class).annotatedWith(ApiServletMount.Dependency.class).to(AuthenticatedUIRequestAuthoriser.class);
         Multibinder<ServletMount> mountBinder = Multibinder.newSetBinder(binder(), ServletMount.class);
         // Built-in mount: the per-user /ui/api context
@@ -56,6 +74,10 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
         private final List<BindingSpec<ServletMount>> servletMountSpecs = new ArrayList<>();
         private BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec;
         private BindingSpec<Integer> listenPortSpec = BindingSpec.literally(0);
+        private BindingSpec<Double> preAuthRequestsPerSecondSpec = BindingSpec.literally(10.0);
+        private BindingSpec<Integer> maxInFlightVerificationsSpec = BindingSpec.literally(20);
+        /// Defaults to distrusting `X-Forwarded-For`, so a directly-reachable server cannot have its per-source rate limit chosen by the caller.
+        private BindingSpec<Boolean> trustProxyHeadersSpec = BindingSpec.literally(false);
 
         public Builder setUserTokenAuthoriser(BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec) {
             this.userTokenAuthoriserSpec = checkNotNull(userTokenAuthoriserSpec, "userTokenAuthoriserSpec");
@@ -64,6 +86,23 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
 
         public Builder withListenPort(BindingSpec<Integer> listenPortSpec) {
             this.listenPortSpec = checkNotNull(listenPortSpec, "listenPortSpec");
+            return this;
+        }
+
+        public Builder withPreAuthRequestsPerSecond(BindingSpec<Double> preAuthRequestsPerSecondSpec) {
+            this.preAuthRequestsPerSecondSpec = checkNotNull(preAuthRequestsPerSecondSpec, "preAuthRequestsPerSecondSpec");
+            return this;
+        }
+
+        public Builder withMaxInFlightVerifications(BindingSpec<Integer> maxInFlightVerificationsSpec) {
+            this.maxInFlightVerificationsSpec = checkNotNull(maxInFlightVerificationsSpec, "maxInFlightVerificationsSpec");
+            return this;
+        }
+
+        /// Honour `X-Forwarded-For` when picking a request's rate-limit bucket. Set this only where a trusted proxy fronts the server and the app port is
+        /// unreachable directly — otherwise a caller sets the header itself and picks its own bucket, escaping the limit.
+        public Builder withTrustProxyHeaders(BindingSpec<Boolean> trustProxyHeadersSpec) {
+            this.trustProxyHeadersSpec = checkNotNull(trustProxyHeadersSpec, "trustProxyHeadersSpec");
             return this;
         }
 
@@ -76,7 +115,12 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
 
         @Override
         public AuthenticatedHttpServerModule build() {
-            return new AuthenticatedHttpServerModule(userTokenAuthoriserSpec, listenPortSpec, servletMountSpecs);
+            return new AuthenticatedHttpServerModule(userTokenAuthoriserSpec,
+                                                     listenPortSpec,
+                                                     preAuthRequestsPerSecondSpec,
+                                                     maxInFlightVerificationsSpec,
+                                                     trustProxyHeadersSpec,
+                                                     servletMountSpecs);
         }
     }
 }

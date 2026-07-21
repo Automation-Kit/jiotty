@@ -60,6 +60,9 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     private static final Duration TOKEN_RETRY_MAX_INTERVAL = Duration.ofMinutes(1);
     protected final Logger logger = LogManager.getLogger(getClass());
     protected final String clientId;
+    /// Identifies the API in this manager's log lines, and keys its persisted token. Changing it points the manager at a different key, so every token already
+    /// stored under the old one is orphaned — and unrecoverable, since the stored value is sealed with its own key in the AAD. A per-instance discriminator
+    /// (a user id, say) belongs in the executor thread name: see [OAuth2TokenManagerModule.Builder#withLogSubjectId].
     protected final String apiName;
     protected final String scope;
     private final Provider<SchedulingExecutor> executorProvider;

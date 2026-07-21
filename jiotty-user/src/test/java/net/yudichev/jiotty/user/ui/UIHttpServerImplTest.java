@@ -148,11 +148,13 @@ class UIHttpServerImplTest {
             resp.setStatus(200);
             resp.setContentType("text/plain");
             resp.getWriter().print("ok");
-            return true;
+            return DispatchResult.HANDLED;
         }));
 
-        sendGet("/ui/api/analytics/some-report");
+        HttpResponse<String> response = sendGet("/ui/api/analytics/some-report");
 
+        assertThat(response.statusCode()).as("the handler's own response reaches the client").isEqualTo(200);
+        assertThat(response.body()).isEqualTo("ok");
         assertThat(meterRegistry.find("http_response_begin_seconds")
                                 .tag("path", "/api/analytics")
                                 .timer())
