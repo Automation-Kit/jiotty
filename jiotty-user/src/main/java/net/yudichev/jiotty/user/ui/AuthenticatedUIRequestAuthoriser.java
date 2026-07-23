@@ -39,6 +39,7 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
 
     private final UserTokenAuthoriser userTokenAuthoriser;
     private final PreAuthAdmissionControl admissionControl;
+    private final PerUidRateLimiter perUidRateLimiter;
     private final MeterRegistry meterRegistry;
     private final Timer missingTokenAuthTimer;
     private final Timer authenticatedAuthTimer;
@@ -47,9 +48,11 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
     @Inject
     AuthenticatedUIRequestAuthoriser(@Dependency UserTokenAuthoriser userTokenAuthoriser,
                                      PreAuthAdmissionControl admissionControl,
+                                     PerUidRateLimiter perUidRateLimiter,
                                      MeterRegistry meterRegistry) {
         this.userTokenAuthoriser = checkNotNull(userTokenAuthoriser, "userTokenAuthoriser");
         this.admissionControl = checkNotNull(admissionControl, "admissionControl");
+        this.perUidRateLimiter = checkNotNull(perUidRateLimiter, "perUidRateLimiter");
         this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
         missingTokenAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "missing_token");
         authenticatedAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "authenticated");
@@ -94,6 +97,13 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
         userTokenAuthoriser.deliverTokenStateTo(token, state -> asyncContext.start(() -> {
             try {
                 switch (state) {
+                    case TokenAuthenticated tokenAuthenticated when !perUidRateLimiter.tryAdmit(tokenAuthenticated.profile().id()) -> {
+                        // The user's identity is known only after verification, so this per-user limit runs here on the async body; the per-source guard runs
+                        // up front, before the request goes async.
+                        authSample.stop(rejectedAuthTimer);
+                        asUnchecked(() -> writeAdmissionRejection(response, 429, "Too many requests"));
+                        asyncContext.complete();
+                    }
                     case TokenAuthenticated tokenAuthenticated -> {
                         authSample.stop(authenticatedAuthTimer);
                         tokenAuthenticated.customData()

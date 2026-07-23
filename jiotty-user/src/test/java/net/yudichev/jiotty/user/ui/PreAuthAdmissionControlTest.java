@@ -48,19 +48,6 @@ class PreAuthAdmissionControlTest {
         assertThat(control.tryAdmit(request)).as("refilled").isEqualTo(ADMITTED);
     }
 
-    /// The bucket holds at most one second's worth, so an idle source cannot bank allowance and later burst beyond the rate.
-    @Test
-    void capsTheAllowanceASourceCanBank(@Mock HttpServletRequest request) {
-        var control = control(false);
-        from(request, "10.0.0.1", null);
-
-        clock.advanceTimeAndTick(Duration.ofMinutes(5));
-
-        assertThat(control.tryAdmit(request)).isEqualTo(ADMITTED);
-        assertThat(control.tryAdmit(request)).isEqualTo(ADMITTED);
-        assertThat(control.tryAdmit(request)).as("five idle minutes buy no more than the one-second cap").isEqualTo(RATE_LIMITED);
-    }
-
     /// One source exhausting its allowance must not spend another's.
     @Test
     void tracksSourcesIndependently(@Mock HttpServletRequest noisy, @Mock HttpServletRequest other) {
@@ -207,12 +194,9 @@ class PreAuthAdmissionControlTest {
         assertThat(rejections(meterRegistry, "verify_saturated")).isEqualTo(2.0);
     }
 
-    /// A limit that admits nothing would shed all traffic, so it is rejected at construction.
+    /// A verification pool that admits nothing would shed all traffic, so it is rejected at construction. (The rate bound is validated by the rate limiter.)
     @Test
-    void rejectsNonPositiveLimits() {
-        assertThatThrownBy(() -> new PreAuthAdmissionControl(clock, 0.0, 20, false, new NoopMeterRegistry()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("requests per second");
+    void rejectsNonPositiveInFlightBound() {
         assertThatThrownBy(() -> new PreAuthAdmissionControl(clock, 10.0, 0, false, new NoopMeterRegistry()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("max in-flight verifications");

@@ -73,6 +73,7 @@ class AuthenticatedUIRequestAuthoriserTest {
     private StringWriter responseBody;
     private MeterRegistry meterRegistry;
     private ProgrammableClock clock;
+    private PerUidRateLimiter perUidRateLimiter;
 
     @BeforeEach
     void setUp() {
@@ -80,8 +81,9 @@ class AuthenticatedUIRequestAuthoriserTest {
         clock = new ProgrammableClock();
         clock.setTime(Instant.parse("2026-07-20T12:00:00Z"));
         // Generous limits so the existing cases exercise the authenticated path; the admission cases below tighten them.
+        perUidRateLimiter = perUidLimiterWith(1000.0);
         var admissionControl = new PreAuthAdmissionControl(clock, 1000.0, 1000, false, meterRegistry);
-        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, admissionControl, meterRegistry);
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, admissionControl, perUidRateLimiter, meterRegistry);
     }
 
     /// A source past its rate is refused before the request goes async, so it never reaches token verification.
@@ -115,6 +117,28 @@ class AuthenticatedUIRequestAuthoriserTest {
         verify(response).setStatus(503);
         verify(request, never()).startAsync();
         verify(userTokenAuthoriser, never()).deliverTokenStateTo(anyString(), any());
+    }
+
+    /// An authenticated user past its per-user API rate is shed with 429 after verification, before its request is dispatched onward — and its verification
+    /// slot still returns. The user's identity is known only after verification, so this limit runs on the async body, unlike the per-source one up front.
+    @Test
+    void rejectsWithTooManyRequestsWhenTheUserIsPastItsApiRate(@Mock HttpServletRequest laterRequest) throws Exception {
+        var perUid = perUidLimiterWith(1.0);
+        var control = new PreAuthAdmissionControl(clock, 1000.0, 1, false, meterRegistry);
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUid, meterRegistry);
+        perUid.tryAdmit(PROFILE.id());   // spends this user's allowance
+        arrangeAdmittedRequestAwaitingVerification(laterRequest);
+        prepareAsyncContextStart();
+        prepareResponseBody();
+        deliverTokenState(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, new FakeUIServer(), Optional.empty()));
+
+        authoriser.authorise(request, response, chain);
+
+        verify(response).setStatus(429);
+        verify(asyncContext).complete();
+        verify(asyncContext, never()).dispatch();
+        assertThat(responseBody.toString()).contains("Too many requests");
+        assertThat(control.tryAdmit(laterRequest)).as("the verification slot returns even though the user was rate-limited").isEqualTo(ADMITTED);
     }
 
     /// However the async cycle ends, the admitted request's verification slot goes back to the pool. The cycle has its timeout disabled, so a slot that
@@ -154,7 +178,7 @@ class AuthenticatedUIRequestAuthoriserTest {
         // Its own registry: a gauge name registered by the fixture's control would otherwise win, and this case asserts on occupancy.
         var ownRegistry = new SimpleMeterRegistry();
         var control = new PreAuthAdmissionControl(clock, 1000.0, 1, false, ownRegistry);
-        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, ownRegistry);
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUidRateLimiter, ownRegistry);
         arrangeAdmittedRequestAwaitingVerification(laterRequest);
 
         authoriser.authorise(request, response, chain);
@@ -367,8 +391,13 @@ class AuthenticatedUIRequestAuthoriserTest {
     /// Builds a control with the given limits and rewires the authoriser around it, which every admission case needs before it can arrange anything else.
     private PreAuthAdmissionControl admissionControlWith(double requestsPerSecond, int maxInFlightVerifications) {
         var control = new PreAuthAdmissionControl(clock, requestsPerSecond, maxInFlightVerifications, false, meterRegistry);
-        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, meterRegistry);
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUidRateLimiter, meterRegistry);
         return control;
+    }
+
+    private PerUidRateLimiter perUidLimiterWith(double requestsPerSecond) {
+        // Burst equal to the rate keeps these cases simple: spending the rate's worth exhausts the allowance.
+        return new PerUidRateLimiter(clock, requestsPerSecond, requestsPerSecond, meterRegistry);
     }
 
     /// Arranges a request that admission lets through and that then sits awaiting its token state, plus a second source for probing the pool.

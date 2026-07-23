@@ -43,6 +43,8 @@ class AuthenticatedHttpServerModuleTest {
                                                                      .withTrustProxyHeaders(literally(true))
                                                                      .withPreAuthRequestsPerSecond(literally(3.5))
                                                                      .withMaxInFlightVerifications(literally(7))
+                                                                     .withPerUidRequestsPerSecond(literally(4.0))
+                                                                     .withPerUidBurst(literally(12.0))
                                                                      .addServletMount(literally(servletMount))
                                                                      .addServletMount(literally(otherServletMount))
                                                                      .build());

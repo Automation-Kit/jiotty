@@ -20,6 +20,8 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
     private final BindingSpec<Double> preAuthRequestsPerSecondSpec;
     private final BindingSpec<Integer> maxInFlightVerificationsSpec;
     private final BindingSpec<Boolean> trustProxyHeadersSpec;
+    private final BindingSpec<Double> perUidRequestsPerSecondSpec;
+    private final BindingSpec<Double> perUidBurstSpec;
     private final List<BindingSpec<ServletMount>> servletMountSpecs;
 
     private AuthenticatedHttpServerModule(BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec,
@@ -27,12 +29,16 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
                                           BindingSpec<Double> preAuthRequestsPerSecondSpec,
                                           BindingSpec<Integer> maxInFlightVerificationsSpec,
                                           BindingSpec<Boolean> trustProxyHeadersSpec,
+                                          BindingSpec<Double> perUidRequestsPerSecondSpec,
+                                          BindingSpec<Double> perUidBurstSpec,
                                           List<BindingSpec<ServletMount>> servletMountSpecs) {
         this.userTokenAuthoriserSpec = checkNotNull(userTokenAuthoriserSpec, "userTokenAuthoriserSpec");
         this.listenPortSpec = checkNotNull(listenPortSpec, "listenPortSpec");
         this.preAuthRequestsPerSecondSpec = checkNotNull(preAuthRequestsPerSecondSpec, "preAuthRequestsPerSecondSpec");
         this.maxInFlightVerificationsSpec = checkNotNull(maxInFlightVerificationsSpec, "maxInFlightVerificationsSpec");
         this.trustProxyHeadersSpec = checkNotNull(trustProxyHeadersSpec, "trustProxyHeadersSpec");
+        this.perUidRequestsPerSecondSpec = checkNotNull(perUidRequestsPerSecondSpec, "perUidRequestsPerSecondSpec");
+        this.perUidBurstSpec = checkNotNull(perUidBurstSpec, "perUidBurstSpec");
         this.servletMountSpecs = ImmutableList.copyOf(servletMountSpecs);
     }
 
@@ -55,6 +61,12 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
         trustProxyHeadersSpec.bind(Boolean.class)
                              .annotatedWith(PreAuthAdmissionControl.TrustProxyHeaders.class)
                              .installedBy(this::installLifecycleComponentModule);
+        perUidRequestsPerSecondSpec.bind(Double.class)
+                                   .annotatedWith(PerUidRateLimiter.RequestsPerSecond.class)
+                                   .installedBy(this::installLifecycleComponentModule);
+        perUidBurstSpec.bind(Double.class)
+                       .annotatedWith(PerUidRateLimiter.MaxBurst.class)
+                       .installedBy(this::installLifecycleComponentModule);
         bind(UIRequestAuthoriser.class).annotatedWith(ApiServletMount.Dependency.class).to(AuthenticatedUIRequestAuthoriser.class);
         Multibinder<ServletMount> mountBinder = Multibinder.newSetBinder(binder(), ServletMount.class);
         // Built-in mount: the per-user /ui/api context
@@ -78,6 +90,10 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
         private BindingSpec<Integer> maxInFlightVerificationsSpec = BindingSpec.literally(20);
         /// Defaults to distrusting `X-Forwarded-For`, so a directly-reachable server cannot have its per-source rate limit chosen by the caller.
         private BindingSpec<Boolean> trustProxyHeadersSpec = BindingSpec.literally(false);
+        private BindingSpec<Double> perUidRequestsPerSecondSpec = BindingSpec.literally(5.0);
+        /// Burst well above the sustained rate: a legitimate app start fans out a handful of requests at once, then goes quiet as its data streams over SSE.
+        /// A ceiling of 20 absorbs that (and a failed-request retry or two) while the 5/s sustained rate still caps abuse.
+        private BindingSpec<Double> perUidBurstSpec = BindingSpec.literally(20.0);
 
         public Builder setUserTokenAuthoriser(BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec) {
             this.userTokenAuthoriserSpec = checkNotNull(userTokenAuthoriserSpec, "userTokenAuthoriserSpec");
@@ -106,6 +122,19 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
             return this;
         }
 
+        /// How fast one authenticated user may drive the API, sustained. Bounds an authenticated account regardless of how many addresses it comes from,
+        /// complementing the per-source pre-auth limit.
+        public Builder withPerUidRequestsPerSecond(BindingSpec<Double> perUidRequestsPerSecondSpec) {
+            this.perUidRequestsPerSecondSpec = checkNotNull(perUidRequestsPerSecondSpec, "perUidRequestsPerSecondSpec");
+            return this;
+        }
+
+        /// How many requests one authenticated user may fire at once before the sustained rate applies — sized to swallow a legitimate app-startup fan-out.
+        public Builder withPerUidBurst(BindingSpec<Double> perUidBurstSpec) {
+            this.perUidBurstSpec = checkNotNull(perUidBurstSpec, "perUidBurstSpec");
+            return this;
+        }
+
         /// Accumulator: call once per mount. Each registration is bound under its own unique annotation and contributed to the [Multibinder] behind
         /// `Set<ServletMount>`.
         public Builder addServletMount(BindingSpec<ServletMount> servletMountSpec) {
@@ -120,6 +149,8 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
                                                      preAuthRequestsPerSecondSpec,
                                                      maxInFlightVerificationsSpec,
                                                      trustProxyHeadersSpec,
+                                                     perUidRequestsPerSecondSpec,
+                                                     perUidBurstSpec,
                                                      servletMountSpecs);
         }
     }
