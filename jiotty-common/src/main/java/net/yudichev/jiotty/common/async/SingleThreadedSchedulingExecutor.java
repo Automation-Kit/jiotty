@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.async;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -33,7 +34,6 @@ import java.util.function.BiConsumer;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
-import static java.util.concurrent.TimeUnit.SECONDS;
 
 /// A single-threaded [SchedulingExecutor] backed by a one-thread [ScheduledThreadPoolExecutor]. The queue of pending immediate tasks (`execute`/`submit`,
 /// **not** scheduled) is bounded: a submit beyond `maxQueueSize` is rejected with [RejectedExecutionException] rather than piling up unbounded and
@@ -42,20 +42,30 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 /// When a [MeterRegistry] is supplied, the standard [ExecutorServiceMetrics] meters (queue depth, active, pool, execution + queue-wait timers, completed)
 /// plus a custom `executor.queued.immediate` gauge and `executor.rejected` counter are published tagged `name`/`family`, and removed when the executor closes.
 /// (Micrometer's dot-separated names expose to Prometheus with underscores — e.g. `executor.queued.immediate` → `executor_queued_immediate`.)
-public final class SingleThreadedSchedulingExecutor implements SchedulingExecutor, StringFormattable {
+///
+/// [#close()] keeps the pool live while it runs the immediate-task backlog — and any immediate follow-ups those tasks submit — to completion, then shuts the
+/// pool down, cancelling any future-dated scheduled/periodic task. A task that reschedules itself mid-drain (e.g. a throttle re-arming its timer) runs on the
+/// live pool; a fixed deadline bounds a self-feeding backlog.
+public final class SingleThreadedSchedulingExecutor extends BaseIdempotentCloseable implements SchedulingExecutor, StringFormattable {
     private static final Logger logger = LogManager.getLogger(SingleThreadedSchedulingExecutor.class);
+    /// Bounds both the immediate-backlog drain and the pool termination in [#close()], so a wedged task cannot hold shutdown open indefinitely.
+    private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(10);
 
     private final Set<Closeable> scheduleHandles = Sets.newConcurrentHashSet();
     /// Pending immediate — `execute`/`submit`, not scheduled — tasks not yet started; the value the bound is enforced against. Scheduled/periodic tasks share
     /// the underlying JDK queue but are deliberately excluded, so a handful of long-lived periodic schedules never eat into the immediate-task headroom.
     private final AtomicInteger pendingImmediateTasks = new AtomicInteger();
+    /// The submission view: the metering wrapper when a registry is supplied, otherwise [#delegatePool] itself.
     private final ScheduledExecutorService executor;
+    /// The concrete pool. [#close()] submits the drain barrier and terminates the pool through it.
+    private final ScheduledThreadPoolExecutor delegatePool;
     private final int maxQueueSize;
     private final String threadNameBase;
     private final BiConsumer<String, Throwable> taskExceptionHandler;
     @Nullable
     private final Counter rejectedCounter;
     private final Runnable meterCleanup;
+    private final Duration shutdownTimeout;
 
     public SingleThreadedSchedulingExecutor(String threadNameBase) {
         this(threadNameBase, threadNameBase, ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE, new ListenerBackedTaskExceptionHandlerRegistry(), null);
@@ -76,17 +86,30 @@ public final class SingleThreadedSchedulingExecutor implements SchedulingExecuto
                                      int maxQueueSize,
                                      ListenerBackedTaskExceptionHandlerRegistry exceptionHandler,
                                      @Nullable MeterRegistry meterRegistry) {
+        this(name, family, maxQueueSize, exceptionHandler, meterRegistry, SHUTDOWN_TIMEOUT);
+    }
+
+    @VisibleForTesting
+    SingleThreadedSchedulingExecutor(String name,
+                                     String family,
+                                     int maxQueueSize,
+                                     ListenerBackedTaskExceptionHandlerRegistry exceptionHandler,
+                                     @Nullable MeterRegistry meterRegistry,
+                                     Duration shutdownTimeout) {
         checkArgument(maxQueueSize > 0, "maxQueueSize must be positive: %s", maxQueueSize);
         threadNameBase = checkNotNull(name, "name");
         this.maxQueueSize = maxQueueSize;
+        this.shutdownTimeout = checkNotNull(shutdownTimeout, "shutdownTimeout");
         taskExceptionHandler = checkNotNull(exceptionHandler, "exceptionHandler")::onTaskException;
-        var delegatePool = new ScheduledThreadPoolExecutor(1, new ThreadFactoryBuilder()
+        delegatePool = new ScheduledThreadPoolExecutor(1, new ThreadFactoryBuilder()
                 .setNameFormat(name + "-%s")
                 .setDaemon(true)
                 .build());
         // Evict a cancelled scheduled task from the queue at cancel time instead of holding it (and its captured graph) until its fire time — matters for
-        //  cancel-and-reschedule patterns like debounce. Set on the concrete pool because the ExecutorServiceMetrics wrapper does not expose this setter.
+        //  cancel-and-reschedule patterns like debounce. Set on the concrete pool because the ExecutorServiceMetrics wrapper does not expose these setters.
         delegatePool.setRemoveOnCancelPolicy(true);
+        // Shutdown discards any pending delayed task, so awaitTermination completes once the immediate work is done.
+        delegatePool.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         if (meterRegistry == null) {
             executor = delegatePool;
             rejectedCounter = null;
@@ -149,15 +172,49 @@ public final class SingleThreadedSchedulingExecutor implements SchedulingExecuto
     }
 
     @Override
-    public void close() {
-        Closeable.forCloseables(scheduleHandles).close();
+    public void doClose() {
+        // The drain and the pool termination share one deadline, so the total time spent here is bounded by shutdownTimeout.
+        long deadlineNanoTime = System.nanoTime() + shutdownTimeout.toNanos();
+        Closeable.closeSafelyIfNotNull(logger, scheduleHandles);
         logger.info("Shutting down {}", threadNameBase);
-        if (MoreExecutors.shutdownAndAwaitTermination(executor, 10, SECONDS)) {
+        if (!quiesceImmediateBacklog(deadlineNanoTime)) {
+            logger.warn("Executor '{}' did not drain within {}; {} immediate task(s) still pending, forcing shutdown",
+                        threadNameBase, shutdownTimeout, pendingImmediateTasks.get());
+        }
+        if (MoreExecutors.shutdownAndAwaitTermination(delegatePool, Math.max(0, deadlineNanoTime - System.nanoTime()), NANOSECONDS)) {
             logger.info("Shut down {}", threadNameBase);
         } else {
-            logger.warn("Was not able to gracefully stop executor '{}' in 10 seconds", threadNameBase);
+            logger.warn("Was not able to gracefully stop executor '{}' within {}", threadNameBase, shutdownTimeout);
         }
         meterCleanup.run();
+    }
+
+    /// Runs the immediate-task backlog to completion on the pool's single thread while the pool is live, so a task that submits more immediate work — or
+    /// reschedules itself — during teardown runs on it. Each iteration posts a probe that runs after the current backlog and reads [#pendingImmediateTasks]
+    /// **on the pool thread**, where no task is mid-flight, so the count is exactly the tasks still queued (every follow-up an already-run task enqueued is
+    /// included). A non-zero count means more work arrived behind the probe, so it loops; zero means quiescent. Delayed tasks never count against
+    /// [#pendingImmediateTasks], so a re-armed timer leaves the drain free to finish.
+    ///
+    /// @param deadlineNanoTime the [System#nanoTime()] value past which the drain gives up on a self-feeding backlog
+    /// @return `true` once the backlog is empty, `false` if the deadline passed first
+    private boolean quiesceImmediateBacklog(long deadlineNanoTime) {
+        while (true) {
+            // The probe reads the count on the pool thread, where no task is mid-flight, so it sees the true queued backlog. Submitting it straight to the
+            // concrete pool keeps it off the immediate-task bound and the metered timer.
+            Future<Integer> remainingImmediateTasks = delegatePool.submit(pendingImmediateTasks::get);
+            try {
+                // A non-positive remaining budget throws TimeoutException at once, so the deadline is the loop's exit even across many drain rounds.
+                if (remainingImmediateTasks.get(deadlineNanoTime - System.nanoTime(), NANOSECONDS) == 0) {
+                    return true;
+                }
+            } catch (InterruptedException e) {
+                // An interrupt on the shutdown thread means "stop now": abandon the drain and let the caller force termination.
+                Thread.currentThread().interrupt();
+                return false;
+            } catch (ExecutionException | TimeoutException e) {
+                return false;
+            }
+        }
     }
 
     @Override
