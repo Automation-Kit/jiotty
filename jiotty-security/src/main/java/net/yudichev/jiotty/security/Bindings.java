@@ -55,4 +55,10 @@ final class Bindings {
     @Retention(RUNTIME)
     @interface LogSubjectId {
     }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface LoginPending {
+    }
 }

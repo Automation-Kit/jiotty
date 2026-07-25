@@ -25,6 +25,11 @@ class MultiSelectOptionTest {
             "a", "Alpha",
             "b", "Bravo",
             "c", "Charlie");
+    private static final OptionMeta<Set<String>> META = OptionMeta.<Set<String>>builder()
+                                                                  .setTabName("Misc")
+                                                                  .setKey(OPTION_KEY)
+                                                                  .setLabel("Things")
+                                                                  .build();
 
     private ProgrammableClock clock;
     private TestMultiSelectOption option;
@@ -33,13 +38,7 @@ class MultiSelectOptionTest {
     void setUp() {
         clock = new ProgrammableClock();
         SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("multiselect-option-test");
-        option = new TestMultiSelectOption(executor,
-                                           OptionMeta.<Set<String>>builder()
-                                                     .setTabName("Misc")
-                                                     .setKey(OPTION_KEY)
-                                                     .setLabel("Things")
-                                                     .build(),
-                                           ALL_OPTIONS);
+        option = new TestMultiSelectOption(executor, META, ALL_OPTIONS);
     }
 
     @ParameterizedTest
@@ -67,13 +66,7 @@ class MultiSelectOptionTest {
     @Test
     void constructorRejectsAllOptionsKeyWithComma() {
         SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("rejects");
-        assertThatThrownBy(() -> new TestMultiSelectOption(executor,
-                                                           OptionMeta.<Set<String>>builder()
-                                                                     .setTabName("Misc")
-                                                                     .setKey(OPTION_KEY)
-                                                                     .setLabel("Things")
-                                                                     .build(),
-                                                           ImmutableMap.of("a,b", "Comma")))
+        assertThatThrownBy(() -> new TestMultiSelectOption(executor, META, ImmutableMap.of("a,b", "Comma")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("comma");
     }
@@ -90,6 +83,7 @@ class MultiSelectOptionTest {
             assertThat(multi.label()).isEqualTo("Things");
             assertThat(multi.tabName()).isEqualTo("Misc");
             assertThat(multi.allOptions()).isEqualTo(ALL_OPTIONS);
+            assertThat(multi.allOptionsComplete()).isTrue();
             assertThat(multi.selectedIds()).containsExactlyInAnyOrder("a", "c");
         });
     }
@@ -102,9 +96,24 @@ class MultiSelectOptionTest {
                                                multi -> assertThat(multi.selectedIds()).isEmpty());
     }
 
+    @Test
+    void toDtoUnsafeExposesIncompleteAllOptions() {
+        SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("incomplete");
+        var incompleteOption = new TestMultiSelectOption(executor, META, ALL_OPTIONS, false);
+
+        OptionDto dto = incompleteOption.toDtoUnsafe();
+
+        assertThat(dto).isInstanceOfSatisfying(StandardOptionDtos.MultiSelect.class,
+                                               multi -> assertThat(multi.allOptionsComplete()).isFalse());
+    }
+
     private static final class TestMultiSelectOption extends MultiSelectOption {
         TestMultiSelectOption(SchedulingExecutor executor, OptionMeta<Set<String>> meta, ImmutableMap<String, String> allOptions) {
             super(executor, meta, allOptions);
+        }
+
+        TestMultiSelectOption(SchedulingExecutor executor, OptionMeta<Set<String>> meta, ImmutableMap<String, String> allOptions, boolean allOptionsComplete) {
+            super(executor, meta, allOptions, allOptionsComplete);
         }
 
         @Override

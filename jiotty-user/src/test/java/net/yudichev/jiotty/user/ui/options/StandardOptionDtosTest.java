@@ -34,9 +34,10 @@ class StandardOptionDtosTest {
                                                              "MainTab",
                                                              8,
                                                              ImmutableMap.of("id-alice", "Alice Smith", "id-bob", "Bob Jones"),
+                                                             true,
                                                              List.of("id-alice")),
                           "MultiSelect[type=multiselect, key=drivers, label=Drivers, tabName=MainTab, order=8, "
-                          + "allOptions={id-…=Ali…, id-…=Bob…}, selectedIds=[id-…]]"),
+                          + "allOptions={id-…=Ali…, id-…=Bob…}, allOptionsComplete=true, selectedIds=[id-…]]"),
                 arguments(new StandardOptionDtos.Location("location", "homeLocation", "Home spot", "MainTab", 9, new LatLon(51.501234, -0.142567)),
                           "Location[type=location, key=homeLocation, label=Home spot, tabName=MainTab, order=9, value=~{51.5,-0.1}]"),
                 arguments(new StandardOptionDtos.Location("location", "homeLocation", "Home spot", "MainTab", 9, null),

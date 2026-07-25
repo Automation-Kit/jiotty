@@ -189,6 +189,23 @@ class OAuth2TokenManagerImplTest {
     }
 
     @Test
+    void startupWithNoStoredTokenAndLoginPending_staysTransientUntilTheExchangeSettles() {
+        // The owner is about to supply the just-entered login's auth code; a permanent failure here would read as the credentials being rejected and make the
+        // owner tear the login down mid-exchange.
+        respondWithToken("at", "rt", 3600);
+        startTokenManager(Optional.of(CLIENT_SECRET), true);
+
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.TransientFailure.class,
+                                                           failure -> assertThat(failure.description()).isEqualTo("awaiting login"));
+
+        tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
+
+        assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
+                                                           success -> assertThat(success.authInfo()).isEqualTo("at"));
+    }
+
+    @Test
     void subscriberAttachingAfterStateWasPublished_isGivenTheLatestState() {
         // A subscriber commonly attaches once the manager has already started, so a state published during startup has to reach it.
         varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
@@ -510,8 +527,12 @@ class OAuth2TokenManagerImplTest {
     }
 
     private void startTokenManager(Optional<String> clientSecret) {
+        startTokenManager(clientSecret, false);
+    }
+
+    private void startTokenManager(Optional<String> clientSecret, boolean loginPending) {
         SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor(API_NAME + "-oauth2");
-        tokenManager = new OAuth2TokenManagerImpl(() -> executor, clock, varStore, CLIENT_ID, clientSecret, API_NAME, TOKEN_URL, SCOPE) {
+        tokenManager = new OAuth2TokenManagerImpl(() -> executor, clock, varStore, CLIENT_ID, clientSecret, API_NAME, TOKEN_URL, SCOPE, loginPending) {
             @Override
             OkHttpClient createHttpClient() {
                 return httpClient;

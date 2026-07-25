@@ -63,7 +63,8 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
                                         @LoginUrl String loginUrl,
                                         @FixedCallbackHttpPort Optional<Integer> fixedCallbackHttpPort,
                                         @ExtraLoginParams Map<String, String> extraLoginParams) {
-        super(executorProvider, currentDateTimeProvider, varStore, clientId, clientSecret, apiName, tokenUrl, scope);
+        // never login-pending: this manager runs the login itself in obtainAccessToken
+        super(executorProvider, currentDateTimeProvider, varStore, clientId, clientSecret, apiName, tokenUrl, scope, false);
         this.loginUrl = checkNotNull(loginUrl);
         this.fixedCallbackHttpPort = checkNotNull(fixedCallbackHttpPort);
         this.extraLoginParams = ImmutableMap.copyOf(extraLoginParams);

@@ -7,7 +7,6 @@ import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
-import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
@@ -119,21 +118,51 @@ class OAuth2TokenManagerModuleTest {
                 OAuth2TokenManager manager = injector.getInstance(module.getExposedKey());
                 // The image is delivered on the manager's executor, so signal across threads rather than reading a list the executor has yet to fill.
                 var authenticated = new CompletableFuture<AuthState.Success>();
-                Closeable subscription = manager.subscribeToAccessTokenState(state -> {
+                try (var _ = manager.subscribeToAccessTokenState(state -> {
                     if (state instanceof AuthState.Success success) {
                         authenticated.complete(success);
                     }
-                });
-                try {
+                })) {
                     assertThat(authenticated).as("subject id '%s'", subjectId)
                                              .succeedsWithin(Duration.ofSeconds(5))
                                              .satisfies(success -> assertThat(success.authInfo()).isEqualTo("stored-at"));
-                } finally {
-                    subscription.close();
                 }
             } finally {
                 components.reversed().forEach(LifecycleComponent::stop);
             }
+        }
+    }
+
+    /// A login pending at construction means the owner supplies an auth code as part of its own startup, so a start with no stored token must present as a
+    /// transient in-progress state rather than the permanent not-authenticated failure that reads as rejected credentials.
+    @Test
+    void loginPendingStartWithNoStoredToken_publishesTransientAwaitingLoginState() {
+        ExposedKeyModule<OAuth2TokenManager> module = OAuth2TokenManagerModule.builder()
+                                                                              .setClientId(literally("cid"))
+                                                                              .setApiName(literally("api"))
+                                                                              .setTokenUrl(literally("http://token"))
+                                                                              .setScope(literally("scope"))
+                                                                              .withVarStore(literally(new InMemoryVarStore()))
+                                                                              .withLoginPending(literally(true))
+                                                                              .withAnnotation(forAnnotation(uniqueAnnotation()))
+                                                                              .build();
+        var injector = Guice.createInjector(new TimeModule(), new ExecutorModule(), module);
+        List<LifecycleComponent> components = injector.findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
+                                                      .stream()
+                                                      .map(binding -> injector.getInstance(binding.getKey()))
+                                                      .toList();
+        components.forEach(LifecycleComponent::start);
+        try {
+            OAuth2TokenManager manager = injector.getInstance(module.getExposedKey());
+            // The image is delivered on the manager's executor, so signal across threads rather than reading state the executor has yet to publish.
+            var observedAuthState = new CompletableFuture<AuthState>();
+            try (var _ = manager.subscribeToAccessTokenState(observedAuthState::complete)) {
+                assertThat(observedAuthState).succeedsWithin(Duration.ofSeconds(5))
+                                             .isInstanceOfSatisfying(AuthState.TransientFailure.class,
+                                                                     failure -> assertThat(failure.description()).isEqualTo("awaiting login"));
+            }
+        } finally {
+            components.reversed().forEach(LifecycleComponent::stop);
         }
     }
 

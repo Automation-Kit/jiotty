@@ -48,6 +48,7 @@ import static net.yudichev.jiotty.security.Bindings.ApiName;
 import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
 import static net.yudichev.jiotty.security.Bindings.Dependency;
+import static net.yudichev.jiotty.security.Bindings.LoginPending;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
@@ -78,6 +79,9 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     private final ObservableValue<AuthState> authState = ObservableValue.simple(new AuthState.TransientFailure("Initialising"));
     private final String varStoreKey;
     private final String tokenUrl;
+    /// Whether the owner holds an auth code it supplies via [#onNewAuthCode] as part of its own startup, so a start with no stored token is the beginning of a
+    /// login rather than a dormant not-authenticated state (see [#obtainAccessToken]).
+    private final boolean loginPending;
 
     protected SchedulingExecutor executor;
     private OkHttpClient httpClient;
@@ -100,7 +104,8 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                   @ClientSecret Optional<String> clientSecret,
                                   @ApiName String apiName,
                                   @TokenUrl String tokenUrl,
-                                  @Scope String scope) {
+                                  @Scope String scope,
+                                  @LoginPending boolean loginPending) {
         this.clientId = checkNotNull(clientId);
         this.clientSecret = checkNotNull(clientSecret);
         this.executorProvider = checkNotNull(executorProvider);
@@ -109,6 +114,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         this.apiName = checkNotNull(apiName);
         this.scope = checkNotNull(scope);
         this.tokenUrl = checkNotNull(tokenUrl);
+        this.loginPending = loginPending;
         varStoreKey = apiName + "Oauth2Token_" + clientId + "_" + scope;
     }
 
@@ -135,13 +141,21 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                  this::obtainAccessToken);
     }
 
-    /// Handles a start with no usable stored token: the manager stays dormant until a login supplies an auth code, so it publishes
-    /// [AuthState.PermanentFailure] to tell the owning integration that the user has to re-authorise.
+    /// Handles a start with no usable stored token. With no login pending, the manager stays dormant until a login supplies an auth code, so it publishes
+    /// [AuthState.PermanentFailure] to tell the owning integration that the user has to re-authorise. With a login pending, the auth code arrives via
+    /// [#onNewAuthCode] as part of the owner's startup and the exchange settles the state to [AuthState.Success] or a failure, so the state stays a
+    /// [AuthState.TransientFailure] — publishing the permanent failure would make the owner treat the just-entered credentials as rejected and tear the
+    /// login down mid-exchange.
     ///
-    /// Subclasses that obtain a token by themselves override this.¬
+    /// Subclasses that obtain a token by themselves override this.
     protected void obtainAccessToken() {
-        logger.info("[{}] No valid access token, awaiting login authCode ", apiName);
-        publishAuthState(new AuthState.PermanentFailure("not authenticated"));
+        if (loginPending) {
+            logger.info("[{}] No valid access token, login pending", apiName);
+            publishAuthState(new AuthState.TransientFailure("awaiting login"));
+        } else {
+            logger.info("[{}] No valid access token, awaiting login authCode ", apiName);
+            publishAuthState(new AuthState.PermanentFailure("not authenticated"));
+        }
     }
 
     /// Creates the HTTP client used for token requests. Overridden in tests to inject a deterministic fake.

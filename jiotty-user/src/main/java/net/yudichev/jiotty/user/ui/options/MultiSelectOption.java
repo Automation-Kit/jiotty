@@ -14,11 +14,19 @@ import static com.google.common.base.Preconditions.checkArgument;
 public abstract class MultiSelectOption extends BaseOption<Set<String>> {
 
     private final ImmutableMap<String, String> allOptions;
+    private final boolean allOptionsComplete;
 
     protected MultiSelectOption(TaskExecutor executor, OptionMeta<Set<String>> meta, ImmutableMap<String, String> allOptions) {
+        this(executor, meta, allOptions, true);
+    }
+
+    /// @param allOptionsComplete whether `allOptions` lists every available choice; `false` while a progressively-loaded choice list is still being assembled,
+    ///                           telling consumers that an id absent from `allOptions` may reappear
+    protected MultiSelectOption(TaskExecutor executor, OptionMeta<Set<String>> meta, ImmutableMap<String, String> allOptions, boolean allOptionsComplete) {
         super(executor, meta);
         checkArgument(allOptions.keySet().stream().noneMatch(id -> id.contains(",")), "Option id cannot include a comma");
         this.allOptions = ImmutableMap.copyOf(allOptions);
+        this.allOptionsComplete = allOptionsComplete;
     }
 
     @Override
@@ -36,6 +44,7 @@ public abstract class MultiSelectOption extends BaseOption<Set<String>> {
                                                   meta().tabName(),
                                                   getFormOrder(),
                                                   allOptions,
+                                                  allOptionsComplete,
                                                   getValue().map(List::copyOf).orElseGet(List::of));
     }
 }

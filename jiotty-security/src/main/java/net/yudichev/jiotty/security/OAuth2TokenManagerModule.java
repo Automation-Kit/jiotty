@@ -28,6 +28,7 @@ import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
 import static net.yudichev.jiotty.security.Bindings.Dependency;
 import static net.yudichev.jiotty.security.Bindings.LogSubjectId;
+import static net.yudichev.jiotty.security.Bindings.LoginPending;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
@@ -43,6 +44,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
     private final BindingSpec<VarStore> varStoreSpec;
     private final BindingSpec<String> logSubjectIdSpec;
     private final BindingSpec<SchedulingExecutor> executorSpec;
+    private final BindingSpec<Boolean> loginPendingSpec;
     private final Key<OAuth2TokenManager> exposedKey;
 
     private OAuth2TokenManagerModule(BindingSpec<String> clientIdSpec,
@@ -56,6 +58,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                      BindingSpec<VarStore> varStoreSpec,
                                      BindingSpec<String> logSubjectIdSpec,
                                      BindingSpec<SchedulingExecutor> executorSpec,
+                                     BindingSpec<Boolean> loginPendingSpec,
                                      SpecifiedAnnotation specifiedAnnotation) {
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.clientSecretSpec = checkNotNull(clientSecretSpec);
@@ -68,6 +71,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         this.varStoreSpec = checkNotNull(varStoreSpec);
         this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
         this.executorSpec = checkNotNull(executorSpec);
+        this.loginPendingSpec = checkNotNull(loginPendingSpec);
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
@@ -110,6 +114,9 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         executorSpec.bind(SchedulingExecutor.class)
                     .annotatedWith(Dependency.class)
                     .installedBy(this::installLifecycleComponentModule);
+        loginPendingSpec.bind(Boolean.class)
+                        .annotatedWith(LoginPending.class)
+                        .installedBy(this::installLifecycleComponentModule);
         if (loginUrlSpec != null) {
             loginUrlSpec.bind(String.class)
                         .annotatedWith(LocalLoginOAuth2TokenManager.LoginUrl.class)
@@ -157,6 +164,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                                 .build());
         private BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec = BindingSpec.literally(Optional.empty());
         private BindingSpec<Map<String, String>> loginExtraParamsSpec = BindingSpec.literally(Map.of());
+        private BindingSpec<Boolean> loginPendingSpec = literally(false);
 
         public Builder setClientId(BindingSpec<String> clientIdSpec) {
             this.clientIdSpec = clientIdSpec;
@@ -222,6 +230,14 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
             return this;
         }
 
+        /// Declares that a login is in flight at construction time: the owner holds an auth code it supplies via [OAuth2TokenManager#onNewAuthCode] as part
+        /// of its own startup. With this resolving to `true` and no stored token, the manager reports a transient "awaiting login" auth state until the code
+        /// exchange settles, in place of the permanent not-authenticated failure. Defaults to `false`.
+        public Builder withLoginPending(BindingSpec<Boolean> loginPendingSpec) {
+            this.loginPendingSpec = checkNotNull(loginPendingSpec);
+            return this;
+        }
+
         @Override
         public ExposedKeyModule<OAuth2TokenManager> build() {
             return new OAuth2TokenManagerModule(clientIdSpec,
@@ -235,6 +251,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                                 varStoreSpec,
                                                 logSubjectIdSpec,
                                                 executorSpec,
+                                                loginPendingSpec,
                                                 specifiedAnnotation());
         }
     }

@@ -14,8 +14,9 @@ import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 /// These DTOs are rendered for logging via [Object#toString()] / [StringFormattable#formatTo(Appendable)] with only their PII-bearing values redacted: the
 /// values a user typed or picked that can carry personal data — [Text]/[TextArea]/[Time] `value`, the [Location] coordinate, the [Select] `options` and
 /// `value` (a select's choices can be populated from user data), and the [MultiSelect] calendar/driver ids and names. Only the structural fields every
-/// option carries (`type`, `key`, `label`, `tabName`, `order`) and the app-defined [Duration] hint fields (`placeholder`, `help`, `valueHuman`) are fixed,
-/// non-identifying strings logged verbatim. The real values are always carried by the record components themselves.
+/// option carries (`type`, `key`, `label`, `tabName`, `order`), the app-defined [Duration] hint fields (`placeholder`, `help`, `valueHuman`) and the
+/// [MultiSelect] `allOptionsComplete` flag are fixed, non-identifying values logged verbatim. The real values are always carried by the record components
+/// themselves.
 public final class StandardOptionDtos {
     private StandardOptionDtos() {
     }
@@ -135,7 +136,14 @@ public final class StandardOptionDtos {
         }
     }
 
-    public record MultiSelect(String type, String key, String label, String tabName, int order, Map<String, String> allOptions, List<String> selectedIds)
+    public record MultiSelect(String type,
+                              String key,
+                              String label,
+                              String tabName,
+                              int order,
+                              Map<String, String> allOptions,
+                              boolean allOptionsComplete,
+                              List<String> selectedIds)
             implements OptionDto, StringFormattable {
         @Override
         public String toString() {
@@ -147,6 +155,8 @@ public final class StandardOptionDtos {
             appendCommon(appendable, "MultiSelect", type, key, label, tabName, order);
             Append.to(appendable, ", allOptions=");
             Append.to(appendable, allOptions, LogRedaction::appendRedacted, LogRedaction::appendRedacted);
+            Append.to(appendable, ", allOptionsComplete=");
+            Append.to(appendable, allOptionsComplete);
             Append.to(appendable, ", selectedIds=");
             Append.to(appendable, selectedIds, LogRedaction::appendRedacted);
             Append.to(appendable, ']');

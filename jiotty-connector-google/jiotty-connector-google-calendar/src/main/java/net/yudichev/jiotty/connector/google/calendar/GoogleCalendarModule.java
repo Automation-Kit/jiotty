@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.google.calendar;
 
+import com.google.common.reflect.TypeToken;
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
@@ -81,6 +82,10 @@ public final class GoogleCalendarModule extends BaseLifecycleComponentModule imp
                                                                 .setTokenUrl(literally(TOKEN_URL))
                                                                 .setScope(literally(GoogleCalendarScopes.CALENDAR_READONLY))
                                                                 .withVarStore(varStoreSpec)
+                                                                // a supplied auth code is a login in flight: the service hands it to the token manager on start
+                                                                .withLoginPending(authCodeSpec.map(new TypeToken<>() {},
+                                                                                                   new TypeToken<>() {},
+                                                                                                   Optional::isPresent))
                                                                 .withAnnotation(forAnnotation(GoogleCalendarService.Dependency.class));
         if (localLogin) {
             // Enthusiast/manual mode: obtain the token via a local browser login (loopback redirect). access_type=offline + prompt=consent make Google return
