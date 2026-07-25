@@ -8,6 +8,7 @@ import org.immutables.value.Value.Immutable;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 /// A single message to be delivered to one Expo push token. See [Expo
 /// docs](https://docs.expo.dev/push-notifications/sending-notifications/#message-request-format).
@@ -39,4 +40,9 @@ public interface BaseExpoPushMessage {
     /// referenced by [#channelId()].
     @JsonProperty("sound")
     Optional<String> sound();
+
+    /// Seconds FCM/APNs may keep the message queued for a device that is not immediately reachable, delivering it when the device reconnects. Expo treats
+    /// an omitted value as 0: the message is discarded unless the device is reachable at send time.
+    @JsonProperty("ttl")
+    OptionalInt ttlSeconds();
 }

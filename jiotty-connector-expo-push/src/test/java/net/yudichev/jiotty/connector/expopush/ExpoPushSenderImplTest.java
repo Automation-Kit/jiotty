@@ -86,6 +86,7 @@ class ExpoPushSenderImplTest {
         assertThat(message.get("body").asText()).isEqualTo("world");
         assertThat(message.get("data").get("category").asText()).isEqualTo("PLUG_IN");
         assertThat(message.get("channelId").asText()).isEqualTo("default");
+        assertThat(message.get("ttl").asInt()).isEqualTo(3600);
 
         verifyNoInteractions(listener);
     }
@@ -337,6 +338,7 @@ class ExpoPushSenderImplTest {
                               .setBody("world")
                               .putData("category", "PLUG_IN")
                               .setChannelId("default")
+                              .setTtlSeconds(3600)
                               .build();
     }
 
