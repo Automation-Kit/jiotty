@@ -35,19 +35,7 @@ class PerKeyRateLimiterTest {
         assertThat(limiter.tryAcquire("k")).as("refilled").isTrue();
     }
 
-    /// The bucket holds at most one second's worth, so an idle key cannot bank allowance and later burst beyond the rate.
-    @Test
-    void capsTheAllowanceAKeyCanBank() {
-        PerKeyRateLimiter limiter = limiter(2.0);
-
-        clock.advanceTimeAndTick(Duration.ofMinutes(5));
-
-        assertThat(limiter.tryAcquire("k")).isTrue();
-        assertThat(limiter.tryAcquire("k")).isTrue();
-        assertThat(limiter.tryAcquire("k")).as("five idle minutes buy no more than the one-second cap").isFalse();
-    }
-
-    /// One key exhausting its allowance must not spend another's.
+    /// One key exhausting its allowance must not spend another's — the per-key isolation this facade adds over a single shared allowance.
     @Test
     void tracksKeysIndependently() {
         PerKeyRateLimiter limiter = limiter(2.0);
@@ -57,38 +45,6 @@ class PerKeyRateLimiterTest {
         assertThat(limiter.tryAcquire("noisy")).isFalse();
 
         assertThat(limiter.tryAcquire("other")).isTrue();
-    }
-
-    /// A rate below one per second admits at that spacing: the starting one-permit ceiling lets the first through, then each further whole permit takes more
-    /// than a second to accrue.
-    @Test
-    void throttlesRatesBelowOnePerSecond() {
-        PerKeyRateLimiter limiter = limiter(0.5);
-
-        assertThat(limiter.tryAcquire("k")).as("the starting one-permit ceiling").isTrue();
-        assertThat(limiter.tryAcquire("k")).isFalse();
-
-        clock.advanceTimeAndTick(Duration.ofSeconds(1));
-        assertThat(limiter.tryAcquire("k")).as("half a permit accrued, not yet whole").isFalse();
-
-        clock.advanceTimeAndTick(Duration.ofSeconds(1));
-        assertThat(limiter.tryAcquire("k")).as("a whole permit after two seconds at 0.5/s").isTrue();
-    }
-
-    /// A burst above the sustained rate lets a key fire that many at once, then meters further requests at the rate — an absorbed startup fan-out.
-    @Test
-    void admitsABurstUpToTheCeilingThenMetersAtTheRate() {
-        var limiter = new PerKeyRateLimiter(clock, 2.0, 5, MANY_KEYS, IDLE_EVICTION);
-
-        for (int i = 0; i < 5; i++) {
-            assertThat(limiter.tryAcquire("k")).as("burst permit %s", i).isTrue();
-        }
-        assertThat(limiter.tryAcquire("k")).as("burst of 5 spent").isFalse();
-
-        clock.advanceTimeAndTick(Duration.ofSeconds(1));
-        assertThat(limiter.tryAcquire("k")).as("one of the 2/s refill").isTrue();
-        assertThat(limiter.tryAcquire("k")).as("two of the 2/s refill").isTrue();
-        assertThat(limiter.tryAcquire("k")).as("but not a third in the same second").isFalse();
     }
 
     @Test
