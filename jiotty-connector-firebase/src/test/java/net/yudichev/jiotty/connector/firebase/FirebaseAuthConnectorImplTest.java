@@ -76,6 +76,7 @@ class FirebaseAuthConnectorImplTest {
             assertThat(token.firebaseUid()).isEqualTo(FIREBASE_UID);
             assertThat(token.firebaseProfile().email()).contains("user@example.com");
             assertThat(token.firebaseProfile().displayName()).contains("Alex");
+            assertThat(token.firebaseProfile().emailVerified()).isTrue();
             assertThat(token.linkedIdentities()).containsExactly(new UserIdentity("google.com", "google-user-1"));
             assertThat(token.authTime()).isEqualTo(AUTH_TIME);
             assertThat(token.issuedAt()).isEqualTo(ISSUED_AT);
@@ -192,6 +193,7 @@ class FirebaseAuthConnectorImplTest {
         when(userRecord.getTokensValidAfterTimestamp()).thenReturn(ISSUED_AT.minusSeconds(1).toEpochMilli());
         when(userRecord.getEmail()).thenReturn("user@example.com");
         when(userRecord.getDisplayName()).thenReturn("Alex");
+        when(userRecord.isEmailVerified()).thenReturn(true);
         when(userRecord.getProviderData()).thenReturn(new UserInfo[]{googleIdentity, passwordIdentity});
         when(googleIdentity.getProviderId()).thenReturn("google.com");
         when(googleIdentity.getUid()).thenReturn("google-user-1");

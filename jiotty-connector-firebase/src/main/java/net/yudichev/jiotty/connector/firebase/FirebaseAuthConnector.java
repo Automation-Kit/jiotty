@@ -51,8 +51,13 @@ public interface FirebaseAuthConnector {
     }
 
     /// Firebase-backed user profile fields exposed by Firebase Auth.
+    ///
+    /// @param email         the account's email address, absent when the account has none
+    /// @param displayName   the account's display name, absent when the account has none
+    /// @param emailVerified whether the account's email address has been verified, current as of this token verification
     record FirebaseUserProfile(Optional<String> email,
-                               Optional<String> displayName) {
+                               Optional<String> displayName,
+                               boolean emailVerified) {
         public FirebaseUserProfile {
             checkNotNull(email, "email");
             email.ifPresent(value -> checkArgument(!value.isBlank(), "email must not be blank"));

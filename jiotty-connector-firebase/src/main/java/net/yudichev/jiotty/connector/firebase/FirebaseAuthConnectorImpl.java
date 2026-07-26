@@ -153,8 +153,11 @@ public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent impl
             return Either.right(new InvalidToken("Firebase token has been revoked"));
         }
         return Either.left(new VerifiedUserToken(decodedToken.getUid(),
+                                                 // the user record's flag is current as of this lookup; the token's email_verified claim lags until the
+                                                 // client refreshes its ID token
                                                  new FirebaseUserProfile(Optional.ofNullable(nonBlankOrNull(userRecord.getEmail())),
-                                                                         Optional.ofNullable(nonBlankOrNull(userRecord.getDisplayName()))),
+                                                                         Optional.ofNullable(nonBlankOrNull(userRecord.getDisplayName())),
+                                                                         userRecord.isEmailVerified()),
                                                  createLinkedIdentities(userRecord.getProviderData()),
                                                  authTime,
                                                  issuedAt,
