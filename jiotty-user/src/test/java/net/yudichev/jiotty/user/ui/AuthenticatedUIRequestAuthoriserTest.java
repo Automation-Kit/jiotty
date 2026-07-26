@@ -452,7 +452,7 @@ class AuthenticatedUIRequestAuthoriserTest {
     private static int expectedStatus(UserTokenAuthoriser.TokenNotAuthenticated.Reason reason) {
         return switch (reason) {
             case INVALID -> 401;
-            case USER_DISABLED -> 403;
+            case USER_DISABLED, REGISTRATION_REFUSED -> 403;
             case TECHNICAL_FAILURE -> 503;
         };
     }

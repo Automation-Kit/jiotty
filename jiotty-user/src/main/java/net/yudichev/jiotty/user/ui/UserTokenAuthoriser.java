@@ -44,6 +44,9 @@ public interface UserTokenAuthoriser {
         public enum Reason {
             INVALID,
             USER_DISABLED,
+            /// The token itself verified, but the application refused to register a new account for it — so, unlike [#INVALID], the caller's session is
+            /// still good.
+            REGISTRATION_REFUSED,
             TECHNICAL_FAILURE,
         }
     }

@@ -186,7 +186,8 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
     private static int statusFor(Reason reason) {
         return switch (reason) {
             case INVALID -> 401;
-            case USER_DISABLED -> 403;
+            // 403, not 401: the bearer token is valid, so clients must not treat the refusal as an expired session.
+            case USER_DISABLED, REGISTRATION_REFUSED -> 403;
             case TECHNICAL_FAILURE -> 503;
         };
     }
