@@ -4,6 +4,7 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
+import io.micrometer.core.instrument.MeterRegistry;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
@@ -75,9 +76,13 @@ public final class InitModule extends AbstractModule {
                                                        .setKeystorePass(keystorePassSpec)
                                                        .build();
         install(keyStoreAccessModule);
-        var dataSourceFactoryModule = PsqlDataSourceFactoryModule.builder()
-                                                                 .setConnectionConfig(dbConnectionConfig)
-                                                                 .build();
+        var dataSourceFactoryBuilder = PsqlDataSourceFactoryModule.builder()
+                                                                  .setConnectionConfig(dbConnectionConfig);
+        if (applicationName != null) {
+            // Metrics are enabled (MetricsModule installed above), so let the default pools surface their hikaricp_* gauges.
+            dataSourceFactoryBuilder.withMeterRegistry(boundTo(MeterRegistry.class));
+        }
+        var dataSourceFactoryModule = dataSourceFactoryBuilder.build();
         install(dataSourceFactoryModule);
         var varStoreModuleBuilder = VarStoreModule.builder();
         if (varStoreAnnotation != null) {

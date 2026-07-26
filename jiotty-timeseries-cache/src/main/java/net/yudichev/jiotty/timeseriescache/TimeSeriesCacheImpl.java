@@ -122,7 +122,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
     protected void doStart() {
         executor = executorProvider.get();
         asUnchecked(() -> persistenceDomainService.ensureDomainReady(domainConfig).get(30, SECONDS));
-        dataSource = dataSourceFactory.create();
+        dataSource = dataSourceFactory.create("time-series");
     }
 
     @Override

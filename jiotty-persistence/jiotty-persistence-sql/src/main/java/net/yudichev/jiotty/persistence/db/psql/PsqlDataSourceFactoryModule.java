@@ -3,11 +3,13 @@ package net.yudichev.jiotty.persistence.db.psql;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
+import io.micrometer.core.instrument.MeterRegistry;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
+import net.yudichev.jiotty.common.metrics.NoopMeterRegistry;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.db.DbConnectionConfig;
 import net.yudichev.jiotty.persistence.db.JdbcConnectionConfig;
@@ -29,13 +31,16 @@ public final class PsqlDataSourceFactoryModule extends BaseLifecycleComponentMod
 
     private final BindingSpec<JdbcConnectionConfig> connectionConfigSpec;
     private final BindingSpec<Integer> maximumPoolSizeSpec;
+    private final BindingSpec<MeterRegistry> meterRegistrySpec;
     private final Key<DataSourceFactory> exposedKey;
 
     private PsqlDataSourceFactoryModule(BindingSpec<JdbcConnectionConfig> connectionConfigSpec,
                                         BindingSpec<Integer> maximumPoolSizeSpec,
+                                        BindingSpec<MeterRegistry> meterRegistrySpec,
                                         SpecifiedAnnotation specifiedAnnotation) {
         this.connectionConfigSpec = checkNotNull(connectionConfigSpec);
         this.maximumPoolSizeSpec = checkNotNull(maximumPoolSizeSpec);
+        this.meterRegistrySpec = checkNotNull(meterRegistrySpec);
         // Honour the caller's annotation so several independently-sized pools can coexist (e.g. a large recording pool alongside the default one); with no
         //  annotation this is the plain DataSourceFactory, as before.
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
@@ -50,6 +55,7 @@ public final class PsqlDataSourceFactoryModule extends BaseLifecycleComponentMod
     protected void configure() {
         connectionConfigSpec.bind(JdbcConnectionConfig.class).installedBy(this::installLifecycleComponentModule);
         maximumPoolSizeSpec.bind(Integer.class).annotatedWith(MaximumPoolSize.class).installedBy(this::installLifecycleComponentModule);
+        meterRegistrySpec.bind(MeterRegistry.class).annotatedWith(PoolMeterRegistry.class).installedBy(this::installLifecycleComponentModule);
         bind(getExposedKey()).to(PsqlDataSourceFactoryImpl.class);
         expose(getExposedKey());
     }
@@ -64,9 +70,18 @@ public final class PsqlDataSourceFactoryModule extends BaseLifecycleComponentMod
     @interface MaximumPoolSize {
     }
 
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface PoolMeterRegistry {
+    }
+
     public static final class Builder extends BaseModuleBuilder<DataSourceFactory, Builder> {
         private BindingSpec<JdbcConnectionConfig> connectionConfigSpec;
         private BindingSpec<Integer> maximumPoolSizeSpec = literally(DEFAULT_MAXIMUM_POOL_SIZE);
+        /// A no-op registry by default, so a caller that does not wire metrics gets a working (unmetered) pool; car-server passes the real registry so each
+        /// pool surfaces its `hikaricp_*` gauges.
+        private BindingSpec<MeterRegistry> meterRegistrySpec = literally(new NoopMeterRegistry());
 
         public Builder setConnectionConfig(BindingSpec<JdbcConnectionConfig> connectionConfigSpec) {
             this.connectionConfigSpec = checkNotNull(connectionConfigSpec);
@@ -91,9 +106,15 @@ public final class PsqlDataSourceFactoryModule extends BaseLifecycleComponentMod
             return this;
         }
 
+        /// Sets the [MeterRegistry] each created pool registers its `hikaricp_*` gauges with. Defaults to a [NoopMeterRegistry] (unmetered).
+        public Builder withMeterRegistry(BindingSpec<MeterRegistry> meterRegistrySpec) {
+            this.meterRegistrySpec = checkNotNull(meterRegistrySpec);
+            return this;
+        }
+
         @Override
         public ExposedKeyModule<DataSourceFactory> build() {
-            return new PsqlDataSourceFactoryModule(connectionConfigSpec, maximumPoolSizeSpec, specifiedAnnotation());
+            return new PsqlDataSourceFactoryModule(connectionConfigSpec, maximumPoolSizeSpec, meterRegistrySpec, specifiedAnnotation());
         }
     }
 }

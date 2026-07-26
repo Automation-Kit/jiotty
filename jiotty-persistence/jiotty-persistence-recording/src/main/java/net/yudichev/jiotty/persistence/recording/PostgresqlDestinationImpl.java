@@ -96,7 +96,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     }
 
     private void connect() {
-        dataSource = dataSourceFactory.create();
+        dataSource = dataSourceFactory.create("recording");
     }
 
     private static class SqlBase<R> {

@@ -79,7 +79,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     @Override
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor(EXECUTOR_THREAD_NAME);
-        dataSource = dataSourceFactory.create();
+        dataSource = dataSourceFactory.create("varstore");
         operations = new SqlVarStoreOperations(dataSource, executor, "", upsertSql, deleteSql, deleteAllSql, selectAllSql, encryption.orElse(null));
         createTableIfNeeded();
         legacyPath.ifPresent(path -> FileToSqlVarStoreMigrator.migrate(path, this));

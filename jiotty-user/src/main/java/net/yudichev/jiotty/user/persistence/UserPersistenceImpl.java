@@ -177,7 +177,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     protected void doStart() {
         executor = executorProvider.get();
         asUnchecked(() -> persistenceDomainService.ensureDomainReady(domainConfig).get(30, TimeUnit.SECONDS));
-        dataSource = dataSourceFactory.create();
+        dataSource = dataSourceFactory.create("user-persistence");
     }
 
     @Override
