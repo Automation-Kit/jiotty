@@ -6,12 +6,14 @@ import jakarta.inject.Inject;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.db.JdbcConnectionConfig;
+import net.yudichev.jiotty.persistence.db.psql.PsqlDataSourceFactoryModule.MaximumPoolSize;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
 public final class PsqlDataSourceFactoryImpl implements DataSourceFactory {
@@ -20,13 +22,16 @@ public final class PsqlDataSourceFactoryImpl implements DataSourceFactory {
     private final HikariConfig poolConfig;
 
     @Inject
-    public PsqlDataSourceFactoryImpl(JdbcConnectionConfig connectionConfig) {
+    public PsqlDataSourceFactoryImpl(JdbcConnectionConfig connectionConfig, @MaximumPoolSize int maximumPoolSize) {
+        checkArgument(maximumPoolSize > 0, "maximum pool size must be positive: %s", maximumPoolSize);
         poolConfig = new HikariConfig();
         poolConfig.setJdbcUrl(connectionConfig.url());
         poolConfig.setUsername(connectionConfig.username());
         poolConfig.setPassword(connectionConfig.password());
-        poolConfig.setMaximumPoolSize(2);
-        poolConfig.setMinimumIdle(2);
+        // Fixed-size pool: minimum-idle pinned to the maximum, as HikariCP recommends, so the connections stay open and a request never waits on
+        //  connection establishment under load.
+        poolConfig.setMaximumPoolSize(maximumPoolSize);
+        poolConfig.setMinimumIdle(maximumPoolSize);
         // added after this error was logged
         // Failed to validate connection org.postgresql.jdbc.PgConnection@3cadc946 (This connection has been closed.).
         // Possibly consider using a shorter maxLifetime value.

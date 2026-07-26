@@ -26,7 +26,6 @@ import static java.lang.Boolean.FALSE;
 import static net.yudichev.jiotty.common.inject.BindingSpec.boundTo;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
-import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class InitModule extends AbstractModule {
     private final DbConnectionConfig dbConnectionConfig;
@@ -78,7 +77,6 @@ public final class InitModule extends AbstractModule {
         install(keyStoreAccessModule);
         var dataSourceFactoryModule = PsqlDataSourceFactoryModule.builder()
                                                                  .setConnectionConfig(dbConnectionConfig)
-                                                                 .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                                  .build();
         install(dataSourceFactoryModule);
         var varStoreModuleBuilder = VarStoreModule.builder();
