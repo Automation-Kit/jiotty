@@ -10,6 +10,7 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPrice;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPriceService;
 import org.apache.logging.log4j.LogManager;
@@ -45,7 +46,7 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
     private static final Duration ONE_HOUR = Duration.ofHours(1);
     private final Provider<SchedulingExecutor> executorProvider;
     private final AgilePredictPriceService priceService;
-    private final PriceRetrievalStatusHandler statusHandler;
+    private final UpstreamHealthHandler statusHandler;
     private final String region;
     /// The latest price-or-failure result, empty until the first one is produced. New subscribers receive the present value immediately.
     private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult = ObservableValue.concurrent(Optional.empty());
@@ -60,7 +61,7 @@ public final class AgilePredictEnergyPriceServiceImpl extends BaseLifecycleCompo
     @Inject
     public AgilePredictEnergyPriceServiceImpl(@AgilePredict Provider<SchedulingExecutor> executorProvider,
                                               AgilePredictPriceService priceService,
-                                              @Dependency PriceRetrievalStatusHandler statusHandler,
+                                              @Dependency UpstreamHealthHandler statusHandler,
                                               @Assisted char regionLetter) {
         this.executorProvider = checkNotNull(executorProvider);
         this.priceService = checkNotNull(priceService);

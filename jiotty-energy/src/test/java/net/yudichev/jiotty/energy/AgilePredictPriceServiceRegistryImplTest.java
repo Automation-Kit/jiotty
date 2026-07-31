@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.energy;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPriceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,7 @@ class AgilePredictPriceServiceRegistryImplTest {
         lenient().when(priceService.getPrices(any(), any(Integer.class))).thenReturn(completedFuture(List.of()));
         // Hand-rolled Factory mirrors what Guice's FactoryModuleBuilder would inject — keeps the test free of Guice setup.
         AgilePredictEnergyPriceServiceImpl.Factory factory = regionLetter ->
-                new AgilePredictEnergyPriceServiceImpl(() -> executor, priceService, new NoOpPriceRetrievalStatusHandler(), regionLetter);
+                new AgilePredictEnergyPriceServiceImpl(() -> executor, priceService, UpstreamHealthHandler.NO_OP, regionLetter);
         registry = new AgilePredictPriceServiceRegistryImpl(factory);
         registry.start();
     }

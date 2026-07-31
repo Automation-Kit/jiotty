@@ -6,7 +6,6 @@ import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Either;
-import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.connector.octopusenergy.AccountProperty;
 import net.yudichev.jiotty.connector.octopusenergy.ConsumptionRow;
@@ -26,13 +25,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -96,7 +93,7 @@ class OctopusEnergyProviderServiceTest {
         lenient().when(agilePredictRegistry.forRegion('B')).thenReturn(agilePredictRegionB);
 
         service = new OctopusEnergyProviderService(() -> executor, clock, octopusEnergy, ACCOUNT_ID, API_KEY,
-                                                   RetryableOperationExecutor.noRetries(), RetryableOperationExecutor.noRetries(),
+                                                   RetryableOperationExecutor.noRetries(),
                                                    octopusRegistry, agilePredictRegistry, new InMemoryTimeSeriesCache());
     }
 
@@ -401,61 +398,6 @@ class OctopusEnergyProviderServiceTest {
         readTwice(() -> service.queryConsumption("user-1", MPAN, METER_SERIAL, from, to));
 
         verify(accountService, times(1)).getConsumption(any(), any(), any(), any());
-    }
-
-    // ---- Query retry: a transient Octopus failure on an interactive query is retried; the classifier gates which failures qualify ----
-
-    @Test
-    void queryConsumption_transientFailure_isRetriedThenSucceeds() {
-        Instant from = Instant.parse("2024-01-01T00:00:00Z");
-        Instant to = Instant.parse("2024-01-01T00:30:00Z");
-        // First attempt hits a transient gateway 502; the second succeeds.
-        when(accountService.getConsumption(eq(MPAN), eq(METER_SERIAL), any(), any()))
-                .thenReturn(CompletableFutures.failure(new HttpResponseException(502, "Bad Gateway")))
-                .thenReturn(completedFuture(List.of(consumption("2024-01-01T00:00:00Z", "2024-01-01T00:30:00Z", 0.3))));
-        OctopusEnergyProviderService retryingService = serviceWithQueryRetry(retryingOnce());
-        retryingService.start();
-
-        CompletableFuture<?> result = retryingService.queryConsumption("user-1", MPAN, METER_SERIAL, from, to);
-        for (int i = 0; i < 5 && !result.isDone(); i++) {
-            clock.tick();
-        }
-
-        result.join();   // would throw if the retry had not recovered the transient failure
-        verify(accountService, times(2)).getConsumption(any(), any(), any(), any());
-    }
-
-    @Test
-    void isTransientFailure_retriesGatewayAndNetworkErrors_butNotClientErrors() {
-        assertThat(OctopusEnergyProviderService.isTransientFailure(new IOException("connection reset"))).isTrue();
-        assertThat(OctopusEnergyProviderService.isTransientFailure(new HttpResponseException(500, ""))).isTrue();
-        assertThat(OctopusEnergyProviderService.isTransientFailure(new HttpResponseException(502, "Bad Gateway"))).isTrue();
-        assertThat(OctopusEnergyProviderService.isTransientFailure(new HttpResponseException(503, ""))).isTrue();
-        assertThat(OctopusEnergyProviderService.isTransientFailure(new HttpResponseException(400, ""))).isFalse();
-        assertThat(OctopusEnergyProviderService.isTransientFailure(new HttpResponseException(401, ""))).isFalse();
-        assertThat(OctopusEnergyProviderService.isTransientFailure(new HttpResponseException(404, ""))).isFalse();
-        assertThat(OctopusEnergyProviderService.isTransientFailure(new RuntimeException("bad argument"))).isFalse();
-    }
-
-    private OctopusEnergyProviderService serviceWithQueryRetry(RetryableOperationExecutor queryRetry) {
-        return new OctopusEnergyProviderService(() -> executor, clock, octopusEnergy, ACCOUNT_ID, API_KEY,
-                                                RetryableOperationExecutor.noRetries(), queryRetry,
-                                                octopusRegistry, agilePredictRegistry, new InMemoryTimeSeriesCache());
-    }
-
-    /// Retries a failed action exactly once. The production query executor retries transient failures over a short window (jiotty-common's backoff); here we
-    /// only need to prove the query path runs through the executor and that a retry re-invokes the action (isTransientFailure covers which failures qualify).
-    private static RetryableOperationExecutor retryingOnce() {
-        return new RetryableOperationExecutor() {
-            @Override
-            public <T> CompletableFuture<T> withBackOffAndRetry(String operationName,
-                                                                Supplier<? extends CompletableFuture<T>> action,
-                                                                BiConsumer<Long, Throwable> backoffEventConsumer) {
-                return action.get()
-                             .<CompletableFuture<T>>handle((value, failure) -> failure == null ? completedFuture(value) : action.get())
-                             .thenCompose(future -> future);
-            }
-        };
     }
 
     @Test

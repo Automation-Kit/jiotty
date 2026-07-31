@@ -2,11 +2,16 @@ package net.yudichev.jiotty.connector.octopusenergy;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
+import com.google.inject.BindingAnnotation;
+import jakarta.inject.Inject;
+import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ConcurrentDeduplicatingConsumer;
 import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
+import net.yudichev.jiotty.common.misc.UpstreamHealthReporting;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.rest.RestClients;
 import net.yudichev.jiotty.common.security.AuthState;
@@ -16,6 +21,8 @@ import okhttp3.Request;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -24,9 +31,15 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.io.BaseEncoding.base64;
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.PARAMETER;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
@@ -54,8 +67,18 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
 
     private final Map<Character, RegionServiceImpl> regionServices = new ConcurrentHashMap<>();
     private final Map<AccountKey, AccountServiceImpl> accountServices = new ConcurrentHashMap<>();
+    /// Notified of the Octopus API's health as each call completes, authenticated or open — see [#reportingHealth(String, Supplier)].
+    private final UpstreamHealthHandler healthHandler;
+    /// Retries the shared-outage failures of every call, so only a sustained outage reaches [#healthHandler].
+    private final RetryableOperationExecutor retryableOperationExecutor;
 
     private OkHttpClient client;
+
+    @Inject
+    public OctopusEnergyImpl(@Dependency UpstreamHealthHandler healthHandler, @Dependency RetryableOperationExecutor retryableOperationExecutor) {
+        this.healthHandler = checkNotNull(healthHandler);
+        this.retryableOperationExecutor = checkNotNull(retryableOperationExecutor);
+    }
 
     @Override
     protected void doStart() {
@@ -87,14 +110,20 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
 
     @Override
     public CompletableFuture<List<Product>> listProducts(Instant availableAt) {
-        return paginate(this::openGetCall, BASE_URL + "/products/?available_at=" + availableAt,
-                        EXPECTED_PRODUCT_COUNT,
-                        new TypeToken<>() {}, ProductsPage::results, ProductsPage::nextUrl);
+        return reportingHealth("list Octopus products",
+                               () -> paginate(this::openGetCall, BASE_URL + "/products/?available_at=" + availableAt,
+                                              EXPECTED_PRODUCT_COUNT,
+                                              new TypeToken<>() {}, ProductsPage::results, ProductsPage::nextUrl));
     }
 
     @Override
     public CompletableFuture<ProductDetails> getProductDetails(String code) {
-        return call(openGetCall(BASE_URL + "/products/" + code + "/"), new TypeToken<>() {});
+        return reportingHealth("get Octopus product details", () -> call(openGetCall(BASE_URL + "/products/" + code + "/"), new TypeToken<>() {}));
+    }
+
+    /// [UpstreamHealthReporting#reportingHealth] with this connector's fixed failure message; every call path in this connector goes through it.
+    private <T> CompletableFuture<T> reportingHealth(String operationName, Supplier<CompletableFuture<T>> operation) {
+        return UpstreamHealthReporting.reportingHealth(retryableOperationExecutor, healthHandler, operationName, "Octopus API call failed", operation);
     }
 
     @VisibleForTesting
@@ -142,12 +171,13 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
                          + "&period_from=" + from + "&period_to=" + to;
             // Half-hour slots — one rate per slot. Round up so the hint never undershoots; one slot of headroom is cheap.
             int expectedSlotCount = Math.toIntExact(Duration.between(from, to).plus(HALF_HOUR).dividedBy(HALF_HOUR));
-            return paginate(OctopusEnergyImpl.this::openGetCall,
-                            url,
-                            expectedSlotCount,
-                            new TypeToken<>() {},
-                            StandardUnitRates::rates,
-                            StandardUnitRates::nextUrl);
+            return reportingHealth("get Octopus unit rates",
+                                   () -> paginate(OctopusEnergyImpl.this::openGetCall,
+                                                  url,
+                                                  expectedSlotCount,
+                                                  new TypeToken<>() {},
+                                                  StandardUnitRates::rates,
+                                                  StandardUnitRates::nextUrl));
         }
 
         @Override
@@ -158,12 +188,14 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
             String url = tariffsUrl(productCode, tariffCode) + "standing-charges/?page_size=" + MAX_PAGE_SIZE
                          + "&period_from=" + from + "&period_to=" + to;
 
-            return paginate(OctopusEnergyImpl.this::openGetCall,
-                            url,
-                            4, // Standing charges change at most a handful of times per tariff per year; a small hint is enough — overshoot is cheap.
-                            new TypeToken<>() {},
-                            StandingChargesPage::results,
-                            StandingChargesPage::nextUrl);
+            // Standing charges change at most a handful of times per tariff per year; a small size hint is enough — overshoot is cheap.
+            return reportingHealth("get Octopus standing charges",
+                                   () -> paginate(OctopusEnergyImpl.this::openGetCall,
+                                                  url,
+                                                  4,
+                                                  new TypeToken<>() {},
+                                                  StandingChargesPage::results,
+                                                  StandingChargesPage::nextUrl));
         }
 
         private static String tariffsUrl(String productCode, String tariffCode) {
@@ -198,7 +230,7 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
 
         AccountServiceImpl(AccountKey key) {
             this.key = key;
-            accountFuture = call(authedGetCall(BASE_URL + "/accounts/" + key.accountId()), new TypeToken<>() {});
+            accountFuture = reportingHealth("get Octopus account", () -> call(authedGetCall(BASE_URL + "/accounts/" + key.accountId()), new TypeToken<>() {}));
             accountFuture.whenComplete(this::updateAuthStateFromOutcome);
         }
 
@@ -225,33 +257,32 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
                          + "?page_size=" + MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to;
             // Half-hour slots — one row per slot. Round up so the hint never undershoots.
             int expectedSlotCount = Math.toIntExact(Duration.between(from, to).plus(HALF_HOUR).dividedBy(HALF_HOUR));
-            CompletableFuture<List<ConsumptionRow>> future = paginate(this::authedGetCall,
-                                                                      url,
-                                                                      expectedSlotCount,
-                                                                      new TypeToken<>() {},
-                                                                      ConsumptionPage::results,
-                                                                      ConsumptionPage::nextUrl);
+            CompletableFuture<List<ConsumptionRow>> future = reportingHealth("get Octopus consumption",
+                                                                             () -> paginate(this::authedGetCall,
+                                                                                            url,
+                                                                                            expectedSlotCount,
+                                                                                            new TypeToken<>() {},
+                                                                                            ConsumptionPage::results,
+                                                                                            ConsumptionPage::nextUrl));
             future.whenComplete(this::updateAuthStateFromOutcome);
             return future;
         }
 
-        /// Subscribed at the tail of every authenticated call's outcome. On a 401 or 403 anywhere in the cause chain (the bound api key is no longer valid),
-        /// transitions [#authState] to [AuthState.PermanentFailure]. On a successful response, transitions to [AuthState.Success]. Anything else (5xx, network)
-        /// is a no-op — per the plan, transient failures don't touch the auth state. Pushes go through [#authStateUpdater] so identical-type transitions are
-        /// deduped and subscribers only see real state changes.
+        /// Subscribed to every authenticated call's outcome. On a 401 or 403 anywhere in the cause chain (the bound api key is no longer valid), transitions
+        /// [#authState] to [AuthState.PermanentFailure]; on a successful response, to [AuthState.Success]. A transient failure (5xx, network) leaves the auth
+        /// state unchanged: the bound credentials may still be valid; the call just couldn't get through. Pushes go through [#authStateUpdater] so
+        /// identical-type transitions are deduped and subscribers only see real state changes.
         private void updateAuthStateFromOutcome(Object resultOrNull, Throwable throwableOrNull) {
             if (throwableOrNull == null) {
                 authStateUpdater.accept(AUTH_SUCCESS);
                 return;
             }
-            logger.info("Authenticated call failed", throwableOrNull);
             for (Throwable cur = throwableOrNull; cur != null; cur = cur.getCause()) {
                 if (cur instanceof HttpResponseException http && (http.statusCode() == 401 || http.statusCode() == 403)) {
                     authStateUpdater.accept(new AuthState.PermanentFailure(humanReadableMessage(throwableOrNull)));
                     return;
                 }
             }
-            // Transient/network failures don't change the auth state — the bound credentials may still be valid; the call just couldn't get through.
         }
 
         /// Builds a GET [Call] for a URL that requires this account's Basic-auth credentials. Used both for the initial `/accounts/{id}` fetch and for
@@ -269,5 +300,13 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
         protected void doClose() {
             accountServices.remove(key, this);
         }
+    }
+
+    /// Qualifies the dependencies this connector consumes, so the bindings never collide with unannotated ones of the same type in the
+    /// parent injector or in a sibling connector.
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Dependency {
     }
 }

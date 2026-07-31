@@ -1,15 +1,11 @@
 package net.yudichev.jiotty.connector.octopusenergy;
 
+import net.yudichev.jiotty.common.async.backoff.RecordingRetryableOperationExecutor;
+import net.yudichev.jiotty.common.misc.RecordingUpstreamHealthHandler;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.security.AuthState;
-import okhttp3.Call;
-import okhttp3.Callback;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
-import okhttp3.Protocol;
 import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,49 +21,38 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
+import static net.yudichev.jiotty.common.rest.OkHttpStubs.stubCalls;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
 @ExtendWith(MockitoExtension.class)
 class OctopusEnergyImplTest {
 
-    private static final MediaType APPLICATION_JSON = MediaType.parse("application/json");
     private final Map<String, String> stubbedResponses = new HashMap<>();
     /// Overrides the default HTTP 200 for a given URL — populated by [#stubError]. Tests asserting non-2xx behaviour register the URL here and in
     /// [#stubbedResponses] (same map, the body is the error payload).
     private final Map<String, Integer> stubbedStatuses = new HashMap<>();
     private final List<Request> requestLog = new ArrayList<>();
+    private final RecordingUpstreamHealthHandler healthHandler = new RecordingUpstreamHealthHandler();
+    private final RecordingRetryableOperationExecutor retryExecutor = new RecordingRetryableOperationExecutor();
     private OkHttpClient httpClient;
     private OctopusEnergyImpl octopusEnergy;
 
     @BeforeEach
     void setUp() {
-        // Per-request Call mocks: each `httpClient.newCall(request)` returns a Call that, on `enqueue(callback)`, either delivers a fake 200 Response from
-        // `stubbedResponses` (if the request URL is registered) or stays pending (Mockito no-op). Tests opt in to delivery by calling `stubGet(url, json)`;
-        // legacy interning/eviction tests leave the map empty and their futures never complete — same behaviour as before this refactor.
-        // Every Request is also recorded in `requestLog` so tests can assert headers / method / URL on what was actually sent.
+        // Each call delivers a fake Response from `stubbedResponses` if the request URL is registered, or stays pending. Tests opt in to delivery by calling
+        // `stubGet(url, json)`; interning/eviction tests leave the map empty and their futures never complete. Every Request is also recorded in `requestLog`
+        // so tests can assert headers / method / URL on what was actually sent.
         httpClient = mock(OkHttpClient.class);
-        lenient().when(httpClient.newCall(any())).thenAnswer(inv -> {
-            Request request = inv.getArgument(0);
+        stubCalls(httpClient, request -> {
             requestLog.add(request);
-            Call callMock = mock(Call.class);
-            lenient().when(callMock.request()).thenReturn(request);
-            lenient().doAnswer(enqueueInv -> {
-                Callback cb = enqueueInv.getArgument(0);
-                String url = request.url().toString();
-                String body = stubbedResponses.get(url);
-                if (body != null) {
-                    int status = stubbedStatuses.getOrDefault(url, 200);
-                    cb.onResponse(callMock, fakeResponse(request, status, body));
-                }
-                return null;
-            }).when(callMock).enqueue(any());
-            return callMock;
+            String url = request.url().toString();
+            String body = stubbedResponses.get(url);
+            return body == null ? null : response(request, stubbedStatuses.getOrDefault(url, 200), body);
         });
-        octopusEnergy = new OctopusEnergyImpl() {
+        octopusEnergy = new OctopusEnergyImpl(healthHandler, retryExecutor) {
             @Override
             OkHttpClient createHttpClient() {
                 return httpClient;
@@ -83,16 +68,6 @@ class OctopusEnergyImplTest {
     private void stubError(String url, int status, String body) {
         stubbedResponses.put(url, body);
         stubbedStatuses.put(url, status);
-    }
-
-    private static Response fakeResponse(Request request, int status, String json) {
-        return new Response.Builder()
-                .request(request)
-                .protocol(Protocol.HTTP_1_1)
-                .code(status)
-                .message(status == 200 ? "OK" : "Error")
-                .body(ResponseBody.create(json, APPLICATION_JSON))
-                .build();
     }
 
     @AfterEach
@@ -551,6 +526,96 @@ class OctopusEnergyImplTest {
     }
 
     @Test
+    void accountFetch_5xx_reportsUpstreamFailure() {
+        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", 503, "{\"detail\":\"service unavailable\"}");
+
+        octopusEnergy.account("A-12345678", "sk_maybe_ok").close();
+
+        assertThat(healthHandler.failures()).singleElement().satisfies(f -> assertThat(f).contains("Response code 503"));
+        assertThat(healthHandler.successCount()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {401, 403})
+    void accountFetch_4xxAuth_reportsNoUpstreamFailure(int status) {
+        // The API answered — these credentials are bad, which is this account's problem, not an outage every other account shares.
+        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", status, "{\"detail\":\"unauthorised\"}");
+
+        octopusEnergy.account("A-12345678", "sk_bad").close();
+
+        assertThat(healthHandler.failures()).isEmpty();
+    }
+
+    @Test
+    void regionRatesFetch_5xx_reportsUpstreamFailure() {
+        // The unauthenticated rates path must observe the API's health just like the authenticated one — a 502 here is the same outage.
+        Instant from = Instant.parse("2024-01-01T00:00:00Z");
+        Instant to = Instant.parse("2024-01-02T00:00:00Z");
+        stubError(OctopusEnergyImpl.BASE_URL + "/products/AGILE-23-12-06/electricity-tariffs/E-1R-AGILE-23-12-06-A/standard-unit-rates/"
+                  + "?page_size=25000&period_from=" + from + "&period_to=" + to,
+                  502, "{\"detail\":\"bad gateway\"}");
+
+        try (OctopusRegionService region = octopusEnergy.region('A')) {
+            assertThatThrownBy(() -> region.getStandardUnitRates("AGILE-23-12-06", "E-1R-AGILE-23-12-06-A", from, to).join()).isNotNull();
+        }
+
+        assertThat(healthHandler.failures()).singleElement().satisfies(f -> assertThat(f).contains("Response code 502"));
+        assertThat(healthHandler.successCount()).isZero();
+    }
+
+    @Test
+    void regionRatesFetch_success_reportsUpstreamHealthy() {
+        Instant from = Instant.parse("2024-01-01T00:00:00Z");
+        Instant to = Instant.parse("2024-01-02T00:00:00Z");
+        stubGet(OctopusEnergyImpl.BASE_URL + "/products/AGILE-23-12-06/electricity-tariffs/E-1R-AGILE-23-12-06-A/standard-unit-rates/"
+                + "?page_size=25000&period_from=" + from + "&period_to=" + to,
+                """
+                {"count": 0, "next": null, "previous": null, "results": []}
+                """);
+
+        try (OctopusRegionService region = octopusEnergy.region('A')) {
+            region.getStandardUnitRates("AGILE-23-12-06", "E-1R-AGILE-23-12-06-A", from, to).join();
+        }
+
+        assertThat(healthHandler.successCount()).isPositive();
+        assertThat(healthHandler.failures()).isEmpty();
+    }
+
+    @Test
+    void regionRatesFetch_tariffRegionMismatch_reportsNothing() {
+        // The mismatch is the caller's bug — no request reached the API, so there is no verdict on its health either way.
+        try (OctopusRegionService region = octopusEnergy.region('A')) {
+            assertThatThrownBy(() -> region.getStandardUnitRates("AGILE-23-12-06", "E-1R-AGILE-23-12-06-B",
+                                                                 Instant.parse("2024-01-01T00:00:00Z"),
+                                                                 Instant.parse("2024-01-02T00:00:00Z")).join()).isNotNull();
+        }
+
+        assertThat(healthHandler.failures()).isEmpty();
+        assertThat(healthHandler.successCount()).isZero();
+    }
+
+    @Test
+    void listProducts_5xx_reportsUpstreamFailure() {
+        stubError(OctopusEnergyImpl.BASE_URL + "/products/?available_at=2024-01-15T12:34:56Z", 503, "{\"detail\":\"service unavailable\"}");
+
+        assertThatThrownBy(() -> octopusEnergy.listProducts(Instant.parse("2024-01-15T12:34:56Z")).join()).isNotNull();
+
+        assertThat(healthHandler.failures()).singleElement().satisfies(f -> assertThat(f).contains("Response code 503"));
+    }
+
+    @Test
+    void accountFetch_success_reportsUpstreamHealthy() {
+        stubGet(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", """
+                                                                     {"properties": []}
+                                                                     """);
+
+        octopusEnergy.account("A-12345678", "sk_ok").close();
+
+        assertThat(healthHandler.successCount()).isPositive();
+        assertThat(healthHandler.failures()).isEmpty();
+    }
+
+    @Test
     void accountFetch_5xx_leavesAuthStateAsInitialisingTransientFailure() {
         // Server errors and network problems aren't proof that the api key is bad — the bound auth state should stay transient so a retry can recover.
         stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", 503, "{\"detail\":\"service unavailable\"}");
@@ -639,4 +704,27 @@ class OctopusEnergyImplTest {
         // We see Success first (from the account fetch), then PermanentFailure (from the revoked consumption call).
         assertThat(observed).last().isInstanceOf(AuthState.PermanentFailure.class);
     }
+
+    @Test
+    void everyCallPath_routesThroughTheRetryExecutor() {
+        // The retry executor sits between every raw call and the health handler, so a transient outage recovers inside the retry loop instead of flipping the
+        // health handler per attempt. This pins down that no call path bypasses it.
+        Instant from = Instant.parse("2024-01-01T00:00:00Z");
+        Instant to = Instant.parse("2024-01-02T00:00:00Z");
+
+        octopusEnergy.listProducts(from);
+        octopusEnergy.getProductDetails("AGILE-23-12-06");
+        try (OctopusRegionService region = octopusEnergy.region('A')) {
+            region.getStandardUnitRates("AGILE-23-12-06", "E-1R-AGILE-23-12-06-A", from, to);
+            region.getStandingCharges("AGILE-23-12-06", "E-1R-AGILE-23-12-06-A", from, to);
+        }
+        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_test")) {
+            account.getConsumption("9999999999999", "99XXX99999", from, to);
+        }
+
+        assertThat(retryExecutor.operationNames())
+                .describedAs("list, product details, rates, standing charges, the account fetch and consumption — six retried operations")
+                .hasSize(6);
+    }
+
 }

@@ -1,10 +1,14 @@
 package net.yudichev.jiotty.connector.world.weather;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
+import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
+import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
+import net.yudichev.jiotty.common.misc.UpstreamHealthReporting;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
@@ -29,31 +33,45 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
+import static net.yudichev.jiotty.common.misc.UpstreamHealthReporting.reportingHealth;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
 import static okhttp3.HttpUrl.parse;
 
-final class WeatherServiceImpl extends BaseLifecycleComponent implements WeatherService {
+class WeatherServiceImpl extends BaseLifecycleComponent implements WeatherService {
     private static final Logger logger = LogManager.getLogger(WeatherServiceImpl.class);
 
     private static final String API_BASE = "https://api.weatherapi.com/v1";
 
     private final String apiKey;
+    private final UpstreamHealthHandler healthHandler;
+    /// Retries the shared-outage failures of every call, so only a sustained outage reaches [#healthHandler].
+    private final RetryableOperationExecutor retryableOperationExecutor;
     private final CurrentDateTimeProvider timeProvider;
     private final AtomicLong requestIdGenerator = new AtomicLong();
     private OkHttpClient client;
 
     @Inject
-    WeatherServiceImpl(CurrentDateTimeProvider timeProvider, @ApiKey String apiKey) {
+    WeatherServiceImpl(CurrentDateTimeProvider timeProvider,
+                       @ApiKey String apiKey,
+                       @Dependency UpstreamHealthHandler healthHandler,
+                       @Dependency RetryableOperationExecutor retryableOperationExecutor) {
         this.timeProvider = checkNotNull(timeProvider);
         this.apiKey = checkNotNull(apiKey);
+        this.healthHandler = checkNotNull(healthHandler);
+        this.retryableOperationExecutor = checkNotNull(retryableOperationExecutor);
     }
 
     @Override
     protected void doStart() {
-        client = newClient();
+        client = createHttpClient();
+    }
+
+    @VisibleForTesting
+    OkHttpClient createHttpClient() {
+        return newClient();
     }
 
     @Override
@@ -68,7 +86,7 @@ final class WeatherServiceImpl extends BaseLifecycleComponent implements Weather
         if (logger.isDebugEnabled()) {
             logger.debug("[{}] getCurrentWeather for {}", reqId, redacted(worldCoordinates));
         }
-        return callApi(request, WeatherResponse.class)
+        return callApi("get current weather", request, WeatherResponse.class)
                 .thenApply(WeatherResponse::current)
                 .whenComplete((result, throwable) -> logger.debug("[{}] Response: {}", reqId, result, throwable));
     }
@@ -91,7 +109,7 @@ final class WeatherServiceImpl extends BaseLifecycleComponent implements Weather
         if (logger.isDebugEnabled()) {
             logger.debug("[{}] getForecastWeather for {} until {} ({} days)", reqId, redacted(worldCoordinates), until, finalDaysToInclude);
         }
-        return callApi(request, ForecastResponse.class)
+        return callApi("get weather forecast", request, ForecastResponse.class)
                 .<List<ForecastHour>>thenApply(resp -> {
                     ImmutableList<ForecastDay> days = resp.forecast().days();
                     var resultBuilder = ImmutableList.<ForecastHour>builderWithExpectedSize(days.size() * 24);
@@ -121,13 +139,25 @@ final class WeatherServiceImpl extends BaseLifecycleComponent implements Weather
         return new Request.Builder().url(url).get().build();
     }
 
-    private <T> CompletableFuture<T> callApi(Request request, Class<? extends T> responseType) {
-        return whenStartedAndNotLifecycling(() -> call(client.newCall(request), responseType));
+    /// Runs every call to the weather API through [UpstreamHealthReporting#reportingHealth], so one sustained outage is reported once, however many callers
+    /// the shared service serves.
+    private <T> CompletableFuture<T> callApi(String operationName, Request request, Class<? extends T> responseType) {
+        return whenStartedAndNotLifecycling(
+                () -> reportingHealth(retryableOperationExecutor, healthHandler, operationName, "weather API call failed",
+                                      () -> call(client.newCall(request), responseType)));
     }
 
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface ApiKey {
+    }
+
+    /// Qualifies the dependencies this service consumes, so the bindings never collide with unannotated ones of the same type in the
+    /// parent injector or in a sibling connector.
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Dependency {
     }
 }

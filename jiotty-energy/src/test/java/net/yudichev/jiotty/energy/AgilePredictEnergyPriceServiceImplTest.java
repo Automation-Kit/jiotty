@@ -2,6 +2,7 @@ package net.yudichev.jiotty.energy;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.lang.Either;
+import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPrice;
 import net.yudichev.jiotty.connector.octopusenergy.agilepredict.AgilePredictPriceService;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,7 +27,7 @@ import static org.mockito.Mockito.verify;
 class AgilePredictEnergyPriceServiceImplTest {
 
     @Mock
-    private PriceRetrievalStatusHandler statusHandler;
+    private UpstreamHealthHandler statusHandler;
 
     private ProgrammableClock clock;
 

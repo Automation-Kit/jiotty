@@ -11,7 +11,6 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage;
 import net.yudichev.jiotty.common.lang.ObservableValue;
-import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.connector.octopusenergy.ConsumptionRow;
@@ -29,7 +28,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
 
-import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
@@ -75,10 +73,6 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     private final String accountId;
     private final String apiKey;
     private final RetryableOperationExecutor retryExecutor;
-    /// Short-window retry executor for the on-demand `query*` calls. It retries a transient Octopus failure (5xx / network) a few times over a few seconds,
-    /// so a momentary gateway 502 doesn't fail the query, but gives up quickly (an interactive caller can't be left waiting) and never retries a permanent
-    /// 4xx. Distinct from [#retryExecutor], whose ~6 h window is tuned for the background account poll, not a call someone is waiting on.
-    private final RetryableOperationExecutor queryRetryExecutor;
     private final OctopusAgilePriceServiceRegistry octopusRegistry;
     private final AgilePredictPriceServiceRegistry agilePredictRegistry;
     /// App-scoped slot cache backing the `query*` methods. Each query defines (idempotently) its [OctopusStreams] stream and reads the requested range, so a
@@ -109,7 +103,6 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
                                         @AccountId String accountId,
                                         @ApiKey String apiKey,
                                         @PollRetry RetryableOperationExecutor retryExecutor,
-                                        @QueryRetry RetryableOperationExecutor queryRetryExecutor,
                                         OctopusAgilePriceServiceRegistry octopusRegistry,
                                         AgilePredictPriceServiceRegistry agilePredictRegistry,
                                         TimeSeriesCache cache) {
@@ -119,7 +112,6 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         this.accountId = checkNotNull(accountId);
         this.apiKey = checkNotNull(apiKey);
         this.retryExecutor = checkNotNull(retryExecutor);
-        this.queryRetryExecutor = checkNotNull(queryRetryExecutor);
         this.octopusRegistry = checkNotNull(octopusRegistry);
         this.agilePredictRegistry = checkNotNull(agilePredictRegistry);
         this.cache = checkNotNull(cache);
@@ -159,39 +151,29 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
 
     @Override
     public CompletableFuture<ImmutableMap<Instant, ConsumptionRow>> queryConsumption(String userId, String mpan, String meterSerial, Instant from, Instant to) {
-        return whenStartedAndNotLifecycling(
-                () -> queryRetryExecutor.withBackOffAndRetry(
-                        "octopus.queryConsumption",
-                        () -> OctopusStreams.consumptionStream(cache, accountService, userId, mpan, meterSerial).readRange(from, to)));
+        return whenStartedAndNotLifecycling(() -> OctopusStreams.consumptionStream(cache, accountService, userId, mpan, meterSerial).readRange(from, to));
     }
 
     @Override
     public CompletableFuture<ImmutableMap<Instant, StandardUnitRate>> queryRates(String productCode, String tariffCode, Instant from, Instant to) {
         return whenStartedAndNotLifecycling(
-                () -> queryRetryExecutor.withBackOffAndRetry(
-                        "octopus.queryRates",
-                        () -> OctopusStreams.ratesStream(cache, octopusEnergy.region(regionOf(tariffCode)), productCode, tariffCode).readRange(from, to)));
+                () -> OctopusStreams.ratesStream(cache, octopusEnergy.region(regionOf(tariffCode)), productCode, tariffCode).readRange(from, to));
     }
 
     @Override
     public CompletableFuture<ImmutableMap<Instant, StandingCharge>> queryStandingCharges(String productCode, String tariffCode, Instant from, Instant to) {
         return whenStartedAndNotLifecycling(
-                () -> queryRetryExecutor.withBackOffAndRetry(
-                        "octopus.queryStandingCharges",
-                        () -> OctopusStreams.standingChargesStream(cache, octopusEnergy.region(regionOf(tariffCode)), productCode, tariffCode)
-                                            .readRange(from, to)));
+                () -> OctopusStreams.standingChargesStream(cache, octopusEnergy.region(regionOf(tariffCode)), productCode, tariffCode).readRange(from, to));
     }
 
     @Override
     public CompletableFuture<List<Product>> queryProducts(Instant availableAt) {
-        return whenStartedAndNotLifecycling(
-                () -> queryRetryExecutor.withBackOffAndRetry("octopus.queryProducts", () -> octopusEnergy.listProducts(availableAt)));
+        return whenStartedAndNotLifecycling(() -> octopusEnergy.listProducts(availableAt));
     }
 
     @Override
     public CompletableFuture<ProductDetails> queryProductDetails(String code) {
-        return whenStartedAndNotLifecycling(
-                () -> queryRetryExecutor.withBackOffAndRetry("octopus.queryProductDetails", () -> octopusEnergy.getProductDetails(code)));
+        return whenStartedAndNotLifecycling(() -> octopusEnergy.getProductDetails(code));
     }
 
     @Override
@@ -199,13 +181,11 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         // Direct, uncached connector call (NOT OctopusStreams): this determines the publication frontier, the precondition the slot cache relies on, so routing
         // it through the cache would tombstone the very not-yet-published slots we're checking for. The probe window comfortably exceeds Octopus' worst-case
         // publication delay; it bounds the search for the latest slot, it is not a lag assumption.
-        return whenStartedAndNotLifecycling(() -> queryRetryExecutor.withBackOffAndRetry(
-                "octopus.latestConsumptionInstant",
-                () -> {
-                    Instant now = timeProvider.currentInstant();
-                    return accountService.getConsumption(mpan, meterSerial, now.minus(CONSUMPTION_FRONTIER_PROBE_WINDOW), now)
-                                         .thenApply(rows -> rows.stream().map(ConsumptionRow::intervalStart).max(Comparator.naturalOrder()));
-                }));
+        return whenStartedAndNotLifecycling(() -> {
+            Instant now = timeProvider.currentInstant();
+            return accountService.getConsumption(mpan, meterSerial, now.minus(CONSUMPTION_FRONTIER_PROBE_WINDOW), now)
+                                 .thenApply(rows -> rows.stream().map(ConsumptionRow::intervalStart).max(Comparator.naturalOrder()));
+        });
     }
 
     /// The supply region is the trailing letter of an Octopus tariff code (e.g. `E-1R-AGILE-23-12-06-A` → `A`).
@@ -363,14 +343,6 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         return tariff.validFrom().equals(now) || tariff.validFrom().isBefore(now) && tariff.validTo().isAfter(now);
     }
 
-    /// Retry predicate for the interactive `query*` calls: a single link of the causal chain is worth retrying iff it is a network/IO error or an Octopus 5xx
-    /// gateway error. Permanent client errors (4xx — bad request, expired credentials, not found) and our own argument errors are not retried, so the query
-    /// fails fast on them rather than burning the whole retry window. The handler walks the causal chain and applies this to each link.
-    static boolean isTransientFailure(Throwable throwable) {
-        return throwable instanceof IOException
-               || throwable instanceof HttpResponseException httpResponseException && httpResponseException.statusCode() >= 500;
-    }
-
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
@@ -383,19 +355,11 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     @interface AccountId {
     }
 
-    /// Qualifies the long-window [RetryableOperationExecutor] used by the background account poll (see [#retryExecutor]). Annotated — like [QueryRetry] — so
-    /// the binding never collides with, or accidentally captures, an unannotated executor of the same type in the parent injector.
+    /// Qualifies the long-window [RetryableOperationExecutor] used by the background account poll (see [#retryExecutor]). Annotated so the binding never
+    /// collides with, or accidentally captures, an unannotated executor of the same type in the parent injector.
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface PollRetry {
-    }
-
-    /// Qualifies the short-window [RetryableOperationExecutor] used for the on-demand `query*` calls (see [#queryRetryExecutor]) — distinct from the
-    /// long-window [PollRetry] one used by the account poll.
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface QueryRetry {
     }
 }

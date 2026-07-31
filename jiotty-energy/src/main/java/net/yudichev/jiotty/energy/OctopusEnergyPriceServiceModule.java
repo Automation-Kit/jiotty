@@ -58,7 +58,9 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
         executorSpec.bind(SchedulingExecutor.class).annotatedWith(ExecutorProvider.class).installedBy(this::installLifecycleComponentModule);
         // Retry the account fetch with exponential backoff capped at half the poll interval (≈6h) — long enough to ride out lengthy Octopus outages without
         // leaving the user stuck for the full ACCOUNT_POLL_INTERVAL between polls. Predicate always returns true: permanent 401/403 failures surface via
-        // OctopusAccountService.subscribeToAuthState (per Stage C task 8), so wasting one backoff window on those is acceptable and avoids a custom predicate.
+        // OctopusAccountService.subscribeToAuthState, so wasting one backoff window on those is acceptable. This deliberately layers over the Octopus
+        // connector's own shared-outage retry: the connector smooths transient blips over minutes, this window keeps the background poll alive over hours.
+        // The interactive query* calls rely on the connector's retry alone.
         var backoffConfig = BackOffConfig.builder()
                                          .setInitialInterval(Duration.ofSeconds(5))
                                          .setMaxInterval(Duration.ofMinutes(30))
@@ -71,23 +73,6 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
         installLifecycleComponentModule(RetryableOperationExecutorModule.builder()
                                                                         .withAnnotation(forAnnotation(OctopusEnergyProviderService.PollRetry.class))
                                                                         .setBackingOffExceptionHandler(pollRetryHandler)
-                                                                        .withExecutor(annotatedWith(ExecutorProvider.class)).build());
-        // Separate, short-window executor for the on-demand query* calls: ride out a momentary Octopus 5xx / network blip, but give up within seconds (an
-        // interactive caller can't be left waiting) and never retry a permanent 4xx — hence the transient-only predicate, unlike the always-true poll
-        // predicate above.
-        var queryBackoffConfig = BackOffConfig.builder()
-                                              .setInitialInterval(Duration.ofSeconds(1))
-                                              .setMaxInterval(Duration.ofSeconds(8))
-                                              .setMaxElapsedTime(Duration.ofSeconds(30))
-                                              .build();
-        var queryRetryHandler = exposedBy(
-                BackingOffExceptionHandlerModule.builder()
-                                                .setRetryableExceptionPredicate(literally(OctopusEnergyProviderService::isTransientFailure))
-                                                .withConfig(literally(queryBackoffConfig))
-                                                .build());
-        installLifecycleComponentModule(RetryableOperationExecutorModule.builder()
-                                                                        .withAnnotation(forAnnotation(OctopusEnergyProviderService.QueryRetry.class))
-                                                                        .setBackingOffExceptionHandler(queryRetryHandler)
                                                                         .withExecutor(annotatedWith(ExecutorProvider.class)).build());
         octopusApiKeySpec.bind(String.class)
                          .annotatedWith(OctopusEnergyProviderService.ApiKey.class)

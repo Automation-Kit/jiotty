@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.common.time.TimeProvider;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -36,6 +37,8 @@ public final class TestAdminAlertService implements AdminAlertService {
     private final int maxBundles;
     private final int maxEventsPerBundle;
     private long nextIdCounter = 1;
+    /// Action to run at the start of the next resolve, installed by [#runBeforeNextResolve]; `null` when no interleaving is staged.
+    private @Nullable Runnable beforeNextResolve;
 
     public TestAdminAlertService() {
         this(new TimeProvider(), DEFAULT_MAX_BUNDLES, DEFAULT_MAX_EVENTS_PER_BUNDLE);
@@ -88,10 +91,21 @@ public final class TestAdminAlertService implements AdminAlertService {
         return key;
     }
 
+    /// Runs `action` at the start of the next [#resolve(String, String)] call and then forgets it. Lets a single-threaded test drive an interleaving that
+    /// would otherwise need two threads: whatever the caller does between deciding to resolve and resolving.
+    public void runBeforeNextResolve(Runnable action) {
+        beforeNextResolve = checkNotNull(action, "action");
+    }
+
     @Override
     public CompletableFuture<Optional<String>> resolve(String key, String note) {
         checkNotNull(key, "key");
         checkNotNull(note, "note");
+        if (beforeNextResolve != null) {
+            Runnable action = beforeNextResolve;
+            beforeNextResolve = null;
+            action.run();
+        }
         String id = activeIdByKey.remove(key);
         if (id == null) {
             return completedFuture(Optional.empty());

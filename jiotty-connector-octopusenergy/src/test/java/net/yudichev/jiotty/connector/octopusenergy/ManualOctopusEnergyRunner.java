@@ -1,5 +1,8 @@
 package net.yudichev.jiotty.connector.octopusenergy;
 
+import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
+import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
+
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
@@ -9,7 +12,7 @@ import java.time.temporal.ChronoUnit;
 /// still covers every public surface.**
 @SuppressWarnings({"UseOfSystemOutOrSystemErr", "CallToPrintStackTrace"})
 final class ManualOctopusEnergyRunner {
-    static final OctopusEnergyImpl oe = new OctopusEnergyImpl();
+    static final OctopusEnergyImpl oe = new OctopusEnergyImpl(UpstreamHealthHandler.NO_OP, RetryableOperationExecutor.noRetries());
 
     static void main(String[] args) {
         // args: [0]=accountId, [1]=apiKey, [2]=productCode, [3]=tariffCode (e.g. "E-1R-AGILE-23-12-06-A")

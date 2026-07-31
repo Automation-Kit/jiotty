@@ -5,6 +5,7 @@ import com.google.inject.Injector;
 import com.google.inject.Key;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import org.junit.jupiter.api.Test;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
@@ -26,7 +27,7 @@ class AgilePredictPriceServiceRegistryModuleTest {
     void build_withAnnotationAndCustomHandler_exposesAnnotatedKey() {
         ExposedKeyModule<AgilePredictPriceServiceRegistry> module =
                 AgilePredictPriceServiceRegistryModule.builder()
-                                                      .withStatusHandler(literally(new NoOpPriceRetrievalStatusHandler()))
+                                                      .withStatusHandler(literally(UpstreamHealthHandler.NO_OP))
                                                       .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                       .build();
 
