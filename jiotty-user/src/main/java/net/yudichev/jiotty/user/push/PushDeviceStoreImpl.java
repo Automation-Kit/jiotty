@@ -41,10 +41,13 @@ public final class PushDeviceStoreImpl extends BaseLifecycleComponent implements
         executor = executorProvider.get();
     }
 
+    /// Stores `record` under its device id, keeping the push token unique across the store: a device that re-registers under a fresh device id — which it
+    /// does whenever its secure storage is reset — keeps one record, so each notification reaches it once.
     @Override
     public CompletableFuture<Void> upsert(PushDeviceRecord record) {
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
             Map<String, PushDeviceRecord> records = loadMutable();
+            records.values().removeIf(existing -> existing.token().equals(record.token()));
             records.put(record.deviceId(), record);
             save(records);
         }));

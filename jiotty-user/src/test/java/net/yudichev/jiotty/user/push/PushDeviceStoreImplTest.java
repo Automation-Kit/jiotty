@@ -62,6 +62,28 @@ class PushDeviceStoreImplTest {
     }
 
     @Test
+    void upsert_sameTokenUnderNewDeviceId_keepsOnlyTheNewRecord() {
+        store.upsert(recordFor("device-1", TOKEN_A));
+        PushDeviceRecord reRegistered = recordFor("device-2", TOKEN_A);
+        store.upsert(reRegistered);
+        clock.tick();
+
+        assertThat(listNow()).containsExactly(reRegistered);
+    }
+
+    @Test
+    void upsert_sameTokenUnderNewDeviceId_leavesOtherDevicesAlone() {
+        PushDeviceRecord otherDevice = recordFor("device-1", TOKEN_B);
+        store.upsert(otherDevice);
+        store.upsert(recordFor("device-2", TOKEN_A));
+        PushDeviceRecord reRegistered = recordFor("device-3", TOKEN_A);
+        store.upsert(reRegistered);
+        clock.tick();
+
+        assertThat(listNow()).containsExactlyInAnyOrder(otherDevice, reRegistered);
+    }
+
+    @Test
     void remove_existingDevice_removesIt() {
         store.upsert(recordFor("device-1", TOKEN_A));
         PushDeviceRecord survivor = recordFor("device-2", TOKEN_B);
