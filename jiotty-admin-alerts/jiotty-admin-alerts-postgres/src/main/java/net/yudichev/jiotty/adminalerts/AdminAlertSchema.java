@@ -50,7 +50,7 @@ final class AdminAlertSchema {
                                   );""";
 
         // Grafana read-only role. Created NOLOGIN; an operator runs ALTER ROLE ... LOGIN PASSWORD '<random>' once after first deploy and stores the password
-        //  only in Grafana Cloud's datasource secret.
+        // only in Grafana Cloud's datasource secret.
         String createGrafanaReaderRole = ("""
                                           DO $do$
                                           BEGIN
@@ -76,7 +76,7 @@ final class AdminAlertSchema {
                 "ON %DOMAIN_PREFIX%alert_event (alert_id, occurred_at DESC);",
                 createGrafanaReaderRole,
                 // CONNECT to the database is granted to PUBLIC by default; a fresh role inherits that and needs no explicit grant. USAGE on the public schema
-                //  is also granted to PUBLIC by default in Postgres < 15; in 15+ it must be granted explicitly per role.
+                // is also granted to PUBLIC by default in Postgres < 15; in 15+ it must be granted explicitly per role.
                 "GRANT USAGE ON SCHEMA public TO " + GRAFANA_READER_ROLE + ';',
                 "GRANT SELECT ON %DOMAIN_PREFIX%alert TO " + GRAFANA_READER_ROLE + ';',
                 "GRANT SELECT ON %DOMAIN_PREFIX%alert_event TO " + GRAFANA_READER_ROLE + ';');

@@ -42,7 +42,7 @@ public final class AntiSpamLogger {
         checkNotNull(message, "message");
         Instant now = Instant.now();
         // compute atomically records `now` and returns it when this message is due (never logged, or the window has elapsed), or keeps and returns the previous
-        //  timestamp while still within the window — so the identity check below is a race-free "did this call just claim the slot?".
+        // timestamp while still within the window — so the identity check below is a race-free "did this call just claim the slot?".
         Instant stamp = lastLoggedByMessage.compute(message, (_, last) ->
                 last == null || !now.isBefore(last.plus(minInterval)) ? now : last);
         if (stamp == now) {

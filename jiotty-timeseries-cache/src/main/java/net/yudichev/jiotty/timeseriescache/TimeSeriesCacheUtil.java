@@ -19,8 +19,8 @@ final class TimeSeriesCacheUtil {
         var out = ImmutableMap.<Instant, T>builderWithExpectedSize(hits.size() + computedValues.size());
         for (Instant slot = from; !slot.isAfter(to); slot = slot.plus(step)) {
             // Neither map ever stores a null value (every entry is an Optional), so a null from get() unambiguously means "absent" — one lookup per map,
-            //  no containsKey probe. hits wins over computedValues for a slot present in both; defaulting the fallback to empty() keeps value non-null so it
-            //  is null-checked once.
+            // no containsKey probe. hits wins over computedValues for a slot present in both; defaulting the fallback to empty() keeps value non-null so it
+            // is null-checked once.
             Optional<T> hit = hits.get(slot);
             Optional<T> value = hit != null ? hit : computedValues.getOrDefault(slot, Optional.empty());
             if (value.isPresent()) {

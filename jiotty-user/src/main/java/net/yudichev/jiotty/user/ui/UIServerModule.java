@@ -104,7 +104,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         expose(UIServer.class);
 
         // Built-in handlers are constructed in THIS module's scope so they see the registries/executor/SseService/PushDeviceStore/@AdminAlert bound above, then
-        //  contributed to the runtime module as bound-to specs alongside the caller's external handler specs.
+        // contributed to the runtime module as bound-to specs alongside the caller's external handler specs.
         UIServerRuntimeModule.Builder runtimeModuleBuilder = UIServerRuntimeModule.builder();
         runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(registerLifecycleComponent(OptionsPostHandler.class)));
         runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(Key.get(GetDisplayablesListHandler.class)));

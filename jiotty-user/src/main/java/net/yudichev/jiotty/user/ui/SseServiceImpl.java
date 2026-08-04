@@ -136,8 +136,8 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
         executor.execute(() -> {
             if (!isStarted()) {
                 // Stopped between startSse enqueuing this task and the executor draining it during teardown. The option/displayable registries this initial
-                //  image reads have stopped too, so skip delivery and just close the freshly-created client to complete its stream and fire onStreamClosed —
-                //  doStop's client drain never saw this client, as it was not yet in sseClients when stop ran.
+                // image reads have stopped too, so skip delivery and just close the freshly-created client to complete its stream and fire onStreamClosed —
+                // doStop's client drain never saw this client, as it was not yet in sseClients when stop ran.
                 closeAndRemoveClient(client);
                 return;
             }
@@ -199,8 +199,8 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
             }
         });
         // Guard with isStarted() exactly as removeClient() does: once this component is stopped the executor is terminated and its clients were drained during
-        //  stop, so the close is a no-op. Without the guard, a close arriving after stop would schedule onto the terminated executor and throw
-        //  RejectedExecutionException into the caller.
+        // stop, so the close is a no-op. Without the guard, a close arriving after stop would schedule onto the terminated executor and throw
+        // RejectedExecutionException into the caller.
         return idempotent(() -> {
             if (isStarted()) {
                 executor.execute(() -> closeAndRemoveClient(client));

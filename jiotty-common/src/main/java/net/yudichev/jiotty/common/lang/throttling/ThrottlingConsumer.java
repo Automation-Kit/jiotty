@@ -45,8 +45,8 @@ public final class ThrottlingConsumer<T> extends BaseIdempotentCloseable impleme
     @Override
     protected void doClose() {
         // The delivery already queued on the
-        //  executor, or a timer about to fire, is suppressed when the executor drains it during teardown, after the components this delegate touches have
-        //  stopped. Cancelling the timer handle stays on the executor thread that mutates it.
+        // executor, or a timer about to fire, is suppressed when the executor drains it during teardown, after the components this delegate touches have
+        // stopped. Cancelling the timer handle stays on the executor thread that mutates it.
         executor.execute(() -> closeIfNotNull(throttlingTimerHandle));
     }
 

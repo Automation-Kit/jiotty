@@ -117,7 +117,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
                                .annotatedWith(TimeSeriesCacheCleanupJob.Dependency.class)
                                .installedBy(this::installLifecycleComponentModule);
             // ActiveUserIdsSupplier is optional: the job injects Optional<ActiveUserIdsSupplier> and runs orphan eviction only when present. Absent → the
-            //  OptionalBinder default supplies Optional.empty() and only the retention purge runs.
+            // OptionalBinder default supplies Optional.empty() and only the retention purge runs.
             OptionalBinder<ActiveUserIdsSupplier> supplierBinder = OptionalBinder.newOptionalBinder(binder(), ActiveUserIdsSupplier.class);
             if (cleanupActiveUserIdsSupplierSpec != null) {
                 cleanupActiveUserIdsSupplierSpec.bind(ActiveUserIdsSupplier.class)

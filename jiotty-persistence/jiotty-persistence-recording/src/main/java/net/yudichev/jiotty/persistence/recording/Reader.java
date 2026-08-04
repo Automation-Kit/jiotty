@@ -23,7 +23,7 @@ public interface Reader {
     /// to a client without occupying (or blocking) a shared recording executor. `queryExecutor` must be effectively single-threaded for the call.
     ///
     /// @implSpec The default runs on the reader's own executor, ignoring `queryExecutor`; an implementation backed by a shared executor overrides this to
-    ///  run on the supplied executor.
+    /// run on the supplied executor.
     default CompletableFuture<Void> query(Executor queryExecutor,
                                           String queryTemplate,
                                           QueryStmtParamValueSetter paramValueSetter,

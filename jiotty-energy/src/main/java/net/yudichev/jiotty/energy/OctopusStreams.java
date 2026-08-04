@@ -43,8 +43,8 @@ public final class OctopusStreams {
     private static final Duration HALF_HOUR = Duration.ofMinutes(30);
     private static final Duration ONE_DAY = Duration.ofDays(1);
     // Cache schema versions for the Octopus connector DTOs cached by these streams. The DTOs live in jiotty-connector-octopusenergy, which must not depend on
-    //  the cache module to carry a @CacheSchemaVersion, so the version is declared here at stream-definition. Bump the relevant one when that DTO's serialized
-    //  shape changes (a renamed/removed/retyped field) so the old cached rows recompute instead of mis-decoding. They version independently.
+    // the cache module to carry a @CacheSchemaVersion, so the version is declared here at stream-definition. Bump the relevant one when that DTO's serialized
+    // shape changes (a renamed/removed/retyped field) so the old cached rows recompute instead of mis-decoding. They version independently.
     private static final int RATES_SCHEMA_VERSION = 1;
     private static final int STANDING_CHARGES_SCHEMA_VERSION = 1;
     private static final int CONSUMPTION_SCHEMA_VERSION = 1;
@@ -135,8 +135,8 @@ public final class OctopusStreams {
     /// not re-requested. Rows whose key falls outside `slots` are dropped.
     private static <T> Map<Instant, Optional<T>> indexByTombstoningMisses(SortedSet<Instant> slots, List<T> rows, Function<T, Instant> slotKeyExtractor) {
         // Seed every requested slot with a tombstone, then overwrite the slots a row lands on. One map, O(slots + rows): after seeding, the result's keys ARE
-        //  the requested slots, so replace() updates a seeded slot in a single O(1) lookup and no-ops for a row whose key isn't a requested slot — no separate
-        //  index, no per-row O(log) SortedSet membership probe.
+        // the requested slots, so replace() updates a seeded slot in a single O(1) lookup and no-ops for a row whose key isn't a requested slot — no separate
+        // index, no per-row O(log) SortedSet membership probe.
         var result = HashMap.<Instant, Optional<T>>newHashMap(slots.size());
         for (Instant slot : slots) {
             result.put(slot, Optional.empty());

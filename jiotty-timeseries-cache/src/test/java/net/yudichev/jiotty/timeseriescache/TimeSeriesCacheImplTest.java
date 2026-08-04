@@ -147,7 +147,7 @@ class TimeSeriesCacheImplTest {
     @Test
     void emptyOptional_isPersistedAsTombstone_andNotRecomputed() {
         // A slot resolved to Optional.empty() is written as a tombstone row. A re-compose (even via a freshly-registered stream whose lambda would now return
-        //  a value) must read it back as a known-empty hit — proving the tombstone frame round-trips through Postgres and suppresses recomputation.
+        // a value) must read it back as a known-empty hit — proving the tombstone frame round-trips through Postgres and suppresses recomputation.
         var firstCallSlots = new AtomicInteger();
         var tombstoning = service.defineStream(STREAM_A, Scope.user("user-1"), Resolution.daily(), ROW_TYPE, missingSlots -> {
             firstCallSlots.addAndGet(missingSlots.size());
@@ -169,7 +169,7 @@ class TimeSeriesCacheImplTest {
     @Test
     void rowWithStaleSchemaVersion_isWipedAndRecomputed_withoutAlerting() throws Exception {
         // A row written under an older schema version (here forced to 2 while the stream's type resolves to version 1) is a routine post-deploy mismatch: it
-        //  is discarded so the slot recomputes, the bad row is wiped, and NO admin alert fires (a version bump is expected, not corruption).
+        // is discarded so the slot recomputes, the bad row is wiped, and NO admin alert fires (a version bump is expected, not corruption).
         var staleFrame = new CodecRegistry(smileCodec, ImmutableList.of(smileCodec, jsonCodec))
                 .encode(Optional.of(new TestRow("2026-04-01", 1, "stale")), 2);
         insertRawRow(Scope.user("user-1"), STREAM_A, SLOT_APR_1, staleFrame);
@@ -202,7 +202,7 @@ class TimeSeriesCacheImplTest {
                                                                        String expectedScopeKind,
                                                                        String mustNotLeak) throws Exception {
         // A validly-framed row at the current version whose payload cannot be decoded (here a String payload read as a TestRow) is genuine corruption: it is
-        //  discarded + wiped + recomputed, and raises exactly one ERROR alert carrying only the stream family + scope kind (never the scope value or row data).
+        // discarded + wiped + recomputed, and raises exactly one ERROR alert carrying only the stream family + scope kind (never the scope value or row data).
         var corruptFrame = new CodecRegistry(smileCodec, ImmutableList.of(smileCodec, jsonCodec))
                 .encode(Optional.of("not a TestRow"), 1);
         insertRawRow(scope, streamId, SLOT_APR_1, corruptFrame);
@@ -398,7 +398,7 @@ class TimeSeriesCacheImplTest {
         service.deleteOlderThan(SLOT_APR_5).orTimeout(5, SECONDS).join();
 
         // Unlike deleteAllForScope/deleteAllForStream, the time-based purge leaves the handle live: re-defining the same (streamId, scope) returns the same
-        //  instance, not a fresh one.
+        // instance, not a fresh one.
         var same = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of(SLOT_APR_1, new TestRow("d", 9, "u")));
         assertThat(same).isSameAs(stream);
     }
@@ -583,7 +583,7 @@ class TimeSeriesCacheImplTest {
     @Test
     void readingJsonEncodedRow_stillRoundTripsViaSharedReadRegistry() {
         // A second cache instance with JSON-UTF-8 as the write codec writes into the same domain; the original Smile-writing service then reads it via the
-        //  shared read registry. Demonstrates that wire-format migration is forwards-and-backwards compatible per the codec abstraction.
+        // shared read registry. Demonstrates that wire-format migration is forwards-and-backwards compatible per the codec abstraction.
         var jsonWriter = newCache(new CodecRegistry(jsonCodec, ImmutableList.of(jsonCodec, smileCodec)));
         jsonWriter.start();
         try {

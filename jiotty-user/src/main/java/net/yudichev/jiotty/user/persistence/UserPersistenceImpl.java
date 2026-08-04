@@ -131,8 +131,8 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
                                   "FROM " + userTable + " u JOIN " + identityTable + " i ON u.id = i.user_id " +
                                   "WHERE i.provider=? AND i.provider_user_id=? AND i.deleted_at IS NULL AND u.deleted_at IS NULL";
         // Single-query resolution for the recovery / pending-deletion flow: join identity→user WITHOUT the deleted_at filter and return u.deleted_at so the
-        //  caller can tell Active from SoftDeleted. The identity rows are soft-deleted together with the user (softDeleteIdentitiesSql), so do NOT filter on
-        //  i.deleted_at — match on the still-unique (provider, provider_user_id).
+        // caller can tell Active from SoftDeleted. The identity rows are soft-deleted together with the user (softDeleteIdentitiesSql), so do NOT filter on
+        // i.deleted_at — match on the still-unique (provider, provider_user_id).
         resolveUserByIdentitySql = "SELECT u.id, u.email, u.display_name, u.timezone, u.created_at, u.updated_at, u.deleted_at " +
                                    "FROM " + userTable + " u JOIN " + identityTable + " i ON u.id = i.user_id " +
                                    "WHERE i.provider=? AND i.provider_user_id=?";
@@ -461,7 +461,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
                 try {
                     Instant now = timeProvider.currentInstant();
                     // Idempotent: the WHERE deleted_at IS NULL guard makes a repeat call a no-op (0 rows), mirroring restore/hardDelete — a re-issued
-                    //  soft-delete (e.g. crash-recovery reconciliation) must not fail.
+                    // soft-delete (e.g. crash-recovery reconciliation) must not fail.
                     doUpdate(connection,
                              softDeleteUserSql,
                              -1,

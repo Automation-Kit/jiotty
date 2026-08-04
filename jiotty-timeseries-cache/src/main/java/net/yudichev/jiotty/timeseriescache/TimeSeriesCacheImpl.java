@@ -100,7 +100,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         var domain = new PersistenceDomain(checkNotNull(domainName, "domainName"));
         domainConfig = new PersistenceDomainConfig(domain, schemaVersion, TimeSeriesCacheSchema.INIT_STATEMENTS, checkNotNull(migrator, "migrator"));
         // SQL identifier — safe to concatenate: `domain.prefix()` is `<domain.name>_` where `domain.name` is constrained by [PersistenceDomain] to
-        //  `[A-Za-z0-9_]+`, so `entryTable` matches the same shape. Every per-call data value below goes through `PreparedStatement.setX(...)`.
+        // `[A-Za-z0-9_]+`, so `entryTable` matches the same shape. Every per-call data value below goes through `PreparedStatement.setX(...)`.
         String entryTable = domain.prefix() + "entry";
         // `scope_value IS NOT DISTINCT FROM ?` matches across NULL/non-NULL — required because the column is nullable for [Scope.Global] rows. The UK
         // covering the same column list with NULLS NOT DISTINCT (see [TimeSeriesCacheSchema]) keeps ON CONFLICT inference unambiguous.
@@ -207,7 +207,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
                     while (rs.next()) {
                         Instant slotStart = rs.getObject(1, OffsetDateTime.class).toInstant();
                         // Present → cached value; Empty → tombstone (a known-empty hit, not recomputed); Discard → an undecodable row (stale schema version or
-                        //  corruption): omit it so the slot recomputes, and collect it for a batch wipe so the bad bytes don't linger and re-trip every read.
+                        // corruption): omit it so the slot recomputes, and collect it for a batch wipe so the bad bytes don't linger and re-trip every read.
                         switch (codecRegistry.decode(rs.getBytes(2), stream.type(), stream.schemaVersion())) {
                             case DecodeOutcome.Present<T>(T value) -> out.put(slotStart, Optional.of(value));
                             case DecodeOutcome.Empty<T> _ -> out.put(slotStart, Optional.empty());
@@ -297,8 +297,8 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
                 stmt.setObject(4, entry.getKey().atOffset(ZoneOffset.UTC));
 
                 // encode frames the value at the stream's current schema version, or a tombstone for an empty Optional. setBinaryStream over a
-                //  ByteArrayInputStream avoids pgjdbc's defensive byte[] copy that setBytes(byte[]) performs, so batch memory stays at one byte[] per row; the
-                //  frame is only read here, never mutated.
+                // ByteArrayInputStream avoids pgjdbc's defensive byte[] copy that setBytes(byte[]) performs, so batch memory stays at one byte[] per row; the
+                // frame is only read here, never mutated.
                 byte[] payload = codecRegistry.encode(entry.getValue(), stream.schemaVersion());
                 stmt.setBinaryStream(5, new ByteArrayInputStream(payload), payload.length);
 
@@ -365,7 +365,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
             stmt.setObject(1, cutoffExclusive.atOffset(ZoneOffset.UTC));
             int deleted = stmt.executeUpdate();
             // No streamsByKey eviction: this purge spans live streams, so the handles stay valid — a re-read of a purged past slot recomputes via the
-            //  stream's slotsComputation.
+            // stream's slotsComputation.
             logger.info("Time-series cache: deleted {} row(s) older than {}", deleted, cutoffExclusive);
             return deleted;
         } catch (SQLException e) {

@@ -51,7 +51,7 @@ class ThrottlingConsumerTest {
     @Test
     void suppressesDeliveryQueuedBeforeCloseButRunByExecutorAfterClose() {
         // accept() queues the delivery on the executor; it has not run yet because the clock has not ticked. Closing before the queued task runs must cancel
-        //  the delivery, mirroring component teardown where the throttle is closed while a delivery still sits on the executor that later drains it.
+        // the delivery, mirroring component teardown where the throttle is closed while a delivery still sits on the executor that later drains it.
         throttlingConsumer.accept("one");
         throttlingConsumer.close();
         clock.tick();
@@ -68,7 +68,7 @@ class ThrottlingConsumerTest {
         assertThat(delivered).containsExactly("one");
 
         // Advance to the throttle timer's due time without running it, then close: the timer task is now due but still queued, exactly as when the executor
-        //  drains a due timer after the throttle has been closed. Delivery must be suppressed and the drain must not throw.
+        // drains a due timer after the throttle has been closed. Delivery must be suppressed and the drain must not throw.
         clock.advanceTime(THROTTLING_PERIOD);
         throttlingConsumer.close();
 

@@ -213,7 +213,7 @@ class CodecRegistryTest {
         var registry = new CodecRegistry(SMILE, List.of(SMILE));
 
         // Frames too short to be a value frame (≥4 bytes) and not a tombstone (exactly [MAGIC, FMT_TOMBSTONE]) — all alarming discards:
-        //  empty; 3-byte (right magic + format but missing the second version byte); 2-byte right-magic-wrong-second-byte; 2-byte wrong-magic.
+        // empty; 3-byte (right magic + format but missing the second version byte); 2-byte right-magic-wrong-second-byte; 2-byte wrong-magic.
         assertThat(decodeDiscard(registry, new byte[0]).reason()).contains("too short");
         assertThat(decodeDiscard(registry, new byte[]{CodecRegistry.MAGIC, CodecRegistry.FMT_SMILE, 0x00}).reason()).contains("too short");
         assertThat(decodeDiscard(registry, new byte[]{CodecRegistry.MAGIC, CodecRegistry.FMT_SMILE, 0x00}).alarming()).isTrue();

@@ -473,7 +473,7 @@ class SseServiceImplTest {
     void closeHandleAfterStopIsNoOpAndDoesNotThrow() {
         var capture = connectSseClient();
         // Terminate the service's executor, mirroring component shutdown while a stream close is still pending. The returned close handle must then be a silent
-        //  no-op, not a RejectedExecutionException scheduled onto the terminated executor.
+        // no-op, not a RejectedExecutionException scheduled onto the terminated executor.
         sseService.stop();
         clock.tick();
 
@@ -498,15 +498,15 @@ class SseServiceImplTest {
         asUnchecked(() -> sseService.startSse(request, response, onStreamClosed));
 
         // Tear down in reverse dependency order — the SSE service first, then the registries it reads — mirroring per-user injector teardown, and only now tick
-        //  so the queued initial-image task drains after every component has stopped. It must skip all work and close the freshly-created client, not read the
-        //  stopped registries.
+        // so the queued initial-image task drains after every component has stopped. It must skip all work and close the freshly-created client, not read the
+        // stopped registries.
         sseService.stop();
         displayableRegistry.stop();
         optionRegistry.stop();
         clock.tick();
 
         // The drained task never initialised the stream (no hello/snapshot frames), proving it took the stopped-service short-circuit instead of reading the
-        //  registries. onStreamClosed still fires so the connection is not leaked.
+        // registries. onStreamClosed still fires so the connection is not leaked.
         assertThat(capture.output()).isEmpty();
         verify(onStreamClosed).run();
     }

@@ -104,9 +104,9 @@ final class TimeSeriesStreamImpl<T> implements TimeSeriesStream<T> {
                                                                           BitmapSlotSet missingSlots,
                                                                           Map<Instant, Optional<T>> computedSlots) {
         // Lazy view: filtering happens on iteration / lookup, no copy of the underlying map. `missingSlots.contains(...)` is O(1) on the bitmap, so
-        //  over-fetched entries the lambda returned outside the missing set fall out for free — those slots are already cached at known values and we
-        //  don't want surprise overwrites. Both present values and Optional.empty() tombstones inside the missing set are written back, so a slot the
-        //  computation declared definitively empty is cached as a tombstone and never recomputed; a slot it omitted entirely stays absent and is recomputed.
+        // over-fetched entries the lambda returned outside the missing set fall out for free — those slots are already cached at known values and we
+        // don't want surprise overwrites. Both present values and Optional.empty() tombstones inside the missing set are written back, so a slot the
+        // computation declared definitively empty is cached as a tombstone and never recomputed; a slot it omitted entirely stays absent and is recomputed.
         Map<Instant, Optional<T>> computedSlotsInRange = Maps.filterKeys(computedSlots, missingSlots::contains);
         if (computedSlotsInRange.isEmpty()) {
             return CompletableFuture.completedFuture(buildOrderedMap(fromInclusive, toInclusive, slotStep, hits, Map.of()));

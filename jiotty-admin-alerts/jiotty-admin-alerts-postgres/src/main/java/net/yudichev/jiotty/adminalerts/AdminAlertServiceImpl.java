@@ -115,7 +115,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
                                "WHERE dedup_key=? AND resolved_at IS NULL " +
                                "RETURNING id";
         // Single-statement CTE: branch on existence-and-state in one round-trip with a snapshot-consistent view (Postgres evaluates all CTEs against the
-        //  same snapshot), so there is no race between the existence check and the resolve. Returns 'RESOLVED' / 'ALREADY_RESOLVED' / 'UNKNOWN'.
+        // same snapshot), so there is no race between the existence check and the resolve. Returns 'RESOLVED' / 'ALREADY_RESOLVED' / 'UNKNOWN'.
         resolveByIdSql = "WITH target AS (SELECT id FROM " + alertTable + " WHERE id=?), " +
                          "updated AS (UPDATE " + alertTable +
                          " SET resolved_at=?, resolved_by=?, resolution_note=? WHERE id=? AND resolved_at IS NULL RETURNING 1) " +
@@ -159,8 +159,8 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
                     .whenComplete((_, error) -> {
                         if (error != null) {
                             // WARN, not INFO, despite the jiotty library log rule: a failed alert raise is an
-                            //  operationally significant failure (the alert is lost and the admin action will
-                            //  never happen). Do not demote to INFO.
+                            // operationally significant failure (the alert is lost and the admin action will
+                            // never happen). Do not demote to INFO.
                             logger.warn("Failed to raise alert with key {}", key, error);
                         }
                     });

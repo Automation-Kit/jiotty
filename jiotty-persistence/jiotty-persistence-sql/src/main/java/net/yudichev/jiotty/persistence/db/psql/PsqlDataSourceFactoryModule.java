@@ -42,7 +42,7 @@ public final class PsqlDataSourceFactoryModule extends BaseLifecycleComponentMod
         this.maximumPoolSizeSpec = checkNotNull(maximumPoolSizeSpec);
         this.meterRegistrySpec = checkNotNull(meterRegistrySpec);
         // Honour the caller's annotation so several independently-sized pools can coexist (e.g. a large recording pool alongside the default one); with no
-        //  annotation this is the plain DataSourceFactory, as before.
+        // annotation this is the plain DataSourceFactory, as before.
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 

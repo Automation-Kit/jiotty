@@ -82,7 +82,7 @@ final class CodecRegistry {
     public byte[] encode(Optional<?> value, int schemaVersion) {
         checkNotNull(value, "value");
         // Internal invariant: the only production caller passes a version already validated by CacheSchemaVersions.resolve, so an assert documents the
-        //  16-bit-field precondition without a runtime check on the write hot path.
+        // 16-bit-field precondition without a runtime check on the write hot path.
         assert schemaVersion >= CacheSchemaVersions.MIN_VERSION && schemaVersion <= CacheSchemaVersions.MAX_VERSION
                 : "schemaVersion must be in [" + CacheSchemaVersions.MIN_VERSION + ", " + CacheSchemaVersions.MAX_VERSION + "], was " + schemaVersion;
         return value.map(v -> encodeValue(v, schemaVersion)).orElse(TOMBSTONE_FRAME);
@@ -124,8 +124,8 @@ final class CodecRegistry {
             return new DecodeOutcome.Present<>(codec.decodePayload(frame, VALUE_HEADER_BYTES, frame.length - VALUE_HEADER_BYTES, type));
         } catch (RuntimeException e) {
             // Log the full exception (message + stack) at INFO, anti-spammed so a stream-wide decode failure produces one stack trace per window, not one per
-            //  row. Cached values are never confidential, so logging the codec's exception is safe. The Discard reason stays metadata-only (format + exception
-            //  class) because it feeds a PII-free admin alert.
+            // row. Cached values are never confidential, so logging the codec's exception is safe. The Discard reason stays metadata-only (format + exception
+            // class) because it feeds a PII-free admin alert.
             AntiSpamLogger.log(logger, DECODE_FAILURE_LOG_INTERVAL, Level.INFO,
                                "Discarding undecodable cached value (codec format {}); wiping and recomputing the slot", Byte.toUnsignedInt(formatId), e);
             return new DecodeOutcome.Discard<>(true, "format " + Byte.toUnsignedInt(formatId) + " payload failed to decode: " + e.getClass().getSimpleName());

@@ -101,7 +101,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
 
     private static class SqlBase<R> {
         /// Rows fetched per server round-trip when streaming a query result. Bounds client memory: with a positive fetch size (and autoCommit off) pgjdbc
-        ///  streams the result set in batches of this many rows instead of buffering the whole thing — see [#doQuery].
+        /// streams the result set in batches of this many rows instead of buffering the whole thing — see [#doQuery].
         protected static final int STREAM_FETCH_SIZE = 1000;
         protected static final String TIMESTAMP_COL_NAME = "timestamp";
         protected static final String USER_ID_COL_NAME = "user_id";
@@ -142,8 +142,8 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
             try {
                 boolean originalAutoCommit = connection.getAutoCommit();
                 // pgjdbc streams a result set in STREAM_FETCH_SIZE-row batches only when autoCommit is off and a positive fetch size is set; otherwise it
-                //  buffers the entire result client-side. The query is read-only — we commit purely to close the server-side cursor — and always restore
-                //  autoCommit so the pooled connection returns to its prior mode.
+                // buffers the entire result client-side. The query is read-only — we commit purely to close the server-side cursor — and always restore
+                // autoCommit so the pooled connection returns to its prior mode.
                 connection.setAutoCommit(false);
                 try (PreparedStatement stmt = connection.prepareStatement(sql)) {
                     stmt.setFetchSize(STREAM_FETCH_SIZE);
@@ -306,7 +306,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                                              ThrowingConsumer<? super QueryResultRow, ? extends SQLException> rowHandler) {
             return CompletableFuture.runAsync(() -> {
                 // The shared `calendar` is safe to reuse only when the query runs on the recording executor, where it is already confined alongside the
-                //  recorder. On any other executor the recorder keeps mutating it concurrently and java.util.Calendar is not thread-safe, so use a fresh one.
+                // recorder. On any other executor the recorder keeps mutating it concurrently and java.util.Calendar is not thread-safe, so use a fresh one.
                 Calendar queryCalendar = queryExecutor == executor ? calendar : utcCalendar();
                 var sql = resolveSql(queryTemplate);
                 try (var connection = dataSource.getConnection()) {

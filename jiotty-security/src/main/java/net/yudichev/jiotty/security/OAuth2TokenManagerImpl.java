@@ -336,7 +336,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     /// a streak; a later success ([#handleSuccessResponse]) ends the streak.
     ///
     /// @param fallbackRefreshToken the refresh token re-sent on each retry, or `null` when retrying an initial authorization-code exchange (which carries no
-    ///  prior refresh token)
+    /// prior refresh token)
     private void retryTokenRequestOrGiveUp(RequestBody formBody, @Nullable String fallbackRefreshToken, String description) {
         if (!retryingTokenRequest) {
             retryingTokenRequest = true;
@@ -367,7 +367,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     /// no pending request and no user-visible state.
     ///
     /// @param fallbackRefreshToken the refresh token re-sent on each retry, or `null` when the failed request was an initial authorization-code exchange
-    ///  (which carries no prior refresh token)
+    /// (which carries no prior refresh token)
     private void handleErrorResponse(RequestBody formBody, @Nullable String fallbackRefreshToken, OauthErrorResponse errorResponse) {
         String description = errorResponse.errorDescription().orElse(errorResponse.error());
         logger.info("[{}] token request failed: {} ({})", apiName, errorResponse.error(), description);

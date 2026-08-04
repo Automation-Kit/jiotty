@@ -106,7 +106,7 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
                 .setDaemon(true)
                 .build());
         // Evict a cancelled scheduled task from the queue at cancel time instead of holding it (and its captured graph) until its fire time — matters for
-        //  cancel-and-reschedule patterns like debounce. Set on the concrete pool because the ExecutorServiceMetrics wrapper does not expose these setters.
+        // cancel-and-reschedule patterns like debounce. Set on the concrete pool because the ExecutorServiceMetrics wrapper does not expose these setters.
         delegatePool.setRemoveOnCancelPolicy(true);
         // Shutdown discards any pending delayed task, so awaitTermination completes once the immediate work is done.
         delegatePool.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
@@ -117,7 +117,7 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
         } else {
             var tags = Tags.of("family", family);
             // monitor(...) both wraps the executor to time each task (execution + queue-wait) and registers the queue/active/pool/completed gauges; it tags
-            //  every meter with name=<name> plus these tags. The unique per-instance name lets the same-family gauges coexist without collision.
+            // every meter with name=<name> plus these tags. The unique per-instance name lets the same-family gauges coexist without collision.
             executor = ExecutorServiceMetrics.monitor(meterRegistry, delegatePool, name, tags);
             rejectedCounter = meterRegistry.counter("executor.rejected", Tags.of("name", name, "family", family, "reason", "queue_full"));
             // executor.queued (from monitor) is total queue depth; this gauge is the immediate-task (not scheduled) count the bound is enforced against.
@@ -221,8 +221,8 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
     /// scheduled/periodic tasks share the underlying JDK queue but must not consume the bound.
     private void reserveImmediateSlot() {
         // Unconditional getAndIncrement (a single LSE atomic on arm64, no CAS-retry loop), backed out on the reject path. The count can transiently overshoot
-        //  maxQueueSize by the number of racing producers before they back out, but acceptance stays hard-bounded: a producer proceeds only when its
-        //  pre-increment value was below the bound, so at most maxQueueSize tasks are ever accepted concurrently.
+        // maxQueueSize by the number of racing producers before they back out, but acceptance stays hard-bounded: a producer proceeds only when its
+        // pre-increment value was below the bound, so at most maxQueueSize tasks are ever accepted concurrently.
         if (pendingImmediateTasks.getAndIncrement() >= maxQueueSize) {
             pendingImmediateTasks.getAndDecrement();
             if (rejectedCounter != null) {

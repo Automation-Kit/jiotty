@@ -124,7 +124,7 @@ public final class InMemoryTimeSeriesCache implements TimeSeriesCache {
                 synchronized (lock) {
                     for (Instant slot : missingSlots) {
                         // A present value and an Optional.empty() tombstone are both retained (so the tombstone suppresses recomputation); a slot the
-                        //  computation omitted entirely stays absent and is recomputed on the next read.
+                        // computation omitted entirely stays absent and is recomputed on the next read.
                         Optional<T> value = computedSlots.get(slot);
                         if (value != null) {
                             rows.put(slot, value);

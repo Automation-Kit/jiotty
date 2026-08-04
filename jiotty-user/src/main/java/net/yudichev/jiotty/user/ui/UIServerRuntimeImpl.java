@@ -43,8 +43,8 @@ public final class UIServerRuntimeImpl extends BaseLifecycleComponent implements
             return DispatchResult.NOT_FOUND;
         }
         // No lock on this hot path: a request reaching a stopped/lifecycling runtime must report UNAVAILABLE rather than throw. isStarted() is a volatile
-        //  read, and handlersByPrefix is published through that same flag (written in doStart() before started flips true, never mutated afterwards or nulled
-        //  on stop), so reading it unlocked once started is safe. The caller decides how to render UNAVAILABLE.
+        // read, and handlersByPrefix is published through that same flag (written in doStart() before started flips true, never mutated afterwards or nulled
+        // on stop), so reading it unlocked once started is safe. The caller decides how to render UNAVAILABLE.
         if (!isStarted()) {
             return DispatchResult.UNAVAILABLE;
         }

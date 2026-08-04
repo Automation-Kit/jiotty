@@ -114,7 +114,7 @@ class OAuth2TokenManagerModuleTest {
             components.forEach(LifecycleComponent::start);
             try {
                 // Reaching Success means the manager found and loaded the persisted token; a subject id folded into the API name would key it elsewhere and
-                //  leave the manager waiting for a login that never comes.
+                // leave the manager waiting for a login that never comes.
                 OAuth2TokenManager manager = injector.getInstance(module.getExposedKey());
                 // The image is delivered on the manager's executor, so signal across threads rather than reading a list the executor has yet to fill.
                 var authenticated = new CompletableFuture<AuthState.Success>();

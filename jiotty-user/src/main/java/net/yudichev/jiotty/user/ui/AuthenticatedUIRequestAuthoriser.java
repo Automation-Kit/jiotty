@@ -150,7 +150,7 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
         return new UIRequestContext(boundRuntime,
                                     onInvalidated -> userTokenAuthoriser.subscribeToTokenState(token, state -> {
                                         // Close the stream when the token is no longer authenticated, or when a later authenticated state carries a different
-                                        //  runtime than the one this request was bound to — the bound runtime is superseded, so the client must reconnect.
+                                        // runtime than the one this request was bound to — the bound runtime is superseded, so the client must reconnect.
                                         switch (state) {
                                             case TokenAuthenticated authenticated when authenticated.uiServerRuntime() == boundRuntime -> {
                                             }

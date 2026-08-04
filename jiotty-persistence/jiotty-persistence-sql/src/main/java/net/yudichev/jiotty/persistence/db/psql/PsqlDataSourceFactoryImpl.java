@@ -56,7 +56,7 @@ public final class PsqlDataSourceFactoryImpl implements DataSourceFactory {
         poolConfig.setUsername(connectionConfig.username());
         poolConfig.setPassword(connectionConfig.password());
         // Fixed-size pool: minimum-idle pinned to the maximum, as HikariCP recommends, so the connections stay open and a request never waits on
-        //  connection establishment under load.
+        // connection establishment under load.
         poolConfig.setMaximumPoolSize(maximumPoolSize);
         poolConfig.setMinimumIdle(maximumPoolSize);
         // added after this error was logged
