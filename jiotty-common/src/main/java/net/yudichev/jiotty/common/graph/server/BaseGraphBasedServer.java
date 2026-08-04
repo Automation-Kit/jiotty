@@ -16,15 +16,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.function.DoubleSupplier;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.Closeable.closeIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     private static final int PANIC_COUNT_BEFORE_ALERT = 10;
@@ -76,7 +73,10 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     @Override
     protected final void doStop() {
         doStop0();
-        awaitShutdown(executor.submit(this::stopSync));
+        // Hand the graph teardown to the executor and return: it runs on the executor's own thread, before the executor is closed, because the executor is
+        // registered ahead of this server and therefore closed after it. Waiting here would deadlock whenever this server is stopped from a task already
+        // running on that executor.
+        executor.execute(name(), this::stopSync);
     }
 
     protected final void stopSync() {
@@ -107,11 +107,6 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     /// graph waves ever run
     protected final @Nullable Instant lastWaveTime() {
         return EvenMoreObjects.mapIfNotNull(graphRunner, r -> r.graph().lastWaveTime());
-    }
-
-    /// For tests.
-    protected void awaitShutdown(CompletableFuture<Void> nodeClosingFuture) {
-        getAsUnchecked(() -> nodeClosingFuture.get(5, SECONDS));
     }
 
     protected void handlePanic(@Nullable String message, @Nullable Throwable cause) {

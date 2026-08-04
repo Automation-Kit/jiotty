@@ -22,8 +22,9 @@ final class DeterministicExecutor extends BaseIdempotentCloseable implements Sch
 
     @Override
     public <T> CompletableFuture<T> submit(Callable<? extends T> task) {
+        checkNotClosed();
         var resultFuture = new CompletableFuture<T>();
-        schedule(Duration.ZERO, () -> {
+        clock.executeImmediate(this, () -> {
             try {
                 resultFuture.complete(task.call());
             } catch (Exception e) {
@@ -31,11 +32,6 @@ final class DeterministicExecutor extends BaseIdempotentCloseable implements Sch
             }
         });
         return resultFuture;
-    }
-
-    @Override
-    public void executeAndAwaitIfLive(Runnable command, Duration timeout) {
-        execute(command);
     }
 
     @Override
@@ -50,6 +46,8 @@ final class DeterministicExecutor extends BaseIdempotentCloseable implements Sch
         return clock.scheduleAtFixedRate(this, initialDelay, period, command);
     }
 
+    /// Drains this executor's immediate backlog before marking it closed, so work submitted to it during shutdown runs here exactly as it does on a live
+    /// executor. The executor is open for the duration of the drain, so a task may submit follow-up work.
     @Override
     public void doClose() {
         clock.closeExecutor(this);

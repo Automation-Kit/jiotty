@@ -49,8 +49,11 @@ public final class OptionRegistryImpl extends BaseLifecycleComponent implements 
             optionsPersistenceRegistrations.add(persistenceRegistration);
             logger.info("Registered option {}", option.meta().key());
             snapshotChangeListeners.notify(null);
+            // An owner commonly unregisters from its own teardown, which can run after this registry has stopped, so this takes the lifecycle lock and does
+            // nothing once stopped. Notifying the snapshot listeners then reaches subscribers whose executor has already terminated, and this registry's own
+            // state is unreachable by that point.
             return idempotent(() -> whenNotLifecycling(() -> {
-                if (optionsByKey.remove(option.meta().key(), option)) {
+                if (isStarted() && optionsByKey.remove(option.meta().key(), option)) {
                     Closeable.closeIfNotNull(persistenceRegistration);
                     optionsPersistenceRegistrations.remove(persistenceRegistration);
                     logger.info("Unregistered option {}", option.meta().key());

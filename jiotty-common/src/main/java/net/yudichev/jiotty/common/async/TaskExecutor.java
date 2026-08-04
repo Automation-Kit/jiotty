@@ -1,10 +1,9 @@
 package net.yudichev.jiotty.common.async;
 
-import net.yudichev.jiotty.common.inject.LifecycleComponent;
+import net.yudichev.jiotty.common.lang.Closeable;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.time.Duration;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -22,13 +21,22 @@ public interface TaskExecutor extends Executor {
 
     @Override
     default void execute(Runnable command) {
-        submit(guarded(logger, "task", command));
+        execute("task", command);
     }
 
-    /// Execute the specified command on the executor's thread and await its completion if the task with the specified timeout, but **only** if the executor is
-    /// backed by the unique live thread. This is designed to be used in [LifecycleComponent#stop()] implementations so that the shutdown is happening on the
-    /// executor's thread and completes fully before the method completes, while at the same time being compatible with [ProgrammableClock].
-    void executeAndAwaitIfLive(Runnable command, Duration timeout);
+    /// Executes `command` on this executor's thread, tagging it `taskName` so an uncaught failure is reported against a name a reader recognises.
+    default void execute(String taskName, Runnable command) {
+        submit(guarded(logger, taskName, command));
+    }
+
+    /// Queues the closing of `resources` on this executor's thread and returns, for resources confined to that thread. Each resource closes independently,
+    /// a failure in one being logged and the others closed, as [Closeable#closeSafelyIfNotNull(Logger, Closeable...)] does.
+    ///
+    /// @param taskName       identifies the work in a failure report
+    /// @param resourceLogger the caller's logger, so a close failure is attributed to the component that owned the resource
+    default void executeClose(String taskName, Logger resourceLogger, Closeable... resources) {
+        execute(taskName, () -> Closeable.closeSafelyIfNotNull(resourceLogger, resources));
+    }
 
     static Callable<Void> toCallable(Runnable command) {
         return () -> {

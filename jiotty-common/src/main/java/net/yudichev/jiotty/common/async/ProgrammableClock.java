@@ -105,7 +105,17 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
     }
 
     Closeable schedule(DeterministicExecutor executor, TemporalAmount delay, Runnable command) {
-        Task task = new Task(executor) {
+        return scheduleOneTime(executor, delay, command, false);
+    }
+
+    /// Submits an `execute`/`submit` task — the deterministic equivalent of a live executor's immediate task. Immediate tasks are the ones [#closeExecutor]
+    /// drains; delayed ones are discarded, mirroring [SingleThreadedSchedulingExecutor].
+    void executeImmediate(DeterministicExecutor executor, Runnable command) {
+        scheduleOneTime(executor, Duration.ZERO, command, true);
+    }
+
+    private Closeable scheduleOneTime(DeterministicExecutor executor, TemporalAmount delay, Runnable command, boolean immediate) {
+        Task task = new Task(executor, immediate) {
             @Override
             public void doRun() {
                 command.run();
@@ -114,7 +124,7 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
 
             @Override
             public String toString() {
-                return "Delayed(" + delay + "): " + command;
+                return (immediate ? "Immediate: " : "Delayed(" + delay + "): ") + command;
             }
         };
         task.schedule(currentInstant().plus(delay));
@@ -122,7 +132,7 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
     }
 
     Closeable scheduleAtFixedRate(DeterministicExecutor executor, TemporalAmount initialDelay, TemporalAmount period, Runnable command) {
-        Task task = new Task(executor) {
+        Task task = new Task(executor, false) {
             @Override
             public void doRun() {
                 command.run();
@@ -143,9 +153,28 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
         return task;
     }
 
+    /// Mirrors [SingleThreadedSchedulingExecutor#close()]: runs `executor`'s immediate-task backlog to completion — including the immediate follow-ups those
+    /// tasks submit — then discards work scheduled on it that has yet to fire, matching what a live executor does on shutdown.
     void closeExecutor(DeterministicExecutor executor) {
-        // simulate taking 1 second to close the executor completely;
-        schedule(executor, Duration.ofSeconds(1), () -> removeTasksOf(executor));
+        for (Task dueTask = nextDueImmediateTaskOf(executor); dueTask != null; dueTask = nextDueImmediateTaskOf(executor)) {
+            dueTask.run();
+        }
+        removeTasksOf(executor);
+    }
+
+    /// Locates the next task for [#closeExecutor] to drain. Running a task mutates [#tasksByTriggerTime], so the search completes and hands the task back
+    /// before it runs.
+    ///
+    /// @return one of `executor`'s immediate tasks that is due now, or `null` once its immediate backlog is quiescent
+    private @Nullable Task nextDueImmediateTaskOf(DeterministicExecutor executor) {
+        for (List<Task> tasks : tasksByTriggerTime.headMap(currentInstant(), true).values()) {
+            for (Task task : tasks) {
+                if (task.immediate && task.executor == executor) {
+                    return task;
+                }
+            }
+        }
+        return null;
     }
 
     private void removeTasksOf(DeterministicExecutor executor) {
@@ -174,10 +203,14 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
 
     private abstract class Task extends BaseIdempotentCloseable implements Runnable {
         private final DeterministicExecutor executor;
+        /// `true` for an `execute`/`submit` task, `false` for one scheduled with a delay — the distinction [#closeExecutor] drains on and discards on
+        /// respectively, mirroring the immediate/scheduled split in [SingleThreadedSchedulingExecutor].
+        private final boolean immediate;
         protected @Nullable Instant due;
 
-        protected Task(DeterministicExecutor executor) {
+        protected Task(DeterministicExecutor executor, boolean immediate) {
             this.executor = checkNotNull(executor);
+            this.immediate = immediate;
         }
 
         @Override

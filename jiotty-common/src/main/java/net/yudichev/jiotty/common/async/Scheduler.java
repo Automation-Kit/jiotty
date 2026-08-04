@@ -4,6 +4,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 
 import java.time.Duration;
 
+/// Schedules work to run later on an executor's thread.
 public interface Scheduler {
     Closeable schedule(Duration delay, Runnable command);
 

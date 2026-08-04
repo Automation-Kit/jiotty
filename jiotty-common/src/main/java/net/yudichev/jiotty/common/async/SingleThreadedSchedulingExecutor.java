@@ -132,7 +132,7 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
     public <T> CompletableFuture<T> submit(Callable<? extends T> task) {
         reserveImmediateSlot();
         var resultFuture = new CompletableFuture<T>();
-        executor.execute(() -> runImmediate(() -> {
+        executor.execute(() -> runImmediate("task", () -> {
             try {
                 resultFuture.complete(task.call());
             } catch (Exception e) {
@@ -143,22 +143,9 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
     }
 
     @Override
-    public void execute(Runnable command) {
+    public void execute(String taskName, Runnable command) {
         reserveImmediateSlot();
-        executor.execute(() -> runImmediate(command));
-    }
-
-    @Override
-    public void executeAndAwaitIfLive(Runnable command, Duration timeout) {
-        reserveImmediateSlot();
-        try {
-            executor.submit(() -> runImmediate(command)).get(timeout.toNanos(), NANOSECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException(e);
-        } catch (ExecutionException | TimeoutException e) {
-            throw new RuntimeException(e);
-        }
+        executor.execute(() -> runImmediate(taskName, command));
     }
 
     @Override
@@ -247,9 +234,9 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
 
     /// Runs one reserved immediate task on the executor thread: releases its bound slot, then runs `command` under the exception guard — applied
     /// allocation-free via [Runnables#runGuarded], so an immediate submit wraps `command` in a single object rather than a guard wrapper plus a slot wrapper.
-    private void runImmediate(Runnable command) {
+    private void runImmediate(String taskName, Runnable command) {
         pendingImmediateTasks.decrementAndGet();
-        Runnables.runGuarded(logger, "task", command, taskExceptionHandler);
+        Runnables.runGuarded(logger, taskName, command, taskExceptionHandler);
     }
 
     private static void removeMeters(MeterRegistry meterRegistry, String name, String family) {

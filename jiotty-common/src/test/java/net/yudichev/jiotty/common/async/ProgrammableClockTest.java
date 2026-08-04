@@ -279,6 +279,63 @@ class ProgrammableClockTest {
     }
 
     @Test
+    void closeDrainsImmediateBacklogWithoutTick() {
+        executor.execute(task);
+
+        executor.close();
+
+        verify(task).run();
+    }
+
+    @Test
+    void closeDrainsImmediateFollowUpsSubmittedByDrainingTasks(@Mock Runnable followUp) {
+        executor.execute(() -> executor.execute(followUp));
+
+        executor.close();
+
+        verify(followUp).run();
+    }
+
+    @Test
+    void closeDrainsOnlyItsOwnExecutorsBacklog(@Mock Runnable otherExecutorTask) {
+        SchedulingExecutor executor2 = clock.createSingleThreadedSchedulingExecutor("executor2");
+        executor.execute(task);
+        executor2.execute(otherExecutorTask);
+
+        executor2.close();
+
+        verify(otherExecutorTask).run();
+        verify(task, never()).run();
+    }
+
+    @Test
+    void closeDiscardsAZeroDelayScheduledTask() {
+        // Zero delay makes it due at the instant the drain examines, and close discards scheduled work
+        executor.schedule(Duration.ZERO, task);
+
+        executor.close();
+
+        verify(task, never()).run();
+    }
+
+    @Test
+    void submitAfterCloseIsRejected() {
+        executor.close();
+
+        assertThrows(IllegalStateException.class, () -> executor.execute(task));
+    }
+
+    @Test
+    void closeDiscardsDelayedTaskScheduledWhileDraining() {
+        executor.execute(() -> executor.schedule(Duration.ofSeconds(1), task));
+
+        executor.close();
+
+        clock.advanceTimeAndTick(Duration.ofSeconds(1));
+        verify(task, never()).run();
+    }
+
+    @Test
     void closingOneExecutorCancelsItsTasks_sameTime(@Mock Runnable task2) {
         SchedulingExecutor executor2 = clock.createSingleThreadedSchedulingExecutor("executor2");
         executor.schedule(Duration.ofSeconds(2), task);

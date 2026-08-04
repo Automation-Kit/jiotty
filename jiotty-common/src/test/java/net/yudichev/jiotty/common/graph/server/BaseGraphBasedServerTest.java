@@ -26,6 +26,18 @@ class BaseGraphBasedServerTest {
     }
 
     @Test
+    void stopHandsGraphTeardownToTheExecutorAndReturns() {
+        server.stop();
+
+        assertThat(server.graphIsActive()).as("stop returns without waiting for the teardown").isTrue();
+
+        // The executor's drain runs the queued teardown, as it does at shutdown
+        executor.close();
+
+        assertThat(server.graphIsActive()).as("the drain closes the graph").isFalse();
+    }
+
+    @Test
     void panic_messageOnly_handlePanicReceivesMessageAndNullCause() {
         server.runner().panic("disk full", null);
         clock.tick();
@@ -97,6 +109,10 @@ class BaseGraphBasedServerTest {
 
         GraphRunner runner() {
             return checkRunner();
+        }
+
+        boolean graphIsActive() {
+            return graphActive();
         }
 
         @Override

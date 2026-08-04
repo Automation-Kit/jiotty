@@ -62,8 +62,11 @@ public final class DisplayableRegistryImpl extends BaseLifecycleComponent implem
             }
             logger.info("Registered displayable {} with title {}", displayable, displayable.getDisplayName());
             registrationListeners.notify(displayable);
-            return idempotent(() -> whenStartedAndNotLifecycling(() -> {
-                if (displayablesById.remove(displayable.getId(), displayable)) {
+            // A Displayable owner commonly unregisters from its own teardown code, which can run after this registry has stopped, so this takes the lifecycle
+            // lock and does nothing once stopped. Everything below is moot by then: this registry's map is unreachable, and the throttle's timer was cancelled
+            // by the executor as it closed. Touching them reaches into a terminated executor.
+            return idempotent(() -> whenNotLifecycling(() -> {
+                if (isStarted() && displayablesById.remove(displayable.getId(), displayable)) {
                     Closeable.closeSafelyIfNotNull(logger, throttle, dataSubscription);
                     logger.info("Unregistered displayable {} with title {}", displayable, displayable.getDisplayName());
                 }

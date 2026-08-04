@@ -1,6 +1,8 @@
 package net.yudichev.jiotty.common.async;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SingleThreadedSchedulingExecutorTest {
+    private static final Logger logger = LogManager.getLogger(SingleThreadedSchedulingExecutorTest.class);
+
     private ListenerBackedTaskExceptionHandlerRegistry exceptionHandler;
     private SingleThreadedSchedulingExecutor executor;
 
@@ -43,6 +47,39 @@ class SingleThreadedSchedulingExecutorTest {
         });
 
         assertThat(captured).succeedsWithin(Duration.ofSeconds(10)).isSameAs(failure);
+    }
+
+    @Test
+    void reportsFailedTaskUnderTheNameItWasSubmittedWith() {
+        var capturedName = new CompletableFuture<String>();
+        exceptionHandler.addExceptionHandler((taskName, _) -> capturedName.complete(taskName));
+
+        executor.execute("teardown of SomeComponent", () -> {
+            throw new RuntimeException("boom");
+        });
+
+        assertThat(capturedName).succeedsWithin(Duration.ofSeconds(10)).isEqualTo("teardown of SomeComponent");
+    }
+
+    @Test
+    void closesResourcesOnTheExecutorThread() {
+        var closingThread = new CompletableFuture<Thread>();
+
+        executor.executeClose("teardown", logger, () -> closingThread.complete(Thread.currentThread()));
+
+        assertThat(closingThread).succeedsWithin(Duration.ofSeconds(10))
+                                 .satisfies(thread -> assertThat(thread.getName()).startsWith("test-"));
+    }
+
+    @Test
+    void closesEveryResourceEvenWhenOneFails() {
+        var secondClosed = new CompletableFuture<Void>();
+
+        executor.executeClose("teardown", logger, () -> {
+            throw new RuntimeException("boom");
+        }, () -> secondClosed.complete(null));
+
+        assertThat(secondClosed).succeedsWithin(Duration.ofSeconds(10));
     }
 
     @Test
