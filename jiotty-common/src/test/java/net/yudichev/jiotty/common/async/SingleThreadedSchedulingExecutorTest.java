@@ -225,6 +225,47 @@ class SingleThreadedSchedulingExecutorTest {
                 .isNull();
     }
 
+    @Test
+    void tryExecuteRunsTheTaskWhileTheExecutorIsLive() {
+        var ran = new CompletableFuture<Void>();
+
+        boolean queued = executor.tryExecute("test", () -> ran.complete(null));
+
+        assertThat(queued).isTrue();
+        assertThat(ran).succeedsWithin(Duration.ofSeconds(10));
+    }
+
+    @Test
+    void tryExecuteDiscardsTheTaskOnceTheExecutorIsClosed() {
+        var ran = new CompletableFuture<Void>();
+        executor.close();
+
+        boolean queued = executor.tryExecute("test", () -> ran.complete(null));
+
+        assertThat(queued).as("a closed executor reports it cannot take the task").isFalse();
+        assertThat(ran).as("a discarded task never runs").isNotDone();
+    }
+
+    /// A producer's callback must not have an exception thrown at it when the bound is reached either, so the drop is reported the same way — and stays
+    /// visible through the rejection counter that the shedding alert watches.
+    @Test
+    void tryExecuteDiscardsTheTaskAndCountsItWhenTheQueueIsFull() {
+        var registry = new SimpleMeterRegistry();
+        try (var boundedExecutor = new SingleThreadedSchedulingExecutor("bounded", "fam", 1, exceptionHandler, registry)) {
+            CountDownLatch release = occupy(boundedExecutor);
+            boundedExecutor.execute(() -> {});   // fills the single queue slot behind the occupying task
+
+            boolean queued = boundedExecutor.tryExecute("test", () -> {});
+
+            assertThat(queued).isFalse();
+            assertThat(registry.get("executor.rejected").tags("name", "bounded", "reason", "queue_full").counter().count()).isEqualTo(1.0);
+            assertThat(registry.get("executor.queued.immediate").tags("name", "bounded").gauge().value())
+                    .as("the discarded task released the slot it reserved")
+                    .isEqualTo(1.0);
+            release.countDown();
+        }
+    }
+
     /// Occupies the executor's single thread until the returned latch is counted down, so any task submitted afterwards queues behind it.
     private static CountDownLatch occupy(SingleThreadedSchedulingExecutor executor) {
         var running = new CountDownLatch(1);

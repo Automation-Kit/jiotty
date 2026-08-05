@@ -29,6 +29,16 @@ public interface TaskExecutor extends Executor {
         submit(guarded(logger, taskName, command));
     }
 
+    /// Executes `command` as [#execute(String, Runnable)] does when this executor can take it, and discards it otherwise, reporting which happened. Use this
+    /// for work whose caller has established it is safe to drop — canonically a callback from a producer that outlives the caller, which can arrive once this
+    /// executor is closed. Work carrying a durability or compliance obligation goes through [#execute(String, Runnable)], which fails loudly.
+    ///
+    /// @return `true` if `command` was queued, `false` if it was discarded
+    default boolean tryExecute(String taskName, Runnable command) {
+        execute(taskName, command);
+        return true;
+    }
+
     /// Queues the closing of `resources` on this executor's thread and returns, for resources confined to that thread. Each resource closes independently,
     /// a failure in one being logged and the others closed, as [Closeable#closeSafelyIfNotNull(Logger, Closeable...)] does.
     ///

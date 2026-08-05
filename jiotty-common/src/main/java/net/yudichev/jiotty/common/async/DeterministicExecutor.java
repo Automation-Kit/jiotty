@@ -34,6 +34,16 @@ final class DeterministicExecutor extends BaseIdempotentCloseable implements Sch
         return resultFuture;
     }
 
+    /// Discards `command` once this executor is closed, matching the live executor so a test drives the same branch production does.
+    @Override
+    public boolean tryExecute(String taskName, Runnable command) {
+        if (closed) {
+            return false;
+        }
+        execute(taskName, command);
+        return true;
+    }
+
     @Override
     public Closeable schedule(Duration delay, Runnable command) {
         checkNotClosed();

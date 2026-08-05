@@ -168,7 +168,9 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
             Closeable listenerRegistration = activeEventStream.listeners.addListener(eventHandler);
             eventStreamListenerRegistrationCount++;
             logger.debug("[{}] Subscribed to events {}, registrations now: {}", deviceId, eventHandler, eventStreamListenerRegistrationCount);
-            return idempotent(() -> whenStartedAndNotLifecycling(() -> {
+            // A subscriber commonly unsubscribes from its own teardown, which can run after this component stopped and its event stream was shut down;
+            // reference counting a torn-down stream would leave the bookkeeping inconsistent.
+            return idempotent(() -> ifNotStopped(() -> {
                 listenerRegistration.close();
                 eventStreamListenerRegistrationCount--;
                 logger.debug("[{}] Unsubscribed from events {}, registrations now: {}", deviceId, eventHandler, eventStreamListenerRegistrationCount);

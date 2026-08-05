@@ -130,22 +130,35 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
 
     @Override
     public <T> CompletableFuture<T> submit(Callable<? extends T> task) {
-        reserveImmediateSlot();
         var resultFuture = new CompletableFuture<T>();
-        executor.execute(() -> runImmediate("task", () -> {
+        reserveAndPost("task", () -> {
             try {
                 resultFuture.complete(task.call());
             } catch (Exception e) {
                 resultFuture.completeExceptionally(e);
             }
-        }));
+        });
         return resultFuture;
     }
 
     @Override
     public void execute(String taskName, Runnable command) {
-        reserveImmediateSlot();
-        executor.execute(() -> runImmediate(taskName, command));
+        reserveAndPost(taskName, command);
+    }
+
+    /// Discards `command` once this executor is shutting down, and once its immediate-task bound is reached — the latter already counted by
+    /// `executor.rejected{reason="queue_full"}`, which alerts on any shedding, so a drop stays visible without an exception reaching the caller's thread.
+    @Override
+    public boolean tryExecute(String taskName, Runnable command) {
+        if (delegatePool.isShutdown()) {
+            return false;
+        }
+        try {
+            reserveAndPost(taskName, command);
+            return true;
+        } catch (RejectedExecutionException e) {
+            return false;
+        }
     }
 
     @Override
@@ -229,6 +242,18 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
                 rejectedCounter.increment();
             }
             throw new RejectedExecutionException("Executor '" + threadNameBase + "' rejected a task: queue is full (" + maxQueueSize + ')');
+        }
+    }
+
+    /// Reserves a bound slot for `command` and posts it to the pool, releasing the slot again if the post fails so [#pendingImmediateTasks] tracks exactly
+    /// what the pool holds. Reservation throws once the immediate-task bound is reached; the post throws once the pool has shut down.
+    private void reserveAndPost(String taskName, Runnable command) {
+        reserveImmediateSlot();
+        try {
+            executor.execute(() -> runImmediate(taskName, command));
+        } catch (RuntimeException e) {
+            pendingImmediateTasks.decrementAndGet();
+            throw e;
         }
     }
 

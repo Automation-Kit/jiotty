@@ -111,14 +111,14 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                 .build();
         // Cache the latest access token for the request initializer and re-publish the token manager's state as our auth state (hiding the raw token). The
         // callback fires on the token manager's executor, so marshal onto our executor to keep accessToken single-threaded with the API calls that read it.
-        tokenSubscription = tokenManager.subscribeToAccessTokenState(state -> executor.execute(() -> {
+        tokenSubscription = tokenManager.subscribeToAccessTokenState(state -> executor.tryExecute("onTokenState", () -> ifNotStopped(() -> {
             if (state instanceof AuthState.Success(String authInfo)) {
                 accessToken = authInfo;
                 authState.accept(AUTHENTICATED);
             } else {
                 authState.accept(state);
             }
-        }));
+        })));
         // A freshly-supplied auth code means the user has just logged in; exchange it. Otherwise the token manager refreshes the persisted token on its own.
         authCode.ifPresent(code -> tokenManager.onNewAuthCode(code, redirectUri, codeVerifier));
     }

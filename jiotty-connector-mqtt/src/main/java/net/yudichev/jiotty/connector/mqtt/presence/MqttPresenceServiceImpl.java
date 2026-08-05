@@ -57,7 +57,7 @@ final class MqttPresenceServiceImpl extends BaseLifecycleComponent implements Mq
     protected void doStart() {
         executor = executorFactory.createSingleThreadedSchedulingExecutor(name);
         mqttSubscription = mqtt.subscribe(topic,
-                                          (topic, data) -> executor.execute(() -> onMsg(topic, data)));
+                                          (topic, data) -> executor.tryExecute("onMsg", () -> ifNotStopped(() -> onMsg(topic, data))));
         scheduleTimeout();
     }
 

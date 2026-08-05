@@ -201,7 +201,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         retryExecutor
                 .withBackOffAndRetry("octopusAccount.getAccount",
                                      accountService::getAccount,
-                                     (_, throwable) -> executor.execute(() -> publishFailed(throwable)))
+                                     (_, throwable) -> executor.tryExecute("publishFailed", () -> ifNotStopped(() -> publishFailed(throwable))))
                 .thenAcceptAsync(this::publishLoaded, executor)
                 .whenCompleteAsync((_, throwable) -> {
                     if (throwable != null) {
@@ -269,7 +269,8 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
             octopusSubscription = null;
             currentOctopusResult = null;
             EnergyPriceService octopusDelegate = octopusRegistry.forTariff(productCode, tariffCode);
-            octopusSubscription = octopusDelegate.subscribeToPrices(result -> executor.execute(() -> onOctopusResult(result)));
+            octopusSubscription = octopusDelegate.subscribeToPrices(
+                    result -> executor.tryExecute("onOctopusResult", () -> ifNotStopped(() -> onOctopusResult(result))));
             currentTariffCode = tariffCode;
         }
 
@@ -279,7 +280,8 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
             agilePredictSubscription = null;
             currentAgilePredictPrices = null;
             EnergyPriceService agilePredictDelegate = agilePredictRegistry.forRegion(regionLetter);
-            agilePredictSubscription = agilePredictDelegate.subscribeToPrices(result -> executor.execute(() -> onAgilePredictResult(result)));
+            agilePredictSubscription = agilePredictDelegate.subscribeToPrices(
+                    result -> executor.tryExecute("onAgilePredictResult", () -> ifNotStopped(() -> onAgilePredictResult(result))));
             currentRegion = regionLetter;
         }
     }
