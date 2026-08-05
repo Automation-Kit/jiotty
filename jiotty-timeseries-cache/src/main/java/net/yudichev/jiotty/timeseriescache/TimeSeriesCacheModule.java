@@ -17,7 +17,6 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainModule;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.timeseriescache.cleanup.ActiveUserIdsSupplier;
-import net.yudichev.jiotty.timeseriescache.cleanup.CacheRetention;
 import net.yudichev.jiotty.timeseriescache.cleanup.TimeSeriesCacheCleanupJob;
 import org.jspecify.annotations.Nullable;
 
@@ -57,7 +56,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
                                   @Nullable BindingSpec<VarStore> cleanupVarStoreSpec,
                                   @Nullable BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec,
                                   BindingSpec<Duration> cleanupIntervalSpec,
-                                  BindingSpec<Duration> cleanupRetentionSpec) {
+                                  @Nullable BindingSpec<Duration> cleanupRetentionSpec) {
         exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
         this.alertServiceSpec = checkNotNull(alertServiceSpec, "alertServiceSpec");
@@ -66,7 +65,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
         this.cleanupVarStoreSpec = cleanupVarStoreSpec;
         this.cleanupActiveUserIdsSupplierSpec = cleanupActiveUserIdsSupplierSpec;
         this.cleanupIntervalSpec = checkNotNull(cleanupIntervalSpec, "cleanupIntervalSpec");
-        this.cleanupRetentionSpec = checkNotNull(cleanupRetentionSpec, "cleanupRetentionSpec");
+        this.cleanupRetentionSpec = cleanupRetentionSpec;
     }
 
     public static Builder builder() {
@@ -128,6 +127,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
             cleanupIntervalSpec.bind(Duration.class)
                                .annotatedWith(TimeSeriesCacheCleanupJob.CleanupInterval.class)
                                .installedBy(this::installLifecycleComponentModule);
+            assert cleanupRetentionSpec != null : "retention is set by the same builder methods that set the VarStore that enables cleanup";
             cleanupRetentionSpec.bind(Duration.class)
                                 .annotatedWith(TimeSeriesCacheCleanupJob.CleanupRetention.class)
                                 .installedBy(this::installLifecycleComponentModule);
@@ -180,7 +180,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
         private @Nullable BindingSpec<VarStore> cleanupVarStoreSpec;
         private @Nullable BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec;
         private BindingSpec<Duration> cleanupIntervalSpec = literally(Duration.ofHours(24));
-        private BindingSpec<Duration> cleanupRetentionSpec = literally(CacheRetention.DEFAULT_RETENTION);
+        private @Nullable BindingSpec<Duration> cleanupRetentionSpec;
 
         public Builder setDataSourceFactory(BindingSpec<DataSourceFactory> dataSourceFactorySpec) {
             this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
@@ -205,28 +205,27 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
         }
 
         /// Enables the periodic cleanup job with both its actions. The `VarStore` (for next-run-timestamp persistence) enables the always-on retention purge;
-        /// the [ActiveUserIdsSupplier] additionally enables orphan eviction. To enable only the retention purge, use [#withRetentionCleanup] instead.
-        public Builder withCleanup(BindingSpec<VarStore> cleanupVarStoreSpec, BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec) {
-            withRetentionCleanup(cleanupVarStoreSpec);
+        /// the [ActiveUserIdsSupplier] additionally enables orphan eviction. `retention` is the horizon: rows with `slot_start` older than `now − retention`
+        /// are purged. To enable only the retention purge, use [#withRetentionCleanup] instead.
+        public Builder withCleanup(BindingSpec<VarStore> cleanupVarStoreSpec,
+                                   BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec,
+                                   BindingSpec<Duration> cleanupRetentionSpec) {
+            withRetentionCleanup(cleanupVarStoreSpec, cleanupRetentionSpec);
             this.cleanupActiveUserIdsSupplierSpec = checkNotNull(cleanupActiveUserIdsSupplierSpec, "cleanupActiveUserIdsSupplierSpec");
             return this;
         }
 
-        /// Enables the periodic cleanup job with only the retention purge (rows older than the retention horizon are deleted). The `VarStore` persists the
-        /// next-run timestamp. Orphan eviction is left off; supply an [ActiveUserIdsSupplier] via [#withCleanup] to enable it too.
-        public Builder withRetentionCleanup(BindingSpec<VarStore> cleanupVarStoreSpec) {
+        /// Enables the periodic cleanup job with only the retention purge: rows with `slot_start` older than `now − retention` are deleted. The `VarStore`
+        /// persists the next-run timestamp. Orphan eviction is left off; supply an [ActiveUserIdsSupplier] via [#withCleanup] to enable it too. The retention
+        /// horizon is the caller's to choose — it is a property of the data being cached, which this substrate knows nothing about.
+        public Builder withRetentionCleanup(BindingSpec<VarStore> cleanupVarStoreSpec, BindingSpec<Duration> cleanupRetentionSpec) {
             this.cleanupVarStoreSpec = checkNotNull(cleanupVarStoreSpec, "cleanupVarStoreSpec");
+            this.cleanupRetentionSpec = checkNotNull(cleanupRetentionSpec, "cleanupRetentionSpec");
             return this;
         }
 
         public Builder withCleanupInterval(BindingSpec<Duration> cleanupIntervalSpec) {
             this.cleanupIntervalSpec = checkNotNull(cleanupIntervalSpec, "cleanupIntervalSpec");
-            return this;
-        }
-
-        /// Overrides the retention horizon (rows with `slot_start` older than `now − retention` are purged). Defaults to [CacheRetention#DEFAULT_RETENTION].
-        public Builder withCleanupRetention(BindingSpec<Duration> cleanupRetentionSpec) {
-            this.cleanupRetentionSpec = checkNotNull(cleanupRetentionSpec, "cleanupRetentionSpec");
             return this;
         }
 
