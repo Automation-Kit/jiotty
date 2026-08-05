@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.lang;
 
+import net.yudichev.jiotty.common.async.ProgrammableClock;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -11,6 +12,7 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
@@ -86,6 +88,52 @@ class ObservableValueTest {
         verifyNoMoreInteractions(consumer);
         value.setNotificationsSuppressed(false);
         verify(consumer).accept(0);
+    }
+
+    @Test
+    void givenSubscribedOnExecutor_whenValueChanges_thenCurrentAndLaterValuesDeliveredOnThatExecutor(@Mock Consumer<Integer> consumer) {
+        var clock = new ProgrammableClock();
+        var executor = clock.createSingleThreadedSchedulingExecutor("test");
+        ObservableValue<Integer> value = ObservableValue.simple(0);
+
+        value.subscribe(executor, consumer);
+        verifyNoMoreInteractions(consumer);
+
+        clock.tick();
+        verify(consumer).accept(0);
+
+        value.accept(1);
+        verify(consumer).accept(1);
+    }
+
+    @Test
+    void givenSubscribedOnExecutor_whenSubscriptionClosed_thenNoFurtherValuesDelivered(@Mock Consumer<Integer> consumer) {
+        var clock = new ProgrammableClock();
+        var executor = clock.createSingleThreadedSchedulingExecutor("test");
+        ObservableValue<Integer> value = ObservableValue.simple(0);
+        Closeable subscription = value.subscribe(executor, consumer);
+        clock.tick();
+
+        subscription.close();
+        clock.tick();
+        value.accept(1);
+
+        verify(consumer).accept(0);
+        verifyNoMoreInteractions(consumer);
+    }
+
+    /// Teardown drains executors last, so a subscriber routinely releases its handle after the observable's owner has stopped.
+    @Test
+    void givenExecutorClosed_whenSubscriptionClosed_thenNoFailure(@Mock Consumer<Integer> consumer) {
+        var clock = new ProgrammableClock();
+        var executor = clock.createSingleThreadedSchedulingExecutor("test");
+        ObservableValue<Integer> value = ObservableValue.simple(0);
+        Closeable subscription = value.subscribe(executor, consumer);
+        clock.tick();
+
+        executor.close();
+
+        assertThatCode(subscription::close).doesNotThrowAnyException();
     }
 
     public static Stream<ObservableValue<Integer>> impls() {

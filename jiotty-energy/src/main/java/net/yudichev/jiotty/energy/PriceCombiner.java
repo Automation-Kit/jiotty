@@ -13,13 +13,13 @@ import java.util.List;
 ///
 /// Both profiles must use the same [PriceProfile#intervalLengthSec()] (verified). The two profiles may start at different instants; if the predicted profile
 /// starts after the real profile's end (a gap), the real profile is returned unchanged.
-final class PriceCombiner {
+public final class PriceCombiner {
     private static final Logger logger = LogManager.getLogger(PriceCombiner.class);
 
     private PriceCombiner() {
     }
 
-    static Prices combine(Prices realPrices, Prices predictedPrices) {
+    public static Prices combine(Prices realPrices, Prices predictedPrices) {
         var intervalLengthSec = realPrices.profile().intervalLengthSec();
         Verify.verify(intervalLengthSec == predictedPrices.profile().intervalLengthSec(),
                       "cannot combine incompatible prices: different interval lengths: %s and %s",

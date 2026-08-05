@@ -194,10 +194,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     @Override
     public Closeable subscribeToAccessTokenState(Consumer<? super AuthState> handler) {
-        return whenStartedAndNotLifecycling(() -> {
-            CompletableFuture<Closeable> subscription = executor.submit(() -> authState.subscribe(handler));
-            return Closeable.idempotent(() -> subscription.thenAcceptAsync(Closeable::close, executor));
-        });
+        return whenStartedAndNotLifecycling(() -> authState.subscribe(executor, handler));
     }
 
     /// Publishes `newAuthState` on [#executor], which owns [#authState]. Callers already running there get the same ordering as any other work they queue,

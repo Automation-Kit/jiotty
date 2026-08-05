@@ -20,13 +20,16 @@ public final class Listeners<T> {
         return Closeable.idempotent(() -> listeners.remove(consumer));
     }
 
+    /// Adds `consumer` from `executor`'s thread and delivers every notification on it, `imageSupplier`'s value first when it has one. Closing the returned
+    /// handle removes the listener on the same executor and tolerates that executor already being closed, as [Observable#subscribe(TaskExecutor, Consumer)]
+    /// does — see there for why.
     public Closeable addListener(TaskExecutor executor, Supplier<Optional<T>> imageSupplier, Consumer<? super T> consumer) {
         CompletableFuture<Closeable> handleFuture = executor.submit(() -> {
             Closeable result = addListener(consumer);
             imageSupplier.get().ifPresent(consumer);
             return result;
         });
-        return Closeable.idempotent(() -> handleFuture.thenAcceptAsync(Closeable::close, executor));
+        return Closeable.idempotent(() -> executor.tryExecute("removeListener", () -> handleFuture.thenAccept(Closeable::close)));
     }
 
     public void notify(T value) {
