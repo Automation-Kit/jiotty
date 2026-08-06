@@ -20,6 +20,9 @@ import java.io.StringWriter;
 import java.util.concurrent.CompletableFuture;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -73,7 +76,7 @@ class DisplayableDownloadHandlerTest {
         handler.handle(request, response);
         clock.tick();
 
-        verify(response).setStatus(404);
+        verify(response).setStatus(NOT_FOUND_404);
         assertThat(writer.toString()).contains("No displayable found").contains("nonexistent");
         verify(asyncContext).complete();
     }
@@ -92,7 +95,7 @@ class DisplayableDownloadHandlerTest {
         handler.handle(request, response);
         clock.tick();
 
-        verify(response).setStatus(404);
+        verify(response).setStatus(NOT_FOUND_404);
         assertThat(writer.toString()).contains("Missing 'downloadId' parameter");
         verify(asyncContext).complete();
     }
@@ -132,7 +135,7 @@ class DisplayableDownloadHandlerTest {
         handler.handle(request, response);
         clock.tick();
 
-        verify(response).setStatus(400);
+        verify(response).setStatus(BAD_REQUEST_400);
         assertThat(writer.toString()).contains("download exploded");
         verify(asyncContext).complete();
     }
@@ -145,7 +148,7 @@ class DisplayableDownloadHandlerTest {
 
         handler.handle(request, response);
 
-        verify(response).setStatus(404);
+        verify(response).setStatus(NOT_FOUND_404);
     }
 
     @Test
@@ -154,7 +157,7 @@ class DisplayableDownloadHandlerTest {
 
         handler.handle(request, response);
 
-        verify(response).setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+        verify(response).setStatus(METHOD_NOT_ALLOWED_405);
     }
 
     private Displayable registerDisplayable(String id) {

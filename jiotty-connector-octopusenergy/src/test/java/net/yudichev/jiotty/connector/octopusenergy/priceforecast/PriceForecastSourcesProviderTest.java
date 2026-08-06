@@ -29,6 +29,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
@@ -59,7 +61,7 @@ class PriceForecastSourcesProviderTest {
     @ParameterizedTest
     @MethodSource
     void parsesRecordedPayload(String sourceName, String resourceName, String expectedUrl, int expectedSlotCount, Instant firstSlotStart, double firstPrice) {
-        PriceForecastSource source = cannedSource(sourceName, resourceBytes(resourceName), 200);
+        PriceForecastSource source = cannedSource(sourceName, resourceBytes(resourceName), OK_200);
 
         List<ForecastPrice> prices = source.getPrices("C", 13).getNow(null);
 
@@ -95,28 +97,28 @@ class PriceForecastSourcesProviderTest {
 
     @Test
     void serverError_failsTheFetch() {
-        PriceForecastSource source = cannedSource("agilepredict", new byte[0], 503);
+        PriceForecastSource source = cannedSource("agilepredict", new byte[0], SERVICE_UNAVAILABLE_503);
 
         assertThat(source.getPrices("C", 13)).failsWithin(Duration.ZERO);
     }
 
     @Test
     void invalidRegion_rejected() {
-        PriceForecastSource source = cannedSource("agilepredict", new byte[0], 200);
+        PriceForecastSource source = cannedSource("agilepredict", new byte[0], OK_200);
 
         assertThatThrownBy(() -> source.getPrices("CC", 13)).isInstanceOf(VerifyException.class);
     }
 
     @Test
     void invalidDayCount_rejected() {
-        PriceForecastSource source = cannedSource("agilepredict", new byte[0], 200);
+        PriceForecastSource source = cannedSource("agilepredict", new byte[0], OK_200);
 
         assertThatThrownBy(() -> source.getPrices("C", 0)).isInstanceOf(VerifyException.class);
     }
 
     @Test
     void emptyEnvelope_failsTheFetchWithDiagnosis() {
-        PriceForecastSource source = cannedSource("agilepredict", "[]".getBytes(UTF_8), 200);
+        PriceForecastSource source = cannedSource("agilepredict", "[]".getBytes(UTF_8), OK_200);
 
         assertThat(source.getPrices("C", 13)).failsWithin(Duration.ZERO)
                                              .withThrowableThat()

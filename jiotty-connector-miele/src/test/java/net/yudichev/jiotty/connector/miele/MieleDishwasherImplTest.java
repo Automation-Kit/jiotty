@@ -32,11 +32,14 @@ import static com.github.tomakehurst.wiremock.client.WireMock.putRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.verify;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
 
-/// Originally from <a href="https://chatgpt.com/c/6754cbf0-1374-800b-9e27-9ff9d91b33f0">here</a>
+/// Originally from [here](https://chatgpt.com/c/6754cbf0-1374-800b-9e27-9ff9d91b33f0)
 @WireMockTest
 class MieleDishwasherImplTest {
     private static final Logger logger = LogManager.getLogger(MieleDishwasherImplTest.class);
@@ -121,7 +124,7 @@ class MieleDishwasherImplTest {
 
         stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
                         .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
-                        .willReturn(aResponse().withStatus(200)
+                        .willReturn(aResponse().withStatus(OK_200)
                                                .withHeader("Content-Type", "application/json")
                                                .withBody("[]")));
         assertThat(mieleDishwasher.getPrograms().join()).isEmpty();
@@ -138,7 +141,7 @@ class MieleDishwasherImplTest {
 
         stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
                         .withHeader("Authorization", equalTo("Bearer refreshed-token"))
-                        .willReturn(aResponse().withStatus(200)
+                        .willReturn(aResponse().withStatus(OK_200)
                                                .withHeader("Content-Type", "application/json")
                                                .withBody("[]")));
         assertThat(mieleDishwasher.getPrograms().join()).isEmpty();
@@ -159,7 +162,7 @@ class MieleDishwasherImplTest {
         stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
                         .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
                         .willReturn(aResponse()
-                                            .withStatus(200)
+                                            .withStatus(OK_200)
                                             .withHeader("Content-Type", "application/json")
                                             .withBody("""
                                                       [
@@ -181,7 +184,7 @@ class MieleDishwasherImplTest {
                         .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
                         .willReturn(aResponse()
                                             .withFixedDelay(1500) // Delay longer than client timeout
-                                            .withStatus(200)
+                                            .withStatus(OK_200)
                                             .withHeader("Content-Type", "application/json")
                                             .withBody("[]")));
 
@@ -199,7 +202,7 @@ class MieleDishwasherImplTest {
         stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
                         .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
                         .willReturn(aResponse()
-                                            .withStatus(500)
+                                            .withStatus(INTERNAL_SERVER_ERROR_500)
                                             .withBody("Internal Server Error")));
 
         assertThatThrownBy(() -> mieleDishwasher.getPrograms().join())
@@ -214,7 +217,7 @@ class MieleDishwasherImplTest {
                                                      {"programId": 123}
                                                      """))
                         .willReturn(aResponse()
-                                            .withStatus(204)));
+                                            .withStatus(NO_CONTENT_204)));
 
         mieleDishwasher.startProgram(123).join();
 

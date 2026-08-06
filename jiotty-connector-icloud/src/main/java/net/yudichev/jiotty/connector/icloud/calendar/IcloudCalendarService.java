@@ -51,6 +51,9 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.isSuccess;
 import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
 
 final class IcloudCalendarService extends BaseLifecycleComponent implements CalendarService {
@@ -118,7 +121,7 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
                 // Collect calendar info
                 for (MultiStatusResponse resp : calendarResponses) {
                     String href = resp.getHref();
-                    DavPropertySet properties = resp.getProperties(200);
+                    DavPropertySet properties = resp.getProperties(OK_200);
                     DavProperty<?> resourceTypeProp = properties.get(DavConstants.PROPERTY_RESOURCETYPE);
                     DavProperty<?> displayNameProp = properties.get(DavConstants.PROPERTY_DISPLAYNAME);
                     if (displayNameProp != null && isCalendar(resourceTypeProp)) {
@@ -150,9 +153,9 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
         var response = httpClient.execute(pf);
         int statusCode = response.getStatusLine().getStatusCode();
         String reasonPhrase = response.getStatusLine().getReasonPhrase();
-        if (statusCode >= 200 && statusCode < 300) {
+        if (isSuccess(statusCode)) {
             apiKeyState.accept(new AuthState.Success(reasonPhrase));
-        } else if (statusCode == 401) {
+        } else if (statusCode == UNAUTHORIZED_401) {
             apiKeyState.accept(new AuthState.PermanentFailure("Authorisation failed: " + reasonPhrase));
             throw new CalendarAuthorisationException("Authorisation failed: " + reasonPhrase);
         } else {
@@ -162,7 +165,7 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
         MultiStatus responseBodyAsMultiStatus = pf.getResponseBodyAsMultiStatus(response);
         MultiStatusResponse[] homeResponses = responseBodyAsMultiStatus.getResponses();
         checkArgument(homeResponses.length >= 1, "Response does not have any WebDav Multi-Status responses: %s", responseBodyAsMultiStatus);
-        DavPropertySet propertiesForStatus200 = homeResponses[0].getProperties(200);
+        DavPropertySet propertiesForStatus200 = homeResponses[0].getProperties(OK_200);
         checkArgument(!propertiesForStatus200.isEmpty(), "Multi-Status response %s has no properties for status 200", homeResponses[0]);
         DavProperty<?> hrefProperty = propertiesForStatus200.iterator().next();
         Object propertyValue = hrefProperty.getValue();

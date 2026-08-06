@@ -16,6 +16,8 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.never;
@@ -56,7 +58,7 @@ class ApiServletTest {
 
         servlet.service(request, response);
 
-        verify(response).setStatus(404);
+        verify(response).setStatus(NOT_FOUND_404);
         assertThat(responseBody.toString()).contains("Unknown path");
     }
 
@@ -67,7 +69,7 @@ class ApiServletTest {
 
         servlet.service(request, response);
 
-        verify(response).setStatus(503);
+        verify(response).setStatus(SERVICE_UNAVAILABLE_503);
         verify(response).setHeader("Retry-After", "1");
         assertThat(responseBody.toString()).contains("Temporarily unavailable");
     }

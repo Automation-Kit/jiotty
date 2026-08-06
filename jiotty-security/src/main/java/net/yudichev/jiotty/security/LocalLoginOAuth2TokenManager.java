@@ -30,6 +30,8 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
 import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
@@ -83,18 +85,18 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
                 String response;
                 if (stateFromServer != null && !stateFromServer.equals(state)) {
                     response = "'state' mismatch: expected " + state + ", got " + stateFromServer;
-                    exchange.sendResponseHeaders(400, response.length());
+                    exchange.sendResponseHeaders(BAD_REQUEST_400, response.length());
                 } else {
                     String authCode = queryParams.get("code");
                     if (authCode != null) {
                         onNewAuthCode(authCode, callbackUrl, Optional.ofNullable(codeVerifier));
                         response = "Auth Code Success";
-                        exchange.sendResponseHeaders(200, response.length());
+                        exchange.sendResponseHeaders(OK_200, response.length());
                     } else {
                         // probably token callback? TODO test miele
                         logger.info("[{}/{}] token callback received?", apiName, clientId);
                         response = "No Code - token callback?";
-                        exchange.sendResponseHeaders(200, response.length());
+                        exchange.sendResponseHeaders(OK_200, response.length());
                     }
                 }
                 try (OutputStream os = exchange.getResponseBody()) {

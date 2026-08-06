@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -66,7 +67,7 @@ class OptionsPostHandlerTest {
         var response = submit(null, null, responseBody);
         clock.tick();
 
-        verify(response).setStatus(400);
+        verify(response).setStatus(BAD_REQUEST_400);
         verify(response).setContentType("text/plain");
         assertThat(responseBody.toString()).contains("Missing name parameter");
     }
@@ -77,7 +78,7 @@ class OptionsPostHandlerTest {
         var response = submit("nonexistent", null, responseBody);
         clock.tick();
 
-        verify(response).setStatus(400);
+        verify(response).setStatus(BAD_REQUEST_400);
         verify(response).setContentType("text/plain");
         assertThat(responseBody.toString()).contains("nonexistent");
     }
@@ -100,7 +101,7 @@ class OptionsPostHandlerTest {
         var response = submit("throwing-opt", "val", responseBody);
         clock.tick();
 
-        verify(response).setStatus(400);
+        verify(response).setStatus(BAD_REQUEST_400);
         verify(response).setContentType("text/plain");
         assertThat(responseBody.toString()).contains("boom");
     }
@@ -123,7 +124,7 @@ class OptionsPostHandlerTest {
         var response = submit("async-fail", "val", responseBody);
         clock.tick();
 
-        verify(response).setStatus(400);
+        verify(response).setStatus(BAD_REQUEST_400);
         verify(response).setContentType("text/plain");
         assertThat(responseBody.toString()).contains("async boom");
     }

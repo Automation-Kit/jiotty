@@ -28,6 +28,10 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.user.ui.UserTokenAuthoriser.TokenAuthenticated;
 import static net.yudichev.jiotty.user.ui.UserTokenAuthoriser.TokenNotAuthenticated;
 import static net.yudichev.jiotty.user.ui.UserTokenAuthoriser.TokenNotAuthenticated.Reason;
@@ -74,12 +78,12 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
         switch (admissionControl.tryAdmit(request)) {
             case RATE_LIMITED -> {
                 authSample.stop(rejectedAuthTimer);
-                writeAdmissionRejection(response, 429, "Too many authentication attempts");
+                writeAdmissionRejection(response, TOO_MANY_REQUESTS_429, "Too many authentication attempts");
                 return;
             }
             case VERIFY_SATURATED -> {
                 authSample.stop(rejectedAuthTimer);
-                writeAdmissionRejection(response, 503, "Authentication temporarily unavailable");
+                writeAdmissionRejection(response, SERVICE_UNAVAILABLE_503, "Authentication temporarily unavailable");
                 return;
             }
             case ADMITTED -> {
@@ -101,7 +105,7 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
                         // The user's identity is known only after verification, so this per-user limit runs here on the async body; the per-source guard runs
                         // up front, before the request goes async.
                         authSample.stop(rejectedAuthTimer);
-                        asUnchecked(() -> writeAdmissionRejection(response, 429, "Too many requests"));
+                        asUnchecked(() -> writeAdmissionRejection(response, TOO_MANY_REQUESTS_429, "Too many requests"));
                         asyncContext.complete();
                     }
                     case TokenAuthenticated tokenAuthenticated -> {
@@ -185,16 +189,16 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
 
     private static int statusFor(Reason reason) {
         return switch (reason) {
-            case INVALID -> 401;
+            case INVALID -> UNAUTHORIZED_401;
             // 403, not 401: the bearer token is valid, so clients must not treat the refusal as an expired session.
-            case USER_DISABLED, REGISTRATION_REFUSED -> 403;
-            case TECHNICAL_FAILURE -> 503;
+            case USER_DISABLED, REGISTRATION_REFUSED -> FORBIDDEN_403;
+            case TECHNICAL_FAILURE -> SERVICE_UNAVAILABLE_503;
         };
     }
 
     /// Returns an admitted request's verification permit to [PreAuthAdmissionControl] exactly once, however many of the completion paths run. The container
-    /// container can invoke several of them for one async cycle — Jetty follows `onError` with `onComplete` — and an unguarded release would hand back a
-    /// permit the cycle never took, growing the pool without bound.
+    /// container can invoke several of them for one async cycle — Jetty follows [AsyncListener#onError] with [AsyncListener#onComplete] — and an unguarded
+    /// release would hand back a permit the cycle never took, growing the pool without bound.
     private static final class SingleUseInFlightPermit {
         private final PreAuthAdmissionControl admissionControl;
         private final AtomicBoolean released = new AtomicBoolean();

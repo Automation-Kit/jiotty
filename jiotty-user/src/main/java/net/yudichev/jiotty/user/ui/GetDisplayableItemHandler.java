@@ -16,6 +16,10 @@ import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 
 /// Handles `GET /ui/api/displayables/item?id=...` — returns the named displayable's DTO.
@@ -55,18 +59,18 @@ public final class GetDisplayableItemHandler extends BaseLifecycleComponent impl
             return;
         }
         if (!"GET".equals(request.getMethod())) {
-            response.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+            response.setStatus(METHOD_NOT_ALLOWED_405);
             return;
         }
         whenStartedAndNotLifecycling(() -> {
             String id = request.getParameter("id");
             if (id == null || id.isBlank()) {
-                writeJsonError(response, 400, "missing id");
+                writeJsonError(response, BAD_REQUEST_400, "missing id");
                 return null;
             }
             Displayable displayable = registry.find(id).orElse(null);
             if (displayable == null) {
-                writeJsonError(response, 404, "unknown id");
+                writeJsonError(response, NOT_FOUND_404, "unknown id");
                 return null;
             }
             AsyncContext asyncContext = request.startAsync();
@@ -75,7 +79,7 @@ public final class GetDisplayableItemHandler extends BaseLifecycleComponent impl
                            try {
                                if (throwable != null) {
                                    alertService.raise(WARNING, "Displayable DTO generation failed", logger, throwable);
-                                   writeJsonError(response, 500, "INTERNAL_ERROR");
+                                   writeJsonError(response, INTERNAL_SERVER_ERROR_500, "INTERNAL_ERROR");
                                } else {
                                    response.setCharacterEncoding("utf-8");
                                    response.setContentType("application/json");

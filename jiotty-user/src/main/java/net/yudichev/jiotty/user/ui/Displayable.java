@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 
 public interface Displayable {
     String getId();
@@ -35,7 +36,7 @@ public interface Displayable {
     }
 
     default CompletableFuture<Void> handleDownload(String downloadId, HttpServletResponse resp) throws IOException {
-        resp.sendError(HttpServletResponse.SC_NOT_FOUND, "Downloads are not supported by " + getDisplayName());
+        resp.sendError(NOT_FOUND_404, "Downloads are not supported by " + getDisplayName());
         return completedFuture(null);
     }
 }

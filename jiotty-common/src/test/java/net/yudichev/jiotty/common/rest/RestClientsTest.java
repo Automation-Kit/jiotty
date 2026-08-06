@@ -7,12 +7,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
 import okhttp3.Call;
 import okhttp3.Callback;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
-import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,6 +24,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,7 +36,6 @@ import static org.mockito.Mockito.mock;
 @ExtendWith(MockitoExtension.class)
 class RestClientsTest {
 
-    private static final MediaType APPLICATION_JSON = MediaType.parse("application/json");
     private static final String BASE = "http://example.test";
     private final Map<String, String> urlToBody = new HashMap<>();
     /// Overrides the default HTTP 200 for a given URL. Tests asserting non-2xx behaviour put the status code here and the error payload in [#urlToBody] under
@@ -66,8 +65,8 @@ class RestClientsTest {
                 } else {
                     String body = urlToBody.get(url);
                     if (body != null) {
-                        int status = urlToHttpStatus.getOrDefault(url, 200);
-                        cb.onResponse(callMock, jsonResponse(request, status, body));
+                        int status = urlToHttpStatus.getOrDefault(url, OK_200);
+                        cb.onResponse(callMock, response(request, status, body));
                     }
                     // unstubbed URL: leave pending — tests that miss-spec a URL will time out, surfacing the bug
                 }
@@ -206,14 +205,14 @@ class RestClientsTest {
     @Test
     void call_nonSuccessResponse_throwsHttpResponseExceptionCarryingStatusAndBody() {
         urlToBody.put(BASE + "/forbidden", "{\"detail\":\"forbidden\"}");
-        urlToHttpStatus.put(BASE + "/forbidden", 403);
+        urlToHttpStatus.put(BASE + "/forbidden", FORBIDDEN_403);
 
         CompletableFuture<Page> future = RestClients.call(callFactory.apply(BASE + "/forbidden"), new TypeToken<>() {});
 
         assertThatThrownBy(future::join)
                 .cause()
                 .isInstanceOfSatisfying(HttpResponseException.class, http -> {
-                    assertThat(http.statusCode()).isEqualTo(403);
+                    assertThat(http.statusCode()).isEqualTo(FORBIDDEN_403);
                     assertThat(http.body()).isEqualTo("{\"detail\":\"forbidden\"}");
                     // Message format preserved verbatim from the previous untyped form so any string-matching callers keep working.
                     assertThat(http).hasMessageContaining("Response code 403").hasMessageContaining("forbidden");
@@ -226,16 +225,6 @@ class RestClientsTest {
                                                       new TypeToken<>() {}, Page::results, Page::nextUrl))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("expectedTotalCount");
-    }
-
-    private static Response jsonResponse(Request request, int status, String json) {
-        return new Response.Builder()
-                .request(request)
-                .protocol(Protocol.HTTP_1_1)
-                .code(status)
-                .message(status == 200 ? "OK" : "Error")
-                .body(ResponseBody.create(json, APPLICATION_JSON))
-                .build();
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

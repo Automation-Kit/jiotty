@@ -22,6 +22,7 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 
 /// Validates the `Authorization: Bearer TOKEN` header on admin endpoints and stows the `X-Grafana-User` value as a request attribute consumed by downstream
 /// servlets for audit (`resolved_by`).
@@ -62,7 +63,7 @@ public final class AdminBearerAuthFilter implements Filter {
     }
 
     private static void writeUnauthorized(HttpServletResponse response) throws IOException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setStatus(UNAUTHORIZED_401);
         response.setCharacterEncoding("utf-8");
         response.setContentType("application/json");
         response.getWriter().print("{\"error\":\"Unauthorized\"}");

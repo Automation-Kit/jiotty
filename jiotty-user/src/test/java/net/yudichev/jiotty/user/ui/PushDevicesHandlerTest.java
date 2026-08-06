@@ -32,6 +32,10 @@ import java.util.concurrent.CompletableFuture;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
@@ -90,7 +94,7 @@ class PushDevicesHandlerTest {
         assertThat(record.registeredAt()).isEqualTo(clock.currentInstant());
         assertThat(record.platform()).isEmpty();
         assertThat(record.appVersion()).isEmpty();
-        verify(response).setStatus(204);
+        verify(response).setStatus(NO_CONTENT_204);
         verify(asyncContext).complete();
     }
 
@@ -121,7 +125,7 @@ class PushDevicesHandlerTest {
 
         handler.handle(request, response);
 
-        verify(response).setStatus(400);
+        verify(response).setStatus(BAD_REQUEST_400);
         verify(asyncContext).complete();
         assertThat(parseJson(writer.toString())).extractingByKey("error").asString().contains("Invalid JSON body");
     }
@@ -137,7 +141,7 @@ class PushDevicesHandlerTest {
 
         handler.handle(request, response);
 
-        verify(response).setStatus(413);
+        verify(response).setStatus(PAYLOAD_TOO_LARGE_413);
         verify(asyncContext).complete();
         verifyNoInteractions(pushDeviceStore);
         assertThat(parseJson(writer.toString())).extractingByKey("error").asString().contains("too large");
@@ -156,7 +160,7 @@ class PushDevicesHandlerTest {
         handler.handle(request, response);
         clock.tick();
 
-        verify(response).setStatus(500);
+        verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
         verify(asyncContext).complete();
         assertThat(parseJson(writer.toString())).extractingByKey("error").asString().isEqualTo("INTERNAL_ERROR");
         assertRaisedAlert();
@@ -172,7 +176,7 @@ class PushDevicesHandlerTest {
         clock.tick();
 
         verify(pushDeviceStore).remove("dev1");
-        verify(response).setStatus(204);
+        verify(response).setStatus(NO_CONTENT_204);
         verify(asyncContext).complete();
     }
 
@@ -187,7 +191,7 @@ class PushDevicesHandlerTest {
         handler.handle(request, response);
         clock.tick();
 
-        verify(response).setStatus(500);
+        verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
         verify(asyncContext).complete();
         assertThat(parseJson(writer.toString())).extractingByKey("error").asString().isEqualTo("INTERNAL_ERROR");
         assertRaisedAlert();

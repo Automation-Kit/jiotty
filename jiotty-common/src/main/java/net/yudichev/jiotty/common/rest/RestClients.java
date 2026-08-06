@@ -27,6 +27,7 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
 
 public final class RestClients {
     private static final Logger logger = LogManager.getLogger(RestClients.class);
@@ -97,7 +98,7 @@ public final class RestClients {
                 try (ResponseBody responseBody = response.body()) {
                     try {
                         if (response.isSuccessful()) {
-                            if (response.code() == 204) { // no body
+                            if (response.code() == NO_CONTENT_204) { // no body
                                 logger.debug("[{}] Response code 204", requestId);
                                 if (responseType.getType() == Void.class) {
                                     future.complete(null);

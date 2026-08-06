@@ -17,6 +17,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.stubCalls;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -63,7 +66,7 @@ class WeatherServiceImplTest {
 
     @Test
     void serverError_reportsUpstreamFailure() {
-        stubbedStatus = 503;
+        stubbedStatus = SERVICE_UNAVAILABLE_503;
         WeatherServiceImpl service = createService(healthHandler);
 
         service.getCurrentWeather(COORDINATES);
@@ -75,7 +78,7 @@ class WeatherServiceImplTest {
     @Test
     void clientError_reportsNothing() {
         // The API answered — a 400 is a verdict on this request, not an outage every caller shares.
-        stubbedStatus = 400;
+        stubbedStatus = BAD_REQUEST_400;
         WeatherServiceImpl service = createService(healthHandler);
 
         service.getCurrentWeather(COORDINATES);
@@ -87,7 +90,7 @@ class WeatherServiceImplTest {
     @Test
     void throwingHealthHandler_doesNotFailASuccessfulCall() {
         // A health-handler fault must be contained, never delivered to the caller as the call's outcome.
-        stubbedStatus = 200;
+        stubbedStatus = OK_200;
         stubbedBody = "{\"current\": {\"temp_c\": 15.0}}";
         WeatherServiceImpl service = createService(new ThrowingUpstreamHealthHandler());
 

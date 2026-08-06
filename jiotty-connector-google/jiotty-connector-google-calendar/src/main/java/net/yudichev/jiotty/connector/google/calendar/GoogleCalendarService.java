@@ -45,6 +45,9 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.GONE_410;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 
 class GoogleCalendarService extends BaseLifecycleComponent implements CalendarService {
     private static final Logger logger = LogManager.getLogger(GoogleCalendarService.class);
@@ -192,7 +195,7 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                 }
                 return;
             } catch (GoogleJsonResponseException e) {
-                if (e.getStatusCode() == 410 && calendarListSyncToken != null && !retriedAfterExpiry) {
+                if (e.getStatusCode() == GONE_410 && calendarListSyncToken != null && !retriedAfterExpiry) {
                     logger.info("Google calendar list sync token expired; performing a full resync");
                     calendarListSyncToken = null;
                     retriedAfterExpiry = true;
@@ -216,10 +219,10 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     /// `403` is transient and must not trigger re-authentication.
     private static boolean isPermanentAuthError(GoogleJsonResponseException e) {
         int statusCode = e.getStatusCode();
-        if (statusCode == 401) {
+        if (statusCode == UNAUTHORIZED_401) {
             return true;
         }
-        if (statusCode != 403) {
+        if (statusCode != FORBIDDEN_403) {
             return false;
         }
         // Treat a 403 without a recognised reason as permanent: better to prompt re-auth than to retry a genuinely-broken credential forever.

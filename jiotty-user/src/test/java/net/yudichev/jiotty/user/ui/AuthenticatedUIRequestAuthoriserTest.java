@@ -37,6 +37,10 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.user.ui.PreAuthAdmissionControl.Outcome.ADMITTED;
 import static net.yudichev.jiotty.user.ui.PreAuthAdmissionControl.Outcome.VERIFY_SATURATED;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,7 +101,7 @@ class AuthenticatedUIRequestAuthoriserTest {
 
         authoriser.authorise(request, response, chain);
 
-        verify(response).setStatus(429);
+        verify(response).setStatus(TOO_MANY_REQUESTS_429);
         verify(request, never()).startAsync();
         verify(userTokenAuthoriser, never()).deliverTokenStateTo(anyString(), any());
         assertThat(responseBody.toString()).contains("Too many authentication attempts");
@@ -114,7 +118,7 @@ class AuthenticatedUIRequestAuthoriserTest {
 
         authoriser.authorise(request, response, chain);
 
-        verify(response).setStatus(503);
+        verify(response).setStatus(SERVICE_UNAVAILABLE_503);
         verify(request, never()).startAsync();
         verify(userTokenAuthoriser, never()).deliverTokenStateTo(anyString(), any());
     }
@@ -134,7 +138,7 @@ class AuthenticatedUIRequestAuthoriserTest {
 
         authoriser.authorise(request, response, chain);
 
-        verify(response).setStatus(429);
+        verify(response).setStatus(TOO_MANY_REQUESTS_429);
         verify(asyncContext).complete();
         verify(asyncContext, never()).dispatch();
         assertThat(responseBody.toString()).contains("Too many requests");
@@ -170,8 +174,9 @@ class AuthenticatedUIRequestAuthoriserTest {
                          arguments("onStartAsync", (Consumer<AsyncListener>) listener -> asUnchecked(() -> listener.onStartAsync(null))));
     }
 
-    /// The servlet container may run several completion callbacks for one async cycle — Jetty follows `onError` with `onComplete`. Releasing per callback
-    /// would hand back permits the cycle never took, growing the pool past its bound and driving the occupancy gauge negative.
+    /// The servlet container may run several completion callbacks for one async cycle — Jetty follows [AsyncListener#onError] with
+    /// [AsyncListener#onComplete]. Releasing per callback would hand back permits the cycle never took, growing the pool past its bound and driving the
+    /// occupancy gauge negative.
     @Test
     void returnsTheVerificationSlotAtMostOnce(@Mock HttpServletRequest laterRequest,
                                               @Captor ArgumentCaptor<AsyncListener> listenerCaptor) throws Exception {
@@ -256,8 +261,8 @@ class AuthenticatedUIRequestAuthoriserTest {
         authoriser.authorise(request, response, chain);
 
         verify(asyncContext).complete();
-        verify(response).setStatus(401);   // the original failure report, which then blew up writing its body
-        verify(response, never()).setStatus(503);
+        verify(response).setStatus(UNAUTHORIZED_401);   // the original failure report, which then blew up writing its body
+        verify(response, never()).setStatus(SERVICE_UNAVAILABLE_503);
         assertThat(control.tryAdmit(laterRequest)).isEqualTo(ADMITTED);
     }
 
@@ -271,7 +276,7 @@ class AuthenticatedUIRequestAuthoriserTest {
 
         authoriser.authorise(request, response, chain);
 
-        verify(response).setStatus(401);
+        verify(response).setStatus(UNAUTHORIZED_401);
         verify(userTokenAuthoriser, never()).deliverTokenStateTo(anyString(), any());
         assertThat(responseBody.toString()).contains("INVALID").contains("Missing or invalid Authorization bearer token");
         assertThat(meterRegistry.find("ui_authorise_seconds").tag("outcome", "missing_token").timer())
@@ -451,9 +456,9 @@ class AuthenticatedUIRequestAuthoriserTest {
 
     private static int expectedStatus(UserTokenAuthoriser.TokenNotAuthenticated.Reason reason) {
         return switch (reason) {
-            case INVALID -> 401;
-            case USER_DISABLED, REGISTRATION_REFUSED -> 403;
-            case TECHNICAL_FAILURE -> 503;
+            case INVALID -> UNAUTHORIZED_401;
+            case USER_DISABLED, REGISTRATION_REFUSED -> FORBIDDEN_403;
+            case TECHNICAL_FAILURE -> SERVICE_UNAVAILABLE_503;
         };
     }
 }

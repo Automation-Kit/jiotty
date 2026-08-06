@@ -12,6 +12,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.function.Function;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -48,7 +49,7 @@ public final class OkHttpStubs {
                 .request(request)
                 .protocol(Protocol.HTTP_1_1)
                 .code(status)
-                .message(status == 200 ? "OK" : "Error")
+                .message(status == OK_200 ? "OK" : "Error")
                 .body(ResponseBody.create(json, APPLICATION_JSON))
                 .build();
     }

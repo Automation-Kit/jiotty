@@ -32,6 +32,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.GONE_410;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
@@ -200,7 +204,7 @@ class GoogleCalendarServiceTest {
 
     @Test
     void retrieveCalendars_nonExpiryApiError_failsFuture() {
-        startService((_, _) -> new MockLowLevelHttpResponse().setStatusCode(500)
+        startService((_, _) -> new MockLowLevelHttpResponse().setStatusCode(INTERNAL_SERVER_ERROR_500)
                                                              .setContentType("application/json")
                                                              .setContent("""
                                                                          {"error":{"code":500,"message":"backend error"}}"""));
@@ -342,18 +346,18 @@ class GoogleCalendarServiceTest {
     }
 
     private static MockLowLevelHttpResponse ok(String jsonBody) {
-        return new MockLowLevelHttpResponse().setStatusCode(200).setContentType("application/json").setContent(jsonBody);
+        return new MockLowLevelHttpResponse().setStatusCode(OK_200).setContentType("application/json").setContent(jsonBody);
     }
 
     private static MockLowLevelHttpResponse gone() {
-        return new MockLowLevelHttpResponse().setStatusCode(410)
+        return new MockLowLevelHttpResponse().setStatusCode(GONE_410)
                                              .setContentType("application/json")
                                              .setContent("""
                                                          {"error":{"code":410,"message":"Sync token is no longer valid."}}""");
     }
 
     private static MockLowLevelHttpResponse forbidden(String reason, String message) {
-        return new MockLowLevelHttpResponse().setStatusCode(403).setContentType("application/json").setContent(
+        return new MockLowLevelHttpResponse().setStatusCode(FORBIDDEN_403).setContentType("application/json").setContent(
                 """
                 {"error":{"code":403,"message":"%s","errors":[{"domain":"global","reason":"%s","message":"%s"}]}}""".formatted(message, reason, message));
     }

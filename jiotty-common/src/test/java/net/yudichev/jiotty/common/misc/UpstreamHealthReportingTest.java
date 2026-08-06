@@ -9,6 +9,8 @@ import java.util.concurrent.CompletableFuture;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.concurrent.CompletableFuture.failedFuture;
 import static net.yudichev.jiotty.common.misc.UpstreamHealthReporting.reportingHealth;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_GATEWAY_502;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -30,7 +32,7 @@ class UpstreamHealthReportingTest {
     @Test
     void sharedOutageFailure_reportsUpstreamFailureUnderTheGivenMessage() {
         CompletableFuture<String> future = reportingHealth(retryExecutor, healthHandler, "get the thing", "thing API call failed",
-                                                           () -> failedFuture(new HttpResponseException(502, "Bad Gateway")));
+                                                           () -> failedFuture(new HttpResponseException(BAD_GATEWAY_502, "Bad Gateway")));
 
         assertThatThrownBy(future::join).hasCauseInstanceOf(HttpResponseException.class);
         assertThat(healthHandler.failures()).singleElement().satisfies(f -> assertThat(f).startsWith("thing API call failed"));
@@ -41,7 +43,7 @@ class UpstreamHealthReportingTest {
     void subjectSpecificFailure_reportsNothing() {
         // The upstream answered — a 4xx is a verdict on this request, not an outage every caller shares.
         CompletableFuture<String> future = reportingHealth(retryExecutor, healthHandler, "get the thing", "thing API call failed",
-                                                           () -> failedFuture(new HttpResponseException(401, "Unauthorized")));
+                                                           () -> failedFuture(new HttpResponseException(UNAUTHORIZED_401, "Unauthorized")));
 
         assertThatThrownBy(future::join).hasCauseInstanceOf(HttpResponseException.class);
         assertThat(healthHandler.failures()).isEmpty();

@@ -17,6 +17,8 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -52,7 +54,7 @@ class DisplayablesSseHandlerTest {
 
         handler.handle(request, response);
 
-        verify(response).setStatus(404);
+        verify(response).setStatus(NOT_FOUND_404);
         verify(sseService, never()).startSse(any(), any(), any());
     }
 
@@ -63,7 +65,7 @@ class DisplayablesSseHandlerTest {
 
         handler.handle(request, response);
 
-        verify(response).setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+        verify(response).setStatus(METHOD_NOT_ALLOWED_405);
         verify(sseService, never()).startSse(any(), any(), any());
     }
 

@@ -15,6 +15,9 @@ import java.io.IOException;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 
 /// Handles `GET /ui/api/displayables/download?displayableId=...&downloadId=...` — serves a downloadable artefact emitted by a displayable.
@@ -50,7 +53,7 @@ public final class DisplayableDownloadHandler extends BaseLifecycleComponent imp
             return;
         }
         if (!"GET".equals(request.getMethod())) {
-            response.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+            response.setStatus(METHOD_NOT_ALLOWED_405);
             return;
         }
         whenStartedAndNotLifecycling(() -> asUnchecked(() -> {
@@ -59,13 +62,13 @@ public final class DisplayableDownloadHandler extends BaseLifecycleComponent imp
                 var displayableId = request.getParameter("displayableId");
                 var displayable = registry.find(displayableId).orElse(null);
                 if (displayable == null) {
-                    response.setStatus(404);
+                    response.setStatus(NOT_FOUND_404);
                     response.getWriter().print("No displayable found with id='" + displayableId + "'");
                     asyncContext.complete();
                 } else {
                     String downloadId = request.getParameter("downloadId");
                     if (downloadId == null) {
-                        response.setStatus(404);
+                        response.setStatus(NOT_FOUND_404);
                         response.getWriter().print("Missing 'downloadId' parameter");
                         asyncContext.complete();
                     } else {
@@ -74,7 +77,7 @@ public final class DisplayableDownloadHandler extends BaseLifecycleComponent imp
                                        try {
                                            if (throwable != null) {
                                                logger.debug("Displayable {} download {} failed", displayableId, downloadId, throwable);
-                                               response.setStatus(400);
+                                               response.setStatus(BAD_REQUEST_400);
                                                response.getWriter().write(humanReadableMessage(throwable));
                                            }
                                        } catch (IOException e) {

@@ -27,6 +27,11 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.CONFLICT_409;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
 
 /// Handles `POST /admin/api/alerts/{id}/resolve`. Authorisation is performed by [AdminBearerAuthFilter] earlier in the chain; the audit identity is read from
 /// the request attribute the filter set.
@@ -67,17 +72,17 @@ public final class AdminAlertResolveServlet extends HttpServlet {
     protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String pathInfo = request.getPathInfo();
         if (pathInfo == null || !pathInfo.startsWith("/") || !pathInfo.endsWith(RESOLVE_SUFFIX)) {
-            writeJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Unknown path");
+            writeJsonError(response, NOT_FOUND_404, "Unknown path");
             return;
         }
         String alertId = pathInfo.substring(1, pathInfo.length() - RESOLVE_SUFFIX.length());
         if (alertId.isBlank() || alertId.contains("/")) {
-            writeJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Unknown path");
+            writeJsonError(response, NOT_FOUND_404, "Unknown path");
             return;
         }
         byte[] bodyBytes = request.getInputStream().readNBytes(MAX_NOTE_BYTES + 1);
         if (bodyBytes.length > MAX_NOTE_BYTES) {
-            writeJsonError(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "Request body too large");
+            writeJsonError(response, PAYLOAD_TOO_LARGE_413, "Request body too large");
             return;
         }
         String resolvedByHeader = (String) request.getAttribute(AdminBearerAuthFilter.GRAFANA_USER_REQUEST_ATTRIBUTE);
@@ -101,7 +106,7 @@ public final class AdminAlertResolveServlet extends HttpServlet {
         logger.info("Resolve failed for alert {}", alertId, error);
         var response = (HttpServletResponse) asyncContext.getResponse();
         try {
-            writeJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Resolve failed");
+            writeJsonError(response, INTERNAL_SERVER_ERROR_500, "Resolve failed");
         } catch (IOException e) {
             logger.info("Failed to write error response for alert {}", alertId, e);
         } finally {
@@ -113,9 +118,9 @@ public final class AdminAlertResolveServlet extends HttpServlet {
         var response = (HttpServletResponse) asyncContext.getResponse();
         try {
             switch (outcome) {
-                case RESOLVED -> response.setStatus(HttpServletResponse.SC_NO_CONTENT);
-                case ALREADY_RESOLVED -> writeJsonError(response, HttpServletResponse.SC_CONFLICT, "Already resolved");
-                case UNKNOWN -> writeJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Unknown alert");
+                case RESOLVED -> response.setStatus(NO_CONTENT_204);
+                case ALREADY_RESOLVED -> writeJsonError(response, CONFLICT_409, "Already resolved");
+                case UNKNOWN -> writeJsonError(response, NOT_FOUND_404, "Unknown alert");
             }
         } catch (IOException e) {
             logger.info("Failed to write response for alert {}", alertId, e);

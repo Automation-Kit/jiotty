@@ -3,18 +3,15 @@ package net.yudichev.jiotty.security;
 import com.google.common.collect.ImmutableMap;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.rest.OkHttpStubs;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStoreEncryption;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.FormBody;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
-import okhttp3.Protocol;
 import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
 
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,6 +34,9 @@ import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_INITIAL_INTERVAL;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_MAX_ELAPSED_TIME;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,7 +54,6 @@ class OAuth2TokenManagerImplTest {
     private static final String TOKEN_URL = "http://token-host/token";
     private static final String VAR_STORE_KEY = API_NAME + "Oauth2Token_" + CLIENT_ID + "_" + SCOPE;
     private static final Instant NOW = Instant.parse("2025-01-01T00:00:00Z");
-    private static final MediaType APPLICATION_JSON = MediaType.parse("application/json");
     /// Sentinel stub: the enqueue answer delivers it as an okhttp transport failure ([Callback#onFailure]) rather than an HTTP response.
     private static final FakeResponse TRANSPORT_FAILURE = new FakeResponse(-1, "");
 
@@ -252,8 +251,8 @@ class OAuth2TokenManagerImplTest {
     @Test
     void refreshResponse_withoutRefreshToken_keepsPreviousRefreshToken() {
         varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "original-rt", NOW.minusSeconds(60)));
-        responses.add(new FakeResponse(200, """
-                                            {"access_token": "new-at", "expires_in": 3600, "token_type": "Bearer"}"""));
+        responses.add(new FakeResponse(OK_200, """
+                                               {"access_token": "new-at", "expires_in": 3600, "token_type": "Bearer"}"""));
 
         startTokenManager();
 
@@ -263,8 +262,8 @@ class OAuth2TokenManagerImplTest {
 
     @Test
     void tokenTypeValidation_acceptsBearerCaseInsensitive() {
-        responses.add(new FakeResponse(200, """
-                                            {"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "token_type": "BEARER"}"""));
+        responses.add(new FakeResponse(OK_200, """
+                                               {"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "token_type": "BEARER"}"""));
         startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
@@ -276,8 +275,8 @@ class OAuth2TokenManagerImplTest {
 
     @Test
     void tokenTypeValidation_rejectsNonBearerType() {
-        responses.add(new FakeResponse(200, """
-                                            {"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "token_type": "MAC"}"""));
+        responses.add(new FakeResponse(OK_200, """
+                                               {"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "token_type": "MAC"}"""));
         startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
@@ -288,8 +287,8 @@ class OAuth2TokenManagerImplTest {
 
     @Test
     void errorResponse_invalidGrant_notifiesLoginRequired() {
-        respondWith(400, """
-                         {"error": "invalid_grant", "error_description": "Token has been revoked"}""");
+        respondWith(BAD_REQUEST_400, """
+                                     {"error": "invalid_grant", "error_description": "Token has been revoked"}""");
         startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
@@ -302,8 +301,8 @@ class OAuth2TokenManagerImplTest {
 
     @Test
     void errorResponse_otherError_notifiesTransientError() {
-        respondWith(400, """
-                         {"error": "invalid_client", "error_description": "Client authentication failed"}""");
+        respondWith(BAD_REQUEST_400, """
+                                     {"error": "invalid_client", "error_description": "Client authentication failed"}""");
         startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
@@ -360,8 +359,8 @@ class OAuth2TokenManagerImplTest {
         return Stream.of(
                 arguments(named("token too short-lived to use", createTokenResponse("at-fail", "rt", 10))),
                 arguments(named("non-invalid_grant error response",
-                                new FakeResponse(503, """
-                                                      {"error": "temporarily_unavailable", "error_description": "Service is temporarily unavailable"}"""))));
+                                new FakeResponse(SERVICE_UNAVAILABLE_503, """
+                                                                          {"error": "temporarily_unavailable", "error_description": "Service is temporarily unavailable"}"""))));
     }
 
     @Test
@@ -378,8 +377,8 @@ class OAuth2TokenManagerImplTest {
     @Test
     void invalidGrantOnStoredTokenRefresh_clearsStoredTokenSoReconnectStartsClean() {
         varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", NOW.minusSeconds(60)));
-        respondWith(400, """
-                         {"error": "invalid_grant", "error_description": "Token has been expired or revoked."}""");
+        respondWith(BAD_REQUEST_400, """
+                                     {"error": "invalid_grant", "error_description": "Token has been expired or revoked."}""");
 
         // start() refreshes the expired stored token, which Google rejects as invalid_grant
         startTokenManager();
@@ -559,7 +558,7 @@ class OAuth2TokenManagerImplTest {
             if (response == TRANSPORT_FAILURE) {
                 callback.onFailure(call, new IOException("simulated transport failure"));
             } else {
-                callback.onResponse(call, fakeResponse(request, response.status(), response.body()));
+                callback.onResponse(call, OkHttpStubs.response(request, response.status(), response.body()));
             }
         });
     }
@@ -576,8 +575,8 @@ class OAuth2TokenManagerImplTest {
     }
 
     private static FakeResponse createTokenResponse(String accessToken, String refreshToken, int expiresIn) {
-        return new FakeResponse(200, """
-                                     {"access_token": "%s", "refresh_token": "%s", "expires_in": %d, "token_type": "Bearer"}"""
+        return new FakeResponse(OK_200, """
+                                        {"access_token": "%s", "refresh_token": "%s", "expires_in": %d, "token_type": "Bearer"}"""
                 .formatted(accessToken, refreshToken, expiresIn));
     }
 
@@ -606,16 +605,6 @@ class OAuth2TokenManagerImplTest {
             paramsByName.put(body.name(i), body.value(i));
         }
         return paramsByName.build();
-    }
-
-    private static Response fakeResponse(Request request, int status, String json) {
-        return new Response.Builder()
-                .request(request)
-                .protocol(Protocol.HTTP_1_1)
-                .code(status)
-                .message(status == 200 ? "OK" : "Error")
-                .body(ResponseBody.create(json, APPLICATION_JSON))
-                .build();
     }
 
     private record FakeResponse(int status, String body) {}

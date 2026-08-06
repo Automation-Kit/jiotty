@@ -42,6 +42,8 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.paginate;
@@ -221,9 +223,10 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
     private final class AccountServiceImpl extends BaseIdempotentCloseable implements OctopusAccountService {
         private final AccountKey key;
         private final ObservableValue<AuthState> authState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"));
-        /// Forwards into [#authState] only on a *type-level* transition — `Success → Success` and `PermanentFailure → PermanentFailure` are deduped so
-        /// subscribers aren't spammed by every successful authenticated call. The CAS inside [ConcurrentDeduplicatingConsumer] also makes the concurrent case
-        /// (two `whenComplete` callbacks landing on different dispatcher threads) safe.
+        /// Forwards into [#authState] only on a *type-level* transition — [AuthState.Success] → [AuthState.Success] and [AuthState.PermanentFailure] →
+        /// [AuthState.PermanentFailure] are deduped so subscribers aren't spammed by every successful authenticated call. The CAS inside
+        /// [ConcurrentDeduplicatingConsumer] also makes the concurrent case (two [CompletableFuture#whenComplete] callbacks landing on different dispatcher
+        /// threads) safe.
         private final Consumer<AuthState> authStateUpdater = new ConcurrentDeduplicatingConsumer<>(
                 (previous, next) -> previous.getClass() == next.getClass(), authState);
         private final CompletableFuture<OctopusAccountData> accountFuture;
@@ -278,7 +281,7 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
                 return;
             }
             for (Throwable cur = throwableOrNull; cur != null; cur = cur.getCause()) {
-                if (cur instanceof HttpResponseException http && (http.statusCode() == 401 || http.statusCode() == 403)) {
+                if (cur instanceof HttpResponseException http && (http.statusCode() == UNAUTHORIZED_401 || http.statusCode() == FORBIDDEN_403)) {
                     authStateUpdater.accept(new AuthState.PermanentFailure(humanReadableMessage(throwableOrNull)));
                     return;
                 }
@@ -286,7 +289,7 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
         }
 
         /// Builds a GET [Call] for a URL that requires this account's Basic-auth credentials. Used both for the initial `/accounts/{id}` fetch and for
-        /// `getConsumption(...)` — every authenticated Octopus endpoint takes the same `Authorization: Basic …` header.
+        /// [#getConsumption] — every authenticated Octopus endpoint takes the same `Authorization: Basic …` header.
         private Call authedGetCall(String url) {
             return loggedCall(new Request.Builder()
                                       .url(url)

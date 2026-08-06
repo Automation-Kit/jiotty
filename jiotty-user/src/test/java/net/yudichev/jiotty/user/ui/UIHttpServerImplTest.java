@@ -31,6 +31,8 @@ import java.util.Set;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -106,7 +108,7 @@ class UIHttpServerImplTest {
     void staticResourceGet_servesFile() {
         HttpResponse<String> response = sendGet("/ui/style.css");
 
-        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.statusCode()).isEqualTo(OK_200);
         assertThat(response.body()).isNotEmpty();
         verifyNoInteractions(requestAuthoriser);
     }
@@ -116,7 +118,7 @@ class UIHttpServerImplTest {
     void apiUnknownPath_noHandlerMatches_returns404(String method) {
         HttpResponse<String> response = sendRequest(method, "/ui/api/unknown");
 
-        assertThat(response.statusCode()).isEqualTo(404);
+        assertThat(response.statusCode()).isEqualTo(NOT_FOUND_404);
         assertThat(response.body()).isEqualTo("{\"error\":\"Unknown path\"}");
         verify(runtime).dispatchApiPath(any(), any());
     }
@@ -126,7 +128,7 @@ class UIHttpServerImplTest {
     void apiUnknownPath_handlerMatches_runtimeWritesResponse(String method) {
         asUnchecked(() -> when(runtime.dispatchApiPath(any(), any())).thenAnswer(invocation -> {
             HttpServletResponse resp = invocation.getArgument(1);
-            resp.setStatus(200);
+            resp.setStatus(OK_200);
             resp.setContentType("text/plain");
             resp.getWriter().print("handled-by-api-path-handler");
             return DispatchResult.HANDLED;
@@ -134,7 +136,7 @@ class UIHttpServerImplTest {
 
         HttpResponse<String> response = sendRequest(method, "/ui/api/analytics/some-report");
 
-        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.statusCode()).isEqualTo(OK_200);
         assertThat(response.body()).isEqualTo("handled-by-api-path-handler");
         verify(runtime).dispatchApiPath(any(), any());
     }
@@ -145,7 +147,7 @@ class UIHttpServerImplTest {
             HttpServletRequest req = invocation.getArgument(0);
             HttpServletResponse resp = invocation.getArgument(1);
             req.setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/api/analytics");
-            resp.setStatus(200);
+            resp.setStatus(OK_200);
             resp.setContentType("text/plain");
             resp.getWriter().print("ok");
             return DispatchResult.HANDLED;
@@ -153,7 +155,7 @@ class UIHttpServerImplTest {
 
         HttpResponse<String> response = sendGet("/ui/api/analytics/some-report");
 
-        assertThat(response.statusCode()).as("the handler's own response reaches the client").isEqualTo(200);
+        assertThat(response.statusCode()).as("the handler's own response reaches the client").isEqualTo(OK_200);
         assertThat(response.body()).isEqualTo("ok");
         assertThat(meterRegistry.find("http_response_begin_seconds")
                                 .tag("path", "/api/analytics")
@@ -212,7 +214,7 @@ class UIHttpServerImplTest {
     void outOfMountPath_returnsJsonNotFound(String path) {
         HttpResponse<String> response = sendGet(path);
 
-        assertThat(response.statusCode()).isEqualTo(404);
+        assertThat(response.statusCode()).isEqualTo(NOT_FOUND_404);
         assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(
                 ct -> assertThat(ct).startsWith("application/json"));
         assertThat(response.body()).isEqualTo("{\"error\":\"Not found\"}");
@@ -230,7 +232,7 @@ class UIHttpServerImplTest {
 
         HttpResponse<String> response = sendGet("/mounted/hello");
 
-        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.statusCode()).isEqualTo(OK_200);
         assertThat(response.body()).isEqualTo("mounted-response");
         verifyNoInteractions(requestAuthoriser);
     }
@@ -248,9 +250,9 @@ class UIHttpServerImplTest {
         HttpResponse<String> firstResponse = sendGet("/first/hello");
         HttpResponse<String> secondResponse = sendGet("/second/hello");
 
-        assertThat(firstResponse.statusCode()).isEqualTo(200);
+        assertThat(firstResponse.statusCode()).isEqualTo(OK_200);
         assertThat(firstResponse.body()).isEqualTo("first-response");
-        assertThat(secondResponse.statusCode()).isEqualTo(200);
+        assertThat(secondResponse.statusCode()).isEqualTo(OK_200);
         assertThat(secondResponse.body()).isEqualTo("second-response");
         verifyNoInteractions(requestAuthoriser);
     }
@@ -261,11 +263,11 @@ class UIHttpServerImplTest {
         HttpResponse<String> staticResponse = sendGet("/ui/style.css");
         HttpResponse<String> apiResponse = sendGet("/ui/api/displayables/unknown");
 
-        assertThat(staticResponse.statusCode()).isEqualTo(200);
+        assertThat(staticResponse.statusCode()).isEqualTo(OK_200);
         assertThat(staticResponse.body()).isNotEmpty();
         // /ui/api/* reaches the runtime's dispatchApiPath even when the path doesn't match any handler.
         verify(runtime).dispatchApiPath(any(), any());
-        assertThat(apiResponse.statusCode()).isEqualTo(404);
+        assertThat(apiResponse.statusCode()).isEqualTo(NOT_FOUND_404);
     }
 
     private Set<ServletMount> defaultMounts() {
@@ -279,7 +281,7 @@ class UIHttpServerImplTest {
             var servlet = new HttpServlet() {
                 @Override
                 protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-                    resp.setStatus(200);
+                    resp.setStatus(OK_200);
                     resp.setContentType("text/plain");
                     resp.getWriter().print(body);
                 }

@@ -34,6 +34,11 @@ import java.util.Optional;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.CONFLICT_409;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AdminAlertResolveServletTest {
@@ -95,7 +100,7 @@ class AdminAlertResolveServletTest {
 
         HttpResponse<String> response = sendResolve(alertId, null, GRAFANA_USER);
 
-        assertThat(response.statusCode()).isEqualTo(401);
+        assertThat(response.statusCode()).isEqualTo(UNAUTHORIZED_401);
     }
 
     @Test
@@ -104,14 +109,14 @@ class AdminAlertResolveServletTest {
 
         HttpResponse<String> response = sendResolve(alertId, "wrong-token", GRAFANA_USER);
 
-        assertThat(response.statusCode()).isEqualTo(401);
+        assertThat(response.statusCode()).isEqualTo(UNAUTHORIZED_401);
     }
 
     @Test
     void unknownId_returns404() {
         HttpResponse<String> response = sendResolve("a-nonexistent", VALID_TOKEN, GRAFANA_USER);
 
-        assertThat(response.statusCode()).isEqualTo(404);
+        assertThat(response.statusCode()).isEqualTo(NOT_FOUND_404);
     }
 
     @Test
@@ -122,7 +127,7 @@ class AdminAlertResolveServletTest {
 
         HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER);
 
-        assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(response.statusCode()).isEqualTo(CONFLICT_409);
     }
 
     @Test
@@ -131,7 +136,7 @@ class AdminAlertResolveServletTest {
 
         HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER);
 
-        assertThat(response.statusCode()).isEqualTo(204);
+        assertThat(response.statusCode()).isEqualTo(NO_CONTENT_204);
         assertThat(readResolvedBy(alertId)).contains(GRAFANA_USER);
     }
 
@@ -141,7 +146,7 @@ class AdminAlertResolveServletTest {
 
         HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, null);
 
-        assertThat(response.statusCode()).isEqualTo(204);
+        assertThat(response.statusCode()).isEqualTo(NO_CONTENT_204);
         assertThat(readResolvedBy(alertId)).contains(AdminBearerAuthFilter.DEFAULT_GRAFANA_USER);
     }
 
@@ -152,7 +157,7 @@ class AdminAlertResolveServletTest {
 
         HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER, oversizedBody);
 
-        assertThat(response.statusCode()).isEqualTo(413);
+        assertThat(response.statusCode()).isEqualTo(PAYLOAD_TOO_LARGE_413);
         assertThat(readResolvedBy(alertId)).isEmpty();
     }
 

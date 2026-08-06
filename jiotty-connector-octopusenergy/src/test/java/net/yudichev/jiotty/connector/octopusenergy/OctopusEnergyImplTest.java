@@ -21,6 +21,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_GATEWAY_502;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.stubCalls;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,7 +55,7 @@ class OctopusEnergyImplTest {
             requestLog.add(request);
             String url = request.url().toString();
             String body = stubbedResponses.get(url);
-            return body == null ? null : response(request, stubbedStatuses.getOrDefault(url, 200), body);
+            return body == null ? null : response(request, stubbedStatuses.getOrDefault(url, OK_200), body);
         });
         octopusEnergy = new OctopusEnergyImpl(healthHandler, retryExecutor) {
             @Override
@@ -511,7 +516,7 @@ class OctopusEnergyImplTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {401, 403})
+    @ValueSource(ints = {UNAUTHORIZED_401, FORBIDDEN_403})
     void accountFetch_4xxAuth_transitionsAuthStateToPermanentFailure(int status) {
         stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", status, "{\"detail\":\"unauthorised\"}");
         List<AuthState> observed = new ArrayList<>();
@@ -527,7 +532,7 @@ class OctopusEnergyImplTest {
 
     @Test
     void accountFetch_5xx_reportsUpstreamFailure() {
-        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", 503, "{\"detail\":\"service unavailable\"}");
+        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
 
         octopusEnergy.account("A-12345678", "sk_maybe_ok").close();
 
@@ -536,7 +541,7 @@ class OctopusEnergyImplTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {401, 403})
+    @ValueSource(ints = {UNAUTHORIZED_401, FORBIDDEN_403})
     void accountFetch_4xxAuth_reportsNoUpstreamFailure(int status) {
         // The API answered — these credentials are bad, which is this account's problem, not an outage every other account shares.
         stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", status, "{\"detail\":\"unauthorised\"}");
@@ -553,7 +558,7 @@ class OctopusEnergyImplTest {
         Instant to = Instant.parse("2024-01-02T00:00:00Z");
         stubError(OctopusEnergyImpl.BASE_URL + "/products/AGILE-23-12-06/electricity-tariffs/E-1R-AGILE-23-12-06-A/standard-unit-rates/"
                   + "?page_size=25000&period_from=" + from + "&period_to=" + to,
-                  502, "{\"detail\":\"bad gateway\"}");
+                  BAD_GATEWAY_502, "{\"detail\":\"bad gateway\"}");
 
         try (OctopusRegionService region = octopusEnergy.region('A')) {
             assertThatThrownBy(() -> region.getStandardUnitRates("AGILE-23-12-06", "E-1R-AGILE-23-12-06-A", from, to).join()).isNotNull();
@@ -596,7 +601,7 @@ class OctopusEnergyImplTest {
 
     @Test
     void listProducts_5xx_reportsUpstreamFailure() {
-        stubError(OctopusEnergyImpl.BASE_URL + "/products/?available_at=2024-01-15T12:34:56Z", 503, "{\"detail\":\"service unavailable\"}");
+        stubError(OctopusEnergyImpl.BASE_URL + "/products/?available_at=2024-01-15T12:34:56Z", SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
 
         assertThatThrownBy(() -> octopusEnergy.listProducts(Instant.parse("2024-01-15T12:34:56Z")).join()).isNotNull();
 
@@ -618,7 +623,7 @@ class OctopusEnergyImplTest {
     @Test
     void accountFetch_5xx_leavesAuthStateAsInitialisingTransientFailure() {
         // Server errors and network problems aren't proof that the api key is bad — the bound auth state should stay transient so a retry can recover.
-        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", 503, "{\"detail\":\"service unavailable\"}");
+        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
         List<AuthState> observed = new ArrayList<>();
 
         try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_maybe_ok")) {
@@ -670,7 +675,7 @@ class OctopusEnergyImplTest {
             assertThat(observed).hasSize(1).first().isInstanceOf(AuthState.Success.class);
 
             // First 401 → PermanentFailure notification.
-            stubError(okUrl, 401, "{\"detail\":\"revoked\"}");
+            stubError(okUrl, UNAUTHORIZED_401, "{\"detail\":\"revoked\"}");
             assertThatThrownBy(() -> account.getConsumption("9999999999999", "99XXX99999", from, to).join()).isNotNull();
             assertThat(observed).hasSize(2);
             assertThat(observed.get(1)).isInstanceOf(AuthState.PermanentFailure.class);
@@ -692,7 +697,7 @@ class OctopusEnergyImplTest {
         Instant to = Instant.parse("2024-01-15T01:00:00Z");
         stubError(OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
                   + "?page_size=25000&period_from=" + from + "&period_to=" + to,
-                  401, "{\"detail\":\"revoked\"}");
+                  UNAUTHORIZED_401, "{\"detail\":\"revoked\"}");
 
         List<AuthState> observed = new ArrayList<>();
         try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_revoked")) {

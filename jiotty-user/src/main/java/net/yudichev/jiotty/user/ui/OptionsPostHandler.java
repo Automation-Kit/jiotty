@@ -19,6 +19,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 
 /// Handles `POST /ui/api/options` — option form submission. Responds with 405 on any other HTTP method.
@@ -50,7 +52,7 @@ public final class OptionsPostHandler extends BaseLifecycleComponent implements 
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response) {
         if (!"POST".equals(request.getMethod())) {
-            response.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+            response.setStatus(METHOD_NOT_ALLOWED_405);
             return;
         }
         whenStartedAndNotLifecycling(() -> asUnchecked(() -> {
@@ -103,7 +105,7 @@ public final class OptionsPostHandler extends BaseLifecycleComponent implements 
     private static void writeOptionFormPostFailure(HttpServletResponse response, Throwable throwable) throws IOException {
         response.setContentType("text/plain");
         logger.info("Option form submission failed", throwable);
-        response.setStatus(400);
+        response.setStatus(BAD_REQUEST_400);
         response.getWriter().write(humanReadableMessage(throwable));
     }
 }

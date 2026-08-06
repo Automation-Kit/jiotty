@@ -28,6 +28,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
@@ -121,7 +122,7 @@ class GetDisplayableItemHandlerTest {
         clock.tick();
 
         verify(asyncContext).complete();
-        verify(response).setStatus(500);
+        verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
         // The 500 body is a fixed opaque code — the internal exception text ("DTO generation failed") must not reach the client.
         Map<String, Object> parsed = parseJson(writer.toString());
         assertThat((String) parsed.get("error")).isEqualTo("INTERNAL_ERROR");

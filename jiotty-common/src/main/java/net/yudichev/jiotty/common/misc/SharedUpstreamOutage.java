@@ -10,6 +10,8 @@ import java.sql.SQLTransientConnectionException;
 import java.sql.SQLTransientException;
 
 import static com.google.common.base.Throwables.getCausalChain;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.isServerError;
 
 /// Classifies a failed call to a shared upstream as either an outage every caller would hit (a server-side 5xx, a network error, a database that is
 /// unreachable or out of connections) or a problem specific to the calling subject (rejected credentials, a request the upstream considers invalid, data that
@@ -34,7 +36,8 @@ public final class SharedUpstreamOutage {
         for (Throwable cause : getCausalChain(throwable)) {
             switch (cause) {
                 case HttpResponseException httpResponseException -> {
-                    return httpResponseException.statusCode() >= 500 || httpResponseException.statusCode() == 429;
+                    int statusCode = httpResponseException.statusCode();
+                    return isServerError(statusCode) || statusCode == TOO_MANY_REQUESTS_429;
                 }
                 case SQLNonTransientConnectionException _,
                      SQLRecoverableException _,

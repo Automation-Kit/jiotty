@@ -12,6 +12,7 @@ import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
 
 /// Handles `GET /ui/api/displayables` (exact). Returns the list of currently-visible registered displayables.
 public final class GetDisplayablesListHandler implements ApiPathHandler {
@@ -37,7 +38,7 @@ public final class GetDisplayablesListHandler implements ApiPathHandler {
             return;
         }
         if (!"GET".equals(request.getMethod())) {
-            response.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+            response.setStatus(METHOD_NOT_ALLOWED_405);
             return;
         }
         asUnchecked(() -> writeList(response));

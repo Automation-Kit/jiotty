@@ -23,6 +23,11 @@ import java.util.Map;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 
 /// Handles the `/ui/api/push/devices*` surface:
@@ -74,7 +79,7 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
                 handleRegister(request, response);
                 return;
             }
-            response.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+            response.setStatus(METHOD_NOT_ALLOWED_405);
             return;
         }
         if (pathInfo != null && pathInfo.startsWith(UNREGISTER_PREFIX) && pathInfo.length() > UNREGISTER_PREFIX.length()) {
@@ -82,7 +87,7 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
                 handleUnregister(pathInfo.substring(UNREGISTER_PREFIX.length()), request, response);
                 return;
             }
-            response.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+            response.setStatus(METHOD_NOT_ALLOWED_405);
             return;
         }
         ApiServlet.writeUnknownPath(response);
@@ -95,13 +100,13 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
             try {
                 byte[] bodyBytes = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
                 if (bodyBytes.length > MAX_BODY_BYTES) {
-                    writeJsonError(response, 413, "Request body too large");
+                    writeJsonError(response, PAYLOAD_TOO_LARGE_413, "Request body too large");
                     asyncContext.complete();
                     return;
                 }
                 body = REQUEST_READER.readValue(bodyBytes);
             } catch (IOException e) {
-                writeJsonError(response, 400, "Invalid JSON body");
+                writeJsonError(response, BAD_REQUEST_400, "Invalid JSON body");
                 asyncContext.complete();
                 return;
             }
@@ -128,9 +133,9 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
         try {
             if (throwable != null) {
                 alertService.raise(WARNING, "Push device request failed", logger, throwable);
-                asUnchecked(() -> writeJsonError(response, 500, "INTERNAL_ERROR"));
+                asUnchecked(() -> writeJsonError(response, INTERNAL_SERVER_ERROR_500, "INTERNAL_ERROR"));
             } else {
-                response.setStatus(204);
+                response.setStatus(NO_CONTENT_204);
             }
         } finally {
             asyncContext.complete();

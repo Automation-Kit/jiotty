@@ -3,10 +3,12 @@ package net.yudichev.jiotty.common.rest;
 import com.google.inject.Guice;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.Response;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RestServerModuleTest {
@@ -34,9 +36,9 @@ class RestServerModuleTest {
 
     @Test
     void getRequest() throws Exception {
-        try (okhttp3.Response response = client.newCall(
+        try (Response response = client.newCall(
                 new Request.Builder().url("http://localhost:" + server.port() + "/test").get().build()).execute()) {
-            assertThat(response.code()).isEqualTo(200);
+            assertThat(response.code()).isEqualTo(OK_200);
             assertThat(response.body().string()).isEqualTo("hello");
         }
     }
