@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.energy.octopus;
 
 import com.google.common.reflect.TypeToken;
-import com.google.inject.Key;
 import com.google.inject.Singleton;
 import com.google.inject.TypeLiteral;
 import com.google.inject.assistedinject.FactoryModuleBuilder;
@@ -10,7 +9,7 @@ import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.async.backoff.BackOffConfig;
 import net.yudichev.jiotty.common.async.backoff.BackingOffExceptionHandlerModule;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutorModule;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -34,18 +33,16 @@ import static net.yudichev.jiotty.energy.octopus.Bindings.PriceForecast;
 
 /// Exposes a [PriceForecastServiceRegistry] serving forecasts fetched from public Agile-price forecasting services, with its own threading and retry
 /// policy. One registry per application: the forecast for a region is the same for every consumer, so the per-region services it hands out are shared.
-public final class PriceForecastServiceRegistryModule extends BaseLifecycleComponentModule
-        implements ExposedKeyModule<PriceForecastServiceRegistry> {
+public final class PriceForecastServiceRegistryModule extends BaseExposedKeyModule<PriceForecastServiceRegistry> {
     private final BindingSpec<UpstreamHealthHandler> statusHandlerSpec;
     private final BindingSpec<MeterRegistry> meterRegistrySpec;
     private final BindingSpec<Optional<VarStore>> varStoreSpec;
-    private final Key<PriceForecastServiceRegistry> exposedKey;
 
     private PriceForecastServiceRegistryModule(SpecifiedAnnotation specifiedAnnotation,
                                                BindingSpec<UpstreamHealthHandler> statusHandlerSpec,
                                                BindingSpec<MeterRegistry> meterRegistrySpec,
                                                BindingSpec<Optional<VarStore>> varStoreSpec) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.statusHandlerSpec = checkNotNull(statusHandlerSpec);
         this.meterRegistrySpec = checkNotNull(meterRegistrySpec);
         this.varStoreSpec = checkNotNull(varStoreSpec);
@@ -53,11 +50,6 @@ public final class PriceForecastServiceRegistryModule extends BaseLifecycleCompo
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<PriceForecastServiceRegistry> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

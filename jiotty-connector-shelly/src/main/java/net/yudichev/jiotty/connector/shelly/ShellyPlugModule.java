@@ -1,15 +1,13 @@
 package net.yudichev.jiotty.connector.shelly;
 
-import com.google.inject.Key;
 import net.yudichev.jiotty.common.async.backoff.BackOffConfig;
 import net.yudichev.jiotty.common.async.backoff.BackingOffExceptionHandlerModule;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutorModule;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 
 import java.time.Duration;
 
@@ -18,20 +16,14 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.exposedBy;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
-public final class ShellyPlugModule extends BaseLifecycleComponentModule implements ExposedKeyModule<ShellyPlug> {
+public final class ShellyPlugModule extends BaseExposedKeyModule<ShellyPlug> {
     private final BindingSpec<String> hostSpec;
     private final BindingSpec<BackOffConfig> backoffConfigSpec;
-    private final Key<ShellyPlug> exposedKey;
 
     private ShellyPlugModule(BindingSpec<String> hostSpec, BindingSpec<BackOffConfig> backoffConfigSpec, SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.hostSpec = checkNotNull(hostSpec);
         this.backoffConfigSpec = checkNotNull(backoffConfigSpec);
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
-    }
-
-    @Override
-    public Key<ShellyPlug> getExposedKey() {
-        return exposedKey;
     }
 
     @Override
@@ -59,9 +51,8 @@ public final class ShellyPlugModule extends BaseLifecycleComponentModule impleme
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ShellyPlugModule>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<ShellyPlug, Builder> {
         private BindingSpec<String> hostSpec;
-        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
         private BindingSpec<BackOffConfig> backoffConfigSpec = literally(BackOffConfig.builder()
                                                                                       .setInitialInterval(Duration.ofMillis(500))
                                                                                       .setMaxInterval(Duration.ofSeconds(1))
@@ -79,14 +70,8 @@ public final class ShellyPlugModule extends BaseLifecycleComponentModule impleme
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
-        public ShellyPlugModule build() {
-            return new ShellyPlugModule(hostSpec, backoffConfigSpec, specifiedAnnotation);
+        public ExposedKeyModule<ShellyPlug> build() {
+            return new ShellyPlugModule(hostSpec, backoffConfigSpec, specifiedAnnotation());
         }
     }
 }

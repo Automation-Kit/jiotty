@@ -36,24 +36,24 @@ class VarStoreModuleTest {
         if (withPath) {
             builder.withPath(literally(Paths.get(".")));
         }
-        var injector = Guice.createInjector(new TimeModule(),
-                                            new ExecutorModule(),
+        var injector = Guice.createInjector(TimeModule.builder().build(),
+                                            ExecutorModule.builder().build(),
                                             builder.build());
         assertThat(injector.getBinding(VarStore.class)).isNotNull();
     }
 
     @Test
     void failsWhenNeitherPathNorDataSourceSet() {
-        assertThatThrownBy(() -> Guice.createInjector(new TimeModule(),
-                                                      new ExecutorModule(),
+        assertThatThrownBy(() -> Guice.createInjector(TimeModule.builder().build(),
+                                                      ExecutorModule.builder().build(),
                                                       VarStoreModule.builder().build()))
                 .hasMessageContaining("At least one of 'path', 'dataSourceFactory' is required");
     }
 
     @Test
     void configureWithEncryption() {
-        var injector = Guice.createInjector(new TimeModule(),
-                                            new ExecutorModule(),
+        var injector = Guice.createInjector(TimeModule.builder().build(),
+                                            ExecutorModule.builder().build(),
                                             VarStoreModule.builder()
                                                           .withDataSourceFactory(literally(mock(DataSourceFactory.class)))
                                                           .withEncryptionKeyAlias(literally("master-key-alias"))
@@ -65,8 +65,8 @@ class VarStoreModuleTest {
 
     @Test
     void failsWhenEncryptionAliasSetWithoutKeyStoreAccess() {
-        assertThatThrownBy(() -> Guice.createInjector(new TimeModule(),
-                                                      new ExecutorModule(),
+        assertThatThrownBy(() -> Guice.createInjector(TimeModule.builder().build(),
+                                                      ExecutorModule.builder().build(),
                                                       VarStoreModule.builder()
                                                                     .withDataSourceFactory(literally(mock(DataSourceFactory.class)))
                                                                     .withEncryptionKeyAlias(literally("some-alias"))

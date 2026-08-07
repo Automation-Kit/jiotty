@@ -16,6 +16,6 @@ class JobSchedulerModuleTest {
                                                                   .withZoneId(literally(ZoneId.systemDefault()))
                                                                   .build();
 
-        Guice.createInjector(new TimeModule(), new ExecutorModule(), module).getBinding(module.getExposedKey());
+        Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), module).getBinding(module.getExposedKey());
     }
 }

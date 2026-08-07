@@ -1,28 +1,23 @@
 package net.yudichev.jiotty.connector.world.sun;
 
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
-// TODO add HasWithAnnotation to all jiotty modules
-public final class SunriseSunsetTimesModule extends BaseLifecycleComponentModule implements ExposedKeyModule<SunriseSunsetTimes> {
-    private SunriseSunsetTimesModule() {
+import static net.yudichev.jiotty.common.inject.BaseModuleBuilder.simpleBuilder;
+
+public final class SunriseSunsetTimesModule extends BaseExposedKeyModule<SunriseSunsetTimes> {
+    private SunriseSunsetTimesModule(SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
     }
 
-    public static Builder builder() {
-        return new Builder();
+    public static BaseModuleBuilder<SunriseSunsetTimes, ?> builder() {
+        return simpleBuilder(SunriseSunsetTimesModule::new);
     }
 
     @Override
     protected void configure() {
-        bind(getExposedKey()).to(registerLifecycleComponent(SunriseSunsetTimesImpl.class));
-        expose(getExposedKey());
-    }
-
-    public static class Builder implements TypedBuilder<ExposedKeyModule<SunriseSunsetTimes>> {
-        @Override
-        public ExposedKeyModule<SunriseSunsetTimes> build() {
-            return new SunriseSunsetTimesModule();
-        }
+        bind(exposedKey).to(registerLifecycleComponent(SunriseSunsetTimesImpl.class));
+        expose(exposedKey);
     }
 }

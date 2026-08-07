@@ -39,8 +39,8 @@ final class MqttTeslaTelemetryManualRunner {
         String keyOfClientKeyStorePassInKeyStore = args[7];
         String mqttTopicBase = args[8];
         Application.builder()
-                   .addModule(TimeModule::new)
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> TimeModule.builder().build())
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> KeyStoreAccessModule.builder()
                                                         .setPathToKeystore(literally(pathToKeyStore).map(new TypeToken<>() {},
                                                                                                          new TypeToken<>() {},
@@ -51,8 +51,8 @@ final class MqttTeslaTelemetryManualRunner {
                            .builder()
                            .withMqtt(exposedBy(
                                    MqttModule.builder()
-                                             .setClientId(MqttTeslaTelemetryManualRunner.class.getSimpleName())
-                                             .setServerUri(mqttServerUri)
+                                             .setClientId(literally(MqttTeslaTelemetryManualRunner.class.getSimpleName()))
+                                             .setServerUri(literally(mqttServerUri))
                                              .withConnectionOptionsCustomised(
                                                      exposedBy(SslCustomisationModule.builder()
                                                                                      .setCertTrustStore(

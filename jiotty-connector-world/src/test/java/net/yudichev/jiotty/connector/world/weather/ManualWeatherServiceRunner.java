@@ -26,8 +26,8 @@ final class ManualWeatherServiceRunner {
         var apiKey = args[0];
 
         Application.builder()
-                   .addModule(ExecutorModule::new)
-                   .addModule(TimeModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
+                   .addModule(() -> TimeModule.builder().build())
                    .addModule(() -> WeatherServiceModule.builder()
                                                         .setApiKey(literally(apiKey))
                                                         .build())

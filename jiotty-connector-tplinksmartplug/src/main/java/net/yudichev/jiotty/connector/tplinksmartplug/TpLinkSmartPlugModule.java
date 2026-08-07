@@ -6,11 +6,10 @@ import net.yudichev.jiotty.appliance.ApplianceModule;
 import net.yudichev.jiotty.common.async.backoff.BackOffConfig;
 import net.yudichev.jiotty.common.async.backoff.BackingOffExceptionHandlerModule;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutorModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 
 import java.time.Duration;
 
@@ -19,7 +18,6 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.boundTo;
 import static net.yudichev.jiotty.common.inject.BindingSpec.exposedBy;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
-import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forNoAnnotation;
 
 public abstract class TpLinkSmartPlugModule extends ApplianceModule {
 
@@ -116,9 +114,8 @@ public abstract class TpLinkSmartPlugModule extends ApplianceModule {
         }
     }
 
-    public abstract static class Builder<T extends Builder<T>> implements TypedBuilder<ExposedKeyModule<Appliance>>, HasWithAnnotation {
+    public abstract static class Builder<T extends Builder<T>> extends BaseModuleBuilder<Appliance, T> {
         protected BindingSpec<String> nameSpec;
-        protected SpecifiedAnnotation specifiedAnnotation = forNoAnnotation();
 
         private Builder() {
         }
@@ -127,12 +124,6 @@ public abstract class TpLinkSmartPlugModule extends ApplianceModule {
 
         public T withName(BindingSpec<String> nameSpec) {
             this.nameSpec = checkNotNull(nameSpec);
-            return thisBuilder();
-        }
-
-        @Override
-        public T withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
             return thisBuilder();
         }
     }
@@ -174,7 +165,7 @@ public abstract class TpLinkSmartPlugModule extends ApplianceModule {
             if (super.nameSpec == null) {
                 super.nameSpec = deviceIdSpec;
             }
-            return new ClounTpLinkSmartPlugModule(usernameSpec, passwordSpec, termIdSpec, deviceIdSpec, super.nameSpec, specifiedAnnotation);
+            return new ClounTpLinkSmartPlugModule(usernameSpec, passwordSpec, termIdSpec, deviceIdSpec, super.nameSpec, specifiedAnnotation());
         }
     }
 
@@ -197,7 +188,7 @@ public abstract class TpLinkSmartPlugModule extends ApplianceModule {
             if (super.nameSpec == null) {
                 super.nameSpec = hostSpec;
             }
-            return new LocalTpLinkSmartPlugModule(super.nameSpec, hostSpec, specifiedAnnotation);
+            return new LocalTpLinkSmartPlugModule(super.nameSpec, hostSpec, specifiedAnnotation());
         }
     }
 }

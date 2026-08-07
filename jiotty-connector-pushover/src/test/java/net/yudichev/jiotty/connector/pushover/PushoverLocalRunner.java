@@ -25,14 +25,14 @@ final class PushoverLocalRunner {
         String pathToKeyStore = args[i++];
         userToken = args[i++];
         Application.builder()
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> KeyStoreAccessModule.builder()
                                                         .setPathToKeystore(literally(pathToKeyStore).map(new TypeToken<>() {},
                                                                                                          new TypeToken<>() {},
                                                                                                          Paths::get))
                                                         .setKeystorePass(literally(keyStorePass))
                                                         .build())
-                   .addModule(() -> new PushoverUserAlerterModule(keyStoreEntry("pushover-api-token")))
+                   .addModule(() -> PushoverUserAlerterModule.builder().setApiToken(keyStoreEntry("pushover-api-token")).build())
                    .addModule(() -> new BaseLifecycleComponentModule() {
                        @Override
                        protected void configure() {

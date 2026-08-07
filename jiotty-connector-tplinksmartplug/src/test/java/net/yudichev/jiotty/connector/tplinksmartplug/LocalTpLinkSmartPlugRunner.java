@@ -13,7 +13,7 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 final class LocalTpLinkSmartPlugRunner {
     static void main(String[] args) {
         Application.builder()
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> TpLinkSmartPlugModule.localConnectionBuilder()
                                                          .setHost(literally(args[0]))
                                                          .build())

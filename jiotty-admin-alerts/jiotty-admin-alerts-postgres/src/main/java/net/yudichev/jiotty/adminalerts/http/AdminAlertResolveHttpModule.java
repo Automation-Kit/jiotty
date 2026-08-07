@@ -1,9 +1,8 @@
 package net.yudichev.jiotty.adminalerts.http;
 
-import com.google.inject.Key;
 import com.google.inject.Singleton;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -15,26 +14,20 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 /// Exposes a [ServletMount] for resolving admin alerts that callers plug into [AuthenticatedHttpServerModule] via
 /// [AuthenticatedHttpServerModule.Builder#addServletMount].
-public final class AdminAlertResolveHttpModule extends BaseLifecycleComponentModule implements ExposedKeyModule<ServletMount> {
+public final class AdminAlertResolveHttpModule extends BaseExposedKeyModule<ServletMount> {
     private final BindingSpec<String> resolveTokenSpec;
     private final BindingSpec<AdminAlertService> alertServiceSpec;
-    private final Key<ServletMount> exposedKey;
 
     private AdminAlertResolveHttpModule(SpecifiedAnnotation specifiedAnnotation,
                                         BindingSpec<String> resolveTokenSpec,
                                         BindingSpec<AdminAlertService> alertServiceSpec) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.resolveTokenSpec = checkNotNull(resolveTokenSpec, "resolveTokenSpec");
         this.alertServiceSpec = checkNotNull(alertServiceSpec, "alertServiceSpec");
     }
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<ServletMount> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

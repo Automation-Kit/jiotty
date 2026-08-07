@@ -3,10 +3,11 @@ package net.yudichev.jiotty.user.ui;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Key;
 import com.google.inject.multibindings.Multibinder;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +15,7 @@ import java.util.List;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 
-public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<UIHttpServer> {
+public final class AuthenticatedHttpServerModule extends BaseExposedKeyModule<UIHttpServer> {
     private final BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec;
     private final BindingSpec<Integer> listenPortSpec;
     private final BindingSpec<Double> preAuthRequestsPerSecondSpec;
@@ -31,7 +32,9 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
                                           BindingSpec<Boolean> trustProxyHeadersSpec,
                                           BindingSpec<Double> perUidRequestsPerSecondSpec,
                                           BindingSpec<Double> perUidBurstSpec,
-                                          List<BindingSpec<ServletMount>> servletMountSpecs) {
+                                          List<BindingSpec<ServletMount>> servletMountSpecs,
+                                          SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.userTokenAuthoriserSpec = checkNotNull(userTokenAuthoriserSpec, "userTokenAuthoriserSpec");
         this.listenPortSpec = checkNotNull(listenPortSpec, "listenPortSpec");
         this.preAuthRequestsPerSecondSpec = checkNotNull(preAuthRequestsPerSecondSpec, "preAuthRequestsPerSecondSpec");
@@ -78,11 +81,11 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
                      .installedBy(this::installLifecycleComponentModule);
             mountBinder.addBinding().to(Key.get(ServletMount.class, mountAnnotation));
         }
-        bind(getExposedKey()).to(registerLifecycleComponent(UIHttpServerImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(UIHttpServerImpl.class));
+        expose(exposedKey);
     }
 
-    public static final class Builder implements TypedBuilder<AuthenticatedHttpServerModule> {
+    public static final class Builder extends BaseModuleBuilder<UIHttpServer, Builder> {
         private final List<BindingSpec<ServletMount>> servletMountSpecs = new ArrayList<>();
         private BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec;
         private BindingSpec<Integer> listenPortSpec = BindingSpec.literally(0);
@@ -143,7 +146,7 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
         }
 
         @Override
-        public AuthenticatedHttpServerModule build() {
+        public ExposedKeyModule<UIHttpServer> build() {
             return new AuthenticatedHttpServerModule(userTokenAuthoriserSpec,
                                                      listenPortSpec,
                                                      preAuthRequestsPerSecondSpec,
@@ -151,7 +154,7 @@ public final class AuthenticatedHttpServerModule extends BaseLifecycleComponentM
                                                      trustProxyHeadersSpec,
                                                      perUidRequestsPerSecondSpec,
                                                      perUidBurstSpec,
-                                                     servletMountSpecs);
+                                                     servletMountSpecs, specifiedAnnotation());
         }
     }
 }

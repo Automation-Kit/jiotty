@@ -1,14 +1,12 @@
 package net.yudichev.jiotty.connector.mqtt;
 
-import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import jakarta.inject.Singleton;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.lang.throttling.ThresholdThrottlingConsumerModule;
 import org.eclipse.paho.client.mqttv3.IMqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
@@ -17,22 +15,20 @@ import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
-import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forNoAnnotation;
 
-public final class MqttModule extends BaseLifecycleComponentModule implements ExposedKeyModule<Mqtt> {
-    private final String serverUri;
-    private final String clientId;
+public final class MqttModule extends BaseExposedKeyModule<Mqtt> {
+    private final BindingSpec<String> serverUriSpec;
+    private final BindingSpec<String> clientIdSpec;
     private final BindingSpec<Consumer<MqttConnectOptions>> connectionOptionsCustomiserSpec;
-    private final Key<Mqtt> exposedKey;
 
-    private MqttModule(String serverUri,
-                       String clientId,
+    private MqttModule(BindingSpec<String> serverUriSpec,
+                       BindingSpec<String> clientIdSpec,
                        BindingSpec<Consumer<MqttConnectOptions>> connectionOptionsCustomiserSpec,
                        SpecifiedAnnotation specifiedAnnotation) {
-        this.serverUri = checkNotNull(serverUri);
-        this.clientId = checkNotNull(clientId);
+        super(specifiedAnnotation);
+        this.serverUriSpec = checkNotNull(serverUriSpec);
+        this.clientIdSpec = checkNotNull(clientIdSpec);
         this.connectionOptionsCustomiserSpec = checkNotNull(connectionOptionsCustomiserSpec);
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
     public static Builder builder() {
@@ -40,14 +36,9 @@ public final class MqttModule extends BaseLifecycleComponentModule implements Ex
     }
 
     @Override
-    public Key<Mqtt> getExposedKey() {
-        return exposedKey;
-    }
-
-    @Override
     protected void configure() {
-        bindConstant().annotatedWith(MqttClientProvider.ServerUri.class).to(serverUri);
-        bindConstant().annotatedWith(MqttClientProvider.ClientId.class).to(clientId);
+        serverUriSpec.bind(String.class).annotatedWith(MqttClientProvider.ServerUri.class).installedBy(this::installLifecycleComponentModule);
+        clientIdSpec.bind(String.class).annotatedWith(MqttClientProvider.ClientId.class).installedBy(this::installLifecycleComponentModule);
         bind(IMqttAsyncClient.class).toProvider(MqttClientProvider.class).in(Singleton.class);
 
         connectionOptionsCustomiserSpec.bind(new TypeLiteral<>() {})
@@ -63,19 +54,18 @@ public final class MqttModule extends BaseLifecycleComponentModule implements Ex
         expose(exposedKey);
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<Mqtt>>, HasWithAnnotation {
-        private String serverUri;
-        private String clientId;
+    public static final class Builder extends BaseModuleBuilder<Mqtt, Builder> {
+        private BindingSpec<String> serverUriSpec;
+        private BindingSpec<String> clientIdSpec;
         private BindingSpec<Consumer<MqttConnectOptions>> connectionOptionsCustomiserSpec = BindingSpec.literally(ignored -> {});
-        private SpecifiedAnnotation specifiedAnnotation = forNoAnnotation();
 
-        public Builder setServerUri(String serverUri) {
-            this.serverUri = checkNotNull(serverUri);
+        public Builder setServerUri(BindingSpec<String> serverUriSpec) {
+            this.serverUriSpec = checkNotNull(serverUriSpec);
             return this;
         }
 
-        public Builder setClientId(String clientId) {
-            this.clientId = checkNotNull(clientId);
+        public Builder setClientId(BindingSpec<String> clientIdSpec) {
+            this.clientIdSpec = checkNotNull(clientIdSpec);
             return this;
         }
 
@@ -85,14 +75,8 @@ public final class MqttModule extends BaseLifecycleComponentModule implements Ex
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExposedKeyModule<Mqtt> build() {
-            return new MqttModule(serverUri, clientId, connectionOptionsCustomiserSpec, specifiedAnnotation);
+            return new MqttModule(serverUriSpec, clientIdSpec, connectionOptionsCustomiserSpec, specifiedAnnotation());
         }
     }
 }

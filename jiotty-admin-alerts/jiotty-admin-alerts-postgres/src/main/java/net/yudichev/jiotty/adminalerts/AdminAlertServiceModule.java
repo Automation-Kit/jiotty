@@ -2,10 +2,9 @@ package net.yudichev.jiotty.adminalerts;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
-import com.google.inject.Key;
 import net.yudichev.jiotty.adminalerts.cleanup.AlertHistoryCleanupJob;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -28,7 +27,7 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.annotatedWith;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
-public final class AdminAlertServiceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<AdminAlertService> {
+public final class AdminAlertServiceModule extends BaseExposedKeyModule<AdminAlertService> {
     /// Thread name base of the single-threaded executor this module's persistence work runs on.
     @VisibleForTesting
     public static final String EXECUTOR_THREAD_NAME = "AdminAlertService";
@@ -41,7 +40,6 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
     private final BindingSpec<Duration> cleanupRetentionSpec;
     private final BindingSpec<Integer> maxBundlesSpec;
     private final BindingSpec<Integer> maxEventsPerBundleSpec;
-    private final Key<AdminAlertService> exposedKey;
 
     private AdminAlertServiceModule(SpecifiedAnnotation specifiedAnnotation,
                                     BindingSpec<DataSourceFactory> dataSourceFactorySpec,
@@ -52,7 +50,7 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
                                     BindingSpec<Duration> cleanupRetentionSpec,
                                     BindingSpec<Integer> maxBundlesSpec,
                                     BindingSpec<Integer> maxEventsPerBundleSpec) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
         this.varStoreSpec = checkNotNull(varStoreSpec, "varStoreSpec");
         this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
@@ -65,11 +63,6 @@ public final class AdminAlertServiceModule extends BaseLifecycleComponentModule 
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<AdminAlertService> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

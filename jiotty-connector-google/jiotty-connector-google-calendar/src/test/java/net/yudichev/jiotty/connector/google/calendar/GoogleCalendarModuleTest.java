@@ -34,6 +34,6 @@ class GoogleCalendarModuleTest {
         }
         ExposedKeyModule<CalendarService> module = builder.build();
         // getInstance (not getBinding) so a throwing or unsatisfiable provider anywhere in the graph fails the test; construction succeeding is the assertion.
-        Guice.createInjector(new TimeModule(), new ExecutorModule(), module).getInstance(module.getExposedKey());
+        Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), module).getInstance(module.getExposedKey());
     }
 }

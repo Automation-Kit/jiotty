@@ -1,39 +1,25 @@
 package net.yudichev.jiotty.timeseriescache;
 
-import com.google.inject.Key;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
-import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
+
+import static net.yudichev.jiotty.common.inject.BaseModuleBuilder.simpleBuilder;
 
 /// Installs a [NoOpTimeSeriesCache] and exposes it as [TimeSeriesCache]. Suitable for deployments that want the typed-stream API without retaining any data —
 /// every read recomputes from source. For production deployments with persistence requirements use [TimeSeriesCacheModule] (Postgres-backed).
-public final class NoOpTimeSeriesCacheModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TimeSeriesCache> {
-    private final Key<TimeSeriesCache> exposedKey;
-
+public final class NoOpTimeSeriesCacheModule extends BaseExposedKeyModule<TimeSeriesCache> {
     private NoOpTimeSeriesCacheModule(SpecifiedAnnotation specifiedAnnotation) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
     }
 
-    public static Builder builder() {
-        return new Builder();
-    }
-
-    @Override
-    public Key<TimeSeriesCache> getExposedKey() {
-        return exposedKey;
+    public static BaseModuleBuilder<TimeSeriesCache, ?> builder() {
+        return simpleBuilder(NoOpTimeSeriesCacheModule::new);
     }
 
     @Override
     protected void configure() {
         bind(exposedKey).toInstance(new NoOpTimeSeriesCache());
         expose(exposedKey);
-    }
-
-    public static final class Builder extends BaseModuleBuilder<TimeSeriesCache, Builder> {
-        @Override
-        public ExposedKeyModule<TimeSeriesCache> build() {
-            return new NoOpTimeSeriesCacheModule(specifiedAnnotation());
-        }
     }
 }

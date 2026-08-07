@@ -18,7 +18,7 @@ class ExpoPushSenderModuleTest {
 
         assertThat(module.getExposedKey()).isEqualTo(Key.get(ExpoPushSender.class));
 
-        var injector = Guice.createInjector(new ExecutorModule(), module);
+        var injector = Guice.createInjector(ExecutorModule.builder().build(), module);
         assertThat(injector.getBinding(module.getExposedKey())).isNotNull();
     }
 
@@ -30,7 +30,7 @@ class ExpoPushSenderModuleTest {
                                                                       .withBaseUrl(literally("http://localhost:1234"))
                                                                       .build();
 
-        var injector = Guice.createInjector(new ExecutorModule(), module);
+        var injector = Guice.createInjector(ExecutorModule.builder().build(), module);
         assertThat(injector.getBinding(module.getExposedKey())).isNotNull();
     }
 }

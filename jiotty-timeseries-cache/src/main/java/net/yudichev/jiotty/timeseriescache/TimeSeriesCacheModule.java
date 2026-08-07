@@ -7,7 +7,7 @@ import com.google.inject.Key;
 import com.google.inject.multibindings.OptionalBinder;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -33,7 +33,7 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.annotatedWith;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
-public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TimeSeriesCache> {
+public final class TimeSeriesCacheModule extends BaseExposedKeyModule<TimeSeriesCache> {
     /// Thread-name base of the single-threaded executor this module's persistence work runs on.
     @VisibleForTesting
     public static final String EXECUTOR_THREAD_NAME = "TimeSeriesCache";
@@ -46,7 +46,6 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
     private final @Nullable BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec;
     private final BindingSpec<Duration> cleanupIntervalSpec;
     private final BindingSpec<Duration> cleanupRetentionSpec;
-    private final Key<TimeSeriesCache> exposedKey;
 
     private TimeSeriesCacheModule(SpecifiedAnnotation specifiedAnnotation,
                                   BindingSpec<DataSourceFactory> dataSourceFactorySpec,
@@ -57,7 +56,7 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
                                   @Nullable BindingSpec<ActiveUserIdsSupplier> cleanupActiveUserIdsSupplierSpec,
                                   BindingSpec<Duration> cleanupIntervalSpec,
                                   @Nullable BindingSpec<Duration> cleanupRetentionSpec) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
         this.alertServiceSpec = checkNotNull(alertServiceSpec, "alertServiceSpec");
         this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
@@ -70,11 +69,6 @@ public final class TimeSeriesCacheModule extends BaseLifecycleComponentModule im
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<TimeSeriesCache> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

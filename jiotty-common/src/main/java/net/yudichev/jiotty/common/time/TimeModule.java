@@ -1,12 +1,23 @@
 package net.yudichev.jiotty.common.time;
 
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
-public final class TimeModule extends BaseLifecycleComponentModule implements ExposedKeyModule<CurrentDateTimeProvider> {
+import static net.yudichev.jiotty.common.inject.BaseModuleBuilder.simpleBuilder;
+
+public final class TimeModule extends BaseExposedKeyModule<CurrentDateTimeProvider> {
+    private TimeModule(SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
+    }
+
+    public static BaseModuleBuilder<CurrentDateTimeProvider, ?> builder() {
+        return simpleBuilder(TimeModule::new);
+    }
+
     @Override
     protected void configure() {
-        bind(getExposedKey()).to(TimeProvider.class);
-        expose(getExposedKey());
+        bind(exposedKey).to(TimeProvider.class);
+        expose(exposedKey);
     }
 }

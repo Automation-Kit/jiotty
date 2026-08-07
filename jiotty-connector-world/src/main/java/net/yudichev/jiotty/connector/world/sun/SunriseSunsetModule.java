@@ -1,30 +1,26 @@
 package net.yudichev.jiotty.connector.world.sun;
 
 import com.google.inject.assistedinject.FactoryModuleBuilder;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
-public final class SunriseSunsetModule extends BaseLifecycleComponentModule implements ExposedKeyModule<SunriseSunsetServiceFactory> {
-    private SunriseSunsetModule() {
+import static net.yudichev.jiotty.common.inject.BaseModuleBuilder.simpleBuilder;
+
+public final class SunriseSunsetModule extends BaseExposedKeyModule<SunriseSunsetServiceFactory> {
+    private SunriseSunsetModule(SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
     }
 
-    public static Builder builder() {
-        return new Builder();
+    public static BaseModuleBuilder<SunriseSunsetServiceFactory, ?> builder() {
+        return simpleBuilder(SunriseSunsetModule::new);
     }
 
     @Override
     protected void configure() {
         install(new FactoryModuleBuilder()
                         .implement(SunriseSunsetService.class, SunriseSunsetServiceImpl.class)
-                        .build(getExposedKey()));
-        expose(getExposedKey());
-    }
-
-    public static class Builder implements TypedBuilder<ExposedKeyModule<SunriseSunsetServiceFactory>> {
-        @Override
-        public ExposedKeyModule<SunriseSunsetServiceFactory> build() {
-            return new SunriseSunsetModule();
-        }
+                        .build(exposedKey));
+        expose(exposedKey);
     }
 }

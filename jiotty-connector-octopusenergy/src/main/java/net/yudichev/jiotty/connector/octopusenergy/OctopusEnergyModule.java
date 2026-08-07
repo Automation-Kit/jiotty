@@ -1,9 +1,8 @@
 package net.yudichev.jiotty.connector.octopusenergy;
 
-import com.google.inject.Key;
 import com.google.inject.Singleton;
 import net.yudichev.jiotty.common.async.backoff.BackOffConfig;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -17,22 +16,16 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.async.backoff.SharedUpstreamOutageBackOff.sharedOutageRetryExecutorModule;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
-public final class OctopusEnergyModule extends BaseLifecycleComponentModule implements ExposedKeyModule<OctopusEnergy> {
-    private final Key<OctopusEnergy> exposedKey;
+public final class OctopusEnergyModule extends BaseExposedKeyModule<OctopusEnergy> {
     private final BindingSpec<UpstreamHealthHandler> healthHandlerSpec;
 
     private OctopusEnergyModule(SpecifiedAnnotation specifiedAnnotation, BindingSpec<UpstreamHealthHandler> healthHandlerSpec) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.healthHandlerSpec = checkNotNull(healthHandlerSpec);
     }
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<OctopusEnergy> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

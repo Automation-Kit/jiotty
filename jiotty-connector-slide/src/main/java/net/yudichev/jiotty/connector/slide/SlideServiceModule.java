@@ -3,12 +3,11 @@ package net.yudichev.jiotty.connector.slide;
 import com.google.inject.Key;
 import jakarta.inject.Singleton;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -16,7 +15,6 @@ import java.util.function.Supplier;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
-import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forNoAnnotation;
 import static net.yudichev.jiotty.connector.slide.Bindings.DeviceCode;
 import static net.yudichev.jiotty.connector.slide.Bindings.DeviceHost;
 import static net.yudichev.jiotty.connector.slide.Bindings.Email;
@@ -24,13 +22,12 @@ import static net.yudichev.jiotty.connector.slide.Bindings.Password;
 import static net.yudichev.jiotty.connector.slide.Bindings.ServiceExecutor;
 
 @SuppressWarnings("OverlyCoupledClass") // module
-public final class SlideServiceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<SlideService> {
+public final class SlideServiceModule extends BaseExposedKeyModule<SlideService> {
     private final BindingSpec<String> hostSpec;
     private final BindingSpec<String> deviceCodeSpec;
     private final BindingSpec<String> emailSpec;
     private final BindingSpec<String> passwordSpec;
     private final Optional<BindingSpec<Double>> positionVerificationToleranceSpec;
-    private final Key<SlideService> exposedKey;
 
     private boolean executorBound;
 
@@ -40,21 +37,16 @@ public final class SlideServiceModule extends BaseLifecycleComponentModule imple
                                BindingSpec<String> passwordSpec,
                                Optional<BindingSpec<Double>> positionVerificationToleranceSpec,
                                SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.hostSpec = hostSpec;
         this.deviceCodeSpec = deviceCodeSpec;
         this.emailSpec = emailSpec;
         this.passwordSpec = passwordSpec;
         this.positionVerificationToleranceSpec = checkNotNull(positionVerificationToleranceSpec);
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<SlideService> getExposedKey() {
-        return exposedKey;
     }
 
     @Override
@@ -102,11 +94,10 @@ public final class SlideServiceModule extends BaseLifecycleComponentModule imple
         }
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<SlideService>>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<SlideService, Builder> {
         private BindingSpec<String> emailSpec;
         private BindingSpec<String> passwordSpec;
         private BindingSpec<String> hostSpec;
-        private SpecifiedAnnotation specifiedAnnotation = forNoAnnotation();
         private BindingSpec<Double> positionVerificationToleranceSpec;
         private BindingSpec<String> deviceCodeSpec;
 
@@ -134,12 +125,6 @@ public final class SlideServiceModule extends BaseLifecycleComponentModule imple
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExposedKeyModule<SlideService> build() {
             if (hostSpec == null) {
                 checkState(emailSpec != null, "one of setCloutConnection or setLocalConnection is required");
@@ -150,7 +135,7 @@ public final class SlideServiceModule extends BaseLifecycleComponentModule imple
                                           emailSpec,
                                           passwordSpec,
                                           Optional.ofNullable(positionVerificationToleranceSpec),
-                                          specifiedAnnotation);
+                                          specifiedAnnotation());
         }
     }
 }

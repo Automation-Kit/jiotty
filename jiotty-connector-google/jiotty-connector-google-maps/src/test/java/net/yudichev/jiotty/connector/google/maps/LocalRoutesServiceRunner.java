@@ -19,7 +19,7 @@ final class LocalRoutesServiceRunner {
 
     static void main(String[] args) {
         Application.builder()
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> RoutesServiceModule.builder()
                                                        .setApiKey(literally(args[0]))
                                                        .build())

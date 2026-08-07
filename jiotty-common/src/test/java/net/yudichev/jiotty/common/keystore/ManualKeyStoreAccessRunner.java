@@ -28,7 +28,7 @@ final class ManualKeyStoreAccessRunner {
     static void main(String[] args) {
         alias = args[2];
         Application.builder()
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> KeyStoreAccessModule.builder()
                                                         .setPathToKeystore(literally(Paths.get(args[0])))
                                                         .setKeystorePass(literally(args[1]))
@@ -37,7 +37,10 @@ final class ManualKeyStoreAccessRunner {
                        @Override
                        protected void configure() {
                            registerLifecycleComponent(Runner.class);
-                           installLifecycleComponentModule(new KeyStoreEntryModule(literally(alias), forAnnotation(Alias.class)));
+                           installLifecycleComponentModule(KeyStoreEntryModule.builder()
+                                                                              .setAlias(literally(alias))
+                                                                              .withAnnotation(forAnnotation(Alias.class))
+                                                                              .build());
                        }
                    })
                    .build()

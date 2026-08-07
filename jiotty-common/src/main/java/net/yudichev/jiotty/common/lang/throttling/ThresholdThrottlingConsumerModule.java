@@ -5,13 +5,15 @@ import com.google.common.reflect.TypeToken;
 import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import com.google.inject.assistedinject.FactoryModuleBuilder;
-import net.yudichev.jiotty.common.inject.*;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
+import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
+import net.yudichev.jiotty.common.inject.TypeLiterals;
 
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forNoAnnotation;
 
 public final class ThresholdThrottlingConsumerModule<T> extends BaseLifecycleComponentModule
         implements ExposedKeyModule<ThresholdThrottlingConsumerFactory<T>> {
@@ -20,7 +22,7 @@ public final class ThresholdThrottlingConsumerModule<T> extends BaseLifecycleCom
 
     private ThresholdThrottlingConsumerModule(TypeToken<T> valueType, SpecifiedAnnotation specifiedAnnotation) {
         this.valueType = checkNotNull(valueType);
-        exposedKey = specifiedAnnotation.specify(asReifiedTypeLiteral(new TypeToken<ThresholdThrottlingConsumerFactory<T>>() {}));
+        exposedKey = specifiedAnnotation.specify(asReifiedTypeLiteral(new TypeToken<>() {}));
     }
 
     @Override
@@ -35,14 +37,15 @@ public final class ThresholdThrottlingConsumerModule<T> extends BaseLifecycleCom
     @Override
     protected void configure() {
         install(new FactoryModuleBuilder()
-                .implement(asReifiedTypeLiteral(new TypeToken<Consumer<T>>() {}), asReifiedTypeLiteral(new TypeToken<ThresholdThrottlingConsumer<T>>() {}))
-                .build(exposedKey));
+                        .implement(asReifiedTypeLiteral(new TypeToken<Consumer<T>>() {}),
+                                   asReifiedTypeLiteral(new TypeToken<ThresholdThrottlingConsumer<T>>() {}))
+                        .build(exposedKey));
 
         expose(exposedKey);
     }
 
     private <U> TypeLiteral<U> asReifiedTypeLiteral(TypeToken<U> typeToken) {
-        return TypeLiterals.asTypeLiteral(typeToken.where(new TypeParameter<T>() {}, valueType));
+        return TypeLiterals.asTypeLiteral(typeToken.where(new TypeParameter<>() {}, valueType));
     }
 
     public static final class ValueChoiceBuilder {
@@ -56,24 +59,16 @@ public final class ThresholdThrottlingConsumerModule<T> extends BaseLifecycleCom
         }
     }
 
-    public static final class Builder<T> implements TypedBuilder<ExposedKeyModule<ThresholdThrottlingConsumerFactory<T>>>, HasWithAnnotation {
+    public static final class Builder<T> extends BaseModuleBuilder<ThresholdThrottlingConsumerFactory<T>, Builder<T>> {
         private final TypeToken<T> valueType;
-        private SpecifiedAnnotation specifiedAnnotation = forNoAnnotation();
 
         private Builder(TypeToken<T> valueType) {
             this.valueType = checkNotNull(valueType);
         }
 
         @Override
-        public Builder<T> withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExposedKeyModule<ThresholdThrottlingConsumerFactory<T>> build() {
-            return new ThresholdThrottlingConsumerModule<>(valueType, specifiedAnnotation);
+            return new ThresholdThrottlingConsumerModule<>(valueType, specifiedAnnotation());
         }
     }
-
 }

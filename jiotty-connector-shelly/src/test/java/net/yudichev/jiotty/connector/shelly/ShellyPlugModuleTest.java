@@ -24,7 +24,7 @@ class ShellyPlugModuleTest {
                                      .setHost(BindingSpec.literally("host"))
                                      .withAnnotation(SpecifiedAnnotation.forAnnotation(TheAnnotation.class))
                                      .build();
-        Guice.createInjector(new TimeModule(), new ExecutorModule(), module)
+        Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), module)
              .getBinding(Key.get(ShellyPlug.class, TheAnnotation.class));
     }
 

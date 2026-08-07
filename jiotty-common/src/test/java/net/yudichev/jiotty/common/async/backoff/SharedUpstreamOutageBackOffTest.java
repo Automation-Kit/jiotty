@@ -27,7 +27,7 @@ class SharedUpstreamOutageBackOffTest {
                                                                                               BackOffConfig.builder().build());
 
         assertThat(module.getExposedKey()).isEqualTo(Key.get(RetryableOperationExecutor.class, Dependency.class));
-        var injector = Guice.createInjector(new ExecutorModule(), new BaseLifecycleComponentModule() {
+        var injector = Guice.createInjector(ExecutorModule.builder().build(), new BaseLifecycleComponentModule() {
             @Override
             protected void configure() {
                 installLifecycleComponentModule(module);

@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.common.rest;
 
-import com.google.inject.Key;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -10,22 +9,16 @@ import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
-public final class RestServerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<RestServer> {
+public final class RestServerModule extends BaseExposedKeyModule<RestServer> {
     private final BindingSpec<Integer> listenPortSpec;
-    private final Key<RestServer> exposedKey;
 
     private RestServerModule(SpecifiedAnnotation specifiedAnnotation, BindingSpec<Integer> listenPortSpec) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.listenPortSpec = checkNotNull(listenPortSpec);
     }
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<RestServer> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

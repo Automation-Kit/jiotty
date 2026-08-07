@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class HomeLocationModuleTest {
     @Test
     void configure(@Mock UIServer uiServer) {
-        var injector = Guice.createInjector(new ExecutorModule(),
+        var injector = Guice.createInjector(ExecutorModule.builder().build(),
                                             binder -> binder.bind(UIServer.class).toInstance(uiServer),
                                             HomeLocationModule.builder().build());
 

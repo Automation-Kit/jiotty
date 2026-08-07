@@ -2,15 +2,13 @@ package net.yudichev.jiotty.persistence.recording;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
-import com.google.inject.Key;
 import com.google.inject.assistedinject.FactoryModuleBuilder;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainModule;
 
@@ -27,26 +25,20 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.boundTo;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
-public final class RecordingModule extends BaseLifecycleComponentModule implements ExposedKeyModule<RecordingService> {
+public final class RecordingModule extends BaseExposedKeyModule<RecordingService> {
     /// Thread-name base of the single-threaded executor this module's persistence work runs on.
     @VisibleForTesting
     public static final String EXECUTOR_THREAD_NAME = "PSQL";
 
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
     private final boolean readOnly;
-    private final Key<RecordingService> exposedKey;
 
     private RecordingModule(BindingSpec<DataSourceFactory> dataSourceFactorySpec,
                             SpecifiedAnnotation specifiedAnnotation,
                             boolean readOnly) {
+        super(specifiedAnnotation);
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
         this.readOnly = readOnly;
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
-    }
-
-    @Override
-    public Key<RecordingService> getExposedKey() {
-        return exposedKey;
     }
 
     public static Builder builder() {
@@ -75,14 +67,13 @@ public final class RecordingModule extends BaseLifecycleComponentModule implemen
                         .build(UIDestinationFactory.class));
 
         bind(DestinationFactory.class).to(DestinationFactoryImpl.class);
-        bind(getExposedKey()).to(registerLifecycleComponent(RecordingServiceImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(RecordingServiceImpl.class));
+        expose(exposedKey);
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<RecordingService>>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<RecordingService, Builder> {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec = boundTo(DataSourceFactory.class);
         private boolean readOnly;
-        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
 
         public Builder withDataSourceFactory(BindingSpec<DataSourceFactory> dataSourceFactorySpec) {
             this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
@@ -95,14 +86,8 @@ public final class RecordingModule extends BaseLifecycleComponentModule implemen
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExposedKeyModule<RecordingService> build() {
-            return new RecordingModule(dataSourceFactorySpec, specifiedAnnotation, readOnly);
+            return new RecordingModule(dataSourceFactorySpec, specifiedAnnotation(), readOnly);
         }
     }
 

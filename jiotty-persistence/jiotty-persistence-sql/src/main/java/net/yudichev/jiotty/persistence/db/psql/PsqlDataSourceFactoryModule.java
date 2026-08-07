@@ -2,9 +2,8 @@ package net.yudichev.jiotty.persistence.db.psql;
 
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
-import com.google.inject.Key;
 import io.micrometer.core.instrument.MeterRegistry;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -24,7 +23,7 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
-public final class PsqlDataSourceFactoryModule extends BaseLifecycleComponentModule implements ExposedKeyModule<DataSourceFactory> {
+public final class PsqlDataSourceFactoryModule extends BaseExposedKeyModule<DataSourceFactory> {
     /// The default pool size, used by callers that do not set one explicitly. A consumer that carries all users' load on a single shared pool (e.g. the
     /// recording service) overrides this via [Builder#withMaximumPoolSize].
     private static final int DEFAULT_MAXIMUM_POOL_SIZE = 2;
@@ -32,23 +31,17 @@ public final class PsqlDataSourceFactoryModule extends BaseLifecycleComponentMod
     private final BindingSpec<JdbcConnectionConfig> connectionConfigSpec;
     private final BindingSpec<Integer> maximumPoolSizeSpec;
     private final BindingSpec<MeterRegistry> meterRegistrySpec;
-    private final Key<DataSourceFactory> exposedKey;
 
     private PsqlDataSourceFactoryModule(BindingSpec<JdbcConnectionConfig> connectionConfigSpec,
                                         BindingSpec<Integer> maximumPoolSizeSpec,
                                         BindingSpec<MeterRegistry> meterRegistrySpec,
                                         SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.connectionConfigSpec = checkNotNull(connectionConfigSpec);
         this.maximumPoolSizeSpec = checkNotNull(maximumPoolSizeSpec);
         this.meterRegistrySpec = checkNotNull(meterRegistrySpec);
         // Honour the caller's annotation so several independently-sized pools can coexist (e.g. a large recording pool alongside the default one); with no
         // annotation this is the plain DataSourceFactory, as before.
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
-    }
-
-    @Override
-    public Key<DataSourceFactory> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

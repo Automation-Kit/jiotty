@@ -15,8 +15,8 @@ class GmailModuleTest {
     @Test
     void configure(@Mock GoogleAuthorization authorization) {
         var module = GmailModule.builder()
-                .withAuthorization(literally(authorization))
-                .build();
-        Guice.createInjector(new ExecutorModule(), module).getBinding(module.getExposedKey());
+                                .withAuthorization(literally(authorization))
+                                .build();
+        Guice.createInjector(ExecutorModule.builder().build(), module).getBinding(module.getExposedKey());
     }
 }

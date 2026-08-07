@@ -23,8 +23,8 @@ import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.huma
 final class MieleDishwasherManualRunner {
     static void main(String[] args) {
         Application.builder()
-                   .addModule(TimeModule::new)
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> TimeModule.builder().build())
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> VarStoreModule.builder().withPath(literally(Paths.get(args[0], "varstore.json"))).build())
                    .addModule(() -> MieleModule.builder()
                                                .setDeviceId(literally(args[1]))

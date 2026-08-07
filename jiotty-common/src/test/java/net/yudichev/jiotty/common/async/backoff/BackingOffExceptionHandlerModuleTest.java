@@ -21,7 +21,7 @@ class BackingOffExceptionHandlerModuleTest {
     @Test
     void injector() {
         Injector injector = Guice.createInjector(
-                new ExecutorModule(),
+                ExecutorModule.builder().build(),
                 RetryableOperationExecutorModule.builder()
                                                 .setBackingOffExceptionHandler(exposedBy(
                                                         BackingOffExceptionHandlerModule.builder()

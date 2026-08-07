@@ -2,10 +2,11 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 
 import com.google.common.reflect.TypeToken;
 import com.google.inject.TypeLiteral;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 
 import java.util.Optional;
@@ -13,7 +14,7 @@ import java.util.Optional;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
-public final class TeslaFleetPartnerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TeslaFleetPartner> {
+public final class TeslaFleetPartnerModule extends BaseExposedKeyModule<TeslaFleetPartner> {
     private final BindingSpec<String> clientIdSpec;
     private final BindingSpec<String> clientSecretSpec;
     private final BindingSpec<String> scopeSpec;
@@ -24,7 +25,9 @@ public final class TeslaFleetPartnerModule extends BaseLifecycleComponentModule 
                                     BindingSpec<String> clientSecretSpec,
                                     BindingSpec<String> scopeSpec,
                                     BindingSpec<String> baseUrlSpec,
-                                    BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec) {
+                                    BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec,
+                                    SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.clientSecretSpec = checkNotNull(clientSecretSpec);
         this.scopeSpec = checkNotNull(scopeSpec);
@@ -41,15 +44,15 @@ public final class TeslaFleetPartnerModule extends BaseLifecycleComponentModule 
         sslCustomisationSpec.bind(new TypeLiteral<>() {})
                             .annotatedWith(TeslaFleetPartnerImpl.Dependency.class)
                             .installedBy(this::installLifecycleComponentModule);
-        bind(getExposedKey()).to(registerLifecycleComponent(TeslaFleetPartnerImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(TeslaFleetPartnerImpl.class));
+        expose(exposedKey);
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<TeslaFleetPartner>> {
+    public static final class Builder extends BaseModuleBuilder<TeslaFleetPartner, Builder> {
         private BindingSpec<String> clientIdSpec;
         private BindingSpec<String> clientSecretSpec;
         private BindingSpec<String> scopeSpec = literally("openid offline_access");
@@ -83,7 +86,7 @@ public final class TeslaFleetPartnerModule extends BaseLifecycleComponentModule 
 
         @Override
         public ExposedKeyModule<TeslaFleetPartner> build() {
-            return new TeslaFleetPartnerModule(clientIdSpec, clientSecretSpec, scopeSpec, baseUrlSpec, sslCustomisationSpec);
+            return new TeslaFleetPartnerModule(clientIdSpec, clientSecretSpec, scopeSpec, baseUrlSpec, sslCustomisationSpec, specifiedAnnotation());
         }
     }
 }

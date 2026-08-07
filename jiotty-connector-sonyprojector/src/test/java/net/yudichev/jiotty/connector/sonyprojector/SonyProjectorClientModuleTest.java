@@ -17,7 +17,7 @@ class SonyProjectorClientModuleTest {
                                               .withTimeout(literally(Duration.ofSeconds(1)))
                                               .withPassword(literally("secret"))
                                               .build();
-        Guice.createInjector(new ExecutorModule(), module).getBinding(SonyProjectorClient.class);
+        Guice.createInjector(ExecutorModule.builder().build(), module).getBinding(SonyProjectorClient.class);
     }
 
     @Test
@@ -25,6 +25,6 @@ class SonyProjectorClientModuleTest {
         var module = SonyProjectorClientModule.builder()
                                               .setHost(literally("host"))
                                               .build();
-        Guice.createInjector(new ExecutorModule(), module).getBinding(SonyProjectorClient.class);
+        Guice.createInjector(ExecutorModule.builder().build(), module).getBinding(SonyProjectorClient.class);
     }
 }

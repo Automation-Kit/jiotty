@@ -25,7 +25,7 @@ final class GoogleAssistantLocalRunner {
 
     static void main(String[] args) {
         Application.builder()
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> GoogleAuthorizationModule
                            .builder()
                            .setSettings(GoogleApiAuthSettings.builder()

@@ -1,17 +1,19 @@
 package net.yudichev.jiotty.connector.homeassistant;
 
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class HomeAssistantClientModule extends BaseLifecycleComponentModule implements ExposedKeyModule<HomeAssistantClient> {
+public final class HomeAssistantClientModule extends BaseExposedKeyModule<HomeAssistantClient> {
     private final BindingSpec<String> baseUrlSpec;
     private final BindingSpec<String> accessTokenSpec;
 
-    public HomeAssistantClientModule(BindingSpec<String> baseUrlSpec, BindingSpec<String> accessTokenSpec) {
+    private HomeAssistantClientModule(BindingSpec<String> baseUrlSpec, BindingSpec<String> accessTokenSpec, SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.baseUrlSpec = checkNotNull(baseUrlSpec);
         this.accessTokenSpec = checkNotNull(accessTokenSpec);
     }
@@ -25,15 +27,15 @@ public final class HomeAssistantClientModule extends BaseLifecycleComponentModul
                        .annotatedWith(HomeAssistantClientImpl.AccessToken.class)
                        .installedBy(this::installLifecycleComponentModule);
 
-        bind(getExposedKey()).to(registerLifecycleComponent(HomeAssistantClientImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(HomeAssistantClientImpl.class));
+        expose(exposedKey);
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<HomeAssistantClient>> {
+    public static final class Builder extends BaseModuleBuilder<HomeAssistantClient, Builder> {
         private BindingSpec<String> baseUrlSpec;
         private BindingSpec<String> accessTokenSpec;
 
@@ -49,7 +51,7 @@ public final class HomeAssistantClientModule extends BaseLifecycleComponentModul
 
         @Override
         public ExposedKeyModule<HomeAssistantClient> build() {
-            return new HomeAssistantClientModule(baseUrlSpec, accessTokenSpec);
+            return new HomeAssistantClientModule(baseUrlSpec, accessTokenSpec, specifiedAnnotation());
         }
     }
 }

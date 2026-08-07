@@ -5,12 +5,13 @@ import com.google.inject.assistedinject.FactoryModuleBuilder;
 import jakarta.inject.Singleton;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.connector.google.common.GoogleAuthorization;
 import net.yudichev.jiotty.connector.google.common.impl.BaseGoogleServiceModule;
 
-public final class GmailModule extends BaseGoogleServiceModule implements ExposedKeyModule<GmailClient> {
-    private GmailModule(BindingSpec<GoogleAuthorization> authorizationSpec) {
-        super(authorizationSpec);
+public final class GmailModule extends BaseGoogleServiceModule<GmailClient> {
+    private GmailModule(BindingSpec<GoogleAuthorization> authorizationSpec, SpecifiedAnnotation specifiedAnnotation) {
+        super(authorizationSpec, specifiedAnnotation);
     }
 
     public static Builder builder() {
@@ -25,14 +26,14 @@ public final class GmailModule extends BaseGoogleServiceModule implements Expose
                         .build(InternalGmailObjectFactory.class));
 
         bind(Gmail.class).annotatedWith(Bindings.GmailService.class).toProvider(GmailProvider.class).in(Singleton.class);
-        bind(getExposedKey()).to(registerLifecycleComponent(GmailClientImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(GmailClientImpl.class));
+        expose(exposedKey);
     }
 
     public static final class Builder extends BaseBuilder<GmailClient, Builder> {
         @Override
         public ExposedKeyModule<GmailClient> build() {
-            return new GmailModule(getAuthorizationSpec());
+            return new GmailModule(getAuthorizationSpec(), specifiedAnnotation());
         }
 
         @Override

@@ -31,7 +31,7 @@ class IcloudCalendarModuleTest {
                                                                        .withLogSubjectId(literally("test-user"))
                                                                        .withAnnotation(forAnnotation(annotation))
                                                                        .build();
-        var injector = Guice.createInjector(new TimeModule(), new ExecutorModule(), module);
+        var injector = Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), module);
 
         assertThat(module.getExposedKey()).isEqualTo(Key.get(CalendarService.class, annotation));
         assertThat(injector.getInstance(module.getExposedKey())).isInstanceOf(IcloudCalendarService.class);
@@ -52,7 +52,7 @@ class IcloudCalendarModuleTest {
     void supportsTwoInstancesSideBySide() {
         ExposedKeyModule<CalendarService> first = moduleForSubject("user-1");
         ExposedKeyModule<CalendarService> second = moduleForSubject("user-2");
-        var injector = Guice.createInjector(new TimeModule(), new ExecutorModule(), first, second);
+        var injector = Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), first, second);
 
         assertThat(injector.getInstance(first.getExposedKey())).isNotSameAs(injector.getInstance(second.getExposedKey()));
     }

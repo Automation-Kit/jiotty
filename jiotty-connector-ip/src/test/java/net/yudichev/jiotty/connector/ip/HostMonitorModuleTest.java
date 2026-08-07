@@ -20,14 +20,14 @@ class HostMonitorModuleTest {
     void bindings() {
         Named annotation = Names.named("ann");
         Injector injector = Guice.createInjector(
-                new ExecutorModule(),
-                new TimeModule(),
+                ExecutorModule.builder().build(),
+                TimeModule.builder().build(),
                 HostMonitorModule.builder()
-                        .setHostnames(literally(List.of("host1", "host2")))
-                        .withName(literally("name"))
-                        .withTolerance(literally(Duration.ofSeconds(1)))
-                        .withAnnotation(forAnnotation(annotation))
-                        .build());
+                                 .setHostnames(literally(List.of("host1", "host2")))
+                                 .withName(literally("name"))
+                                 .withTolerance(literally(Duration.ofSeconds(1)))
+                                 .withAnnotation(forAnnotation(annotation))
+                                 .build());
         injector.getBinding(Key.get(HostMonitor.class, annotation));
     }
 }

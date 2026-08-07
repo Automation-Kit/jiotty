@@ -1,12 +1,12 @@
 package net.yudichev.jiotty.persistence.domain;
 
 import com.google.inject.BindingAnnotation;
-import com.google.inject.Module;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 
 import java.lang.annotation.Retention;
@@ -18,12 +18,14 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
-public final class PersistenceDomainModule extends BaseLifecycleComponentModule implements ExposedKeyModule<PersistenceDomainService> {
+public final class PersistenceDomainModule extends BaseExposedKeyModule<PersistenceDomainService> {
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
     private final BindingSpec<SchedulingExecutor> executorSpec;
 
     private PersistenceDomainModule(BindingSpec<DataSourceFactory> dataSourceFactorySpec,
-                                    BindingSpec<SchedulingExecutor> executorSpec) {
+                                    BindingSpec<SchedulingExecutor> executorSpec,
+                                    SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
         this.executorSpec = checkNotNull(executorSpec);
     }
@@ -40,8 +42,8 @@ public final class PersistenceDomainModule extends BaseLifecycleComponentModule 
         executorSpec.bind(SchedulingExecutor.class)
                     .annotatedWith(Dependency.class)
                     .installedBy(this::installLifecycleComponentModule);
-        bind(getExposedKey()).to(registerLifecycleComponent(PersistenceDomainServiceImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(PersistenceDomainServiceImpl.class));
+        expose(exposedKey);
     }
 
     @BindingAnnotation
@@ -50,7 +52,7 @@ public final class PersistenceDomainModule extends BaseLifecycleComponentModule 
     @interface Dependency {
     }
 
-    public static final class Builder implements TypedBuilder<Module> {
+    public static final class Builder extends BaseModuleBuilder<PersistenceDomainService, Builder> {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec;
         private BindingSpec<SchedulingExecutor> executorSpec;
 
@@ -65,8 +67,8 @@ public final class PersistenceDomainModule extends BaseLifecycleComponentModule 
         }
 
         @Override
-        public Module build() {
-            return new PersistenceDomainModule(dataSourceFactorySpec, executorSpec);
+        public ExposedKeyModule<PersistenceDomainService> build() {
+            return new PersistenceDomainModule(dataSourceFactorySpec, executorSpec, specifiedAnnotation());
         }
     }
 }

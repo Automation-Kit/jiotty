@@ -4,16 +4,19 @@ import com.google.api.services.smartdevicemanagement.v1.SmartDeviceManagement;
 import jakarta.inject.Singleton;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.connector.google.common.GoogleAuthorization;
 import net.yudichev.jiotty.connector.google.common.impl.BaseGoogleServiceModule;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class GoogleSmartDeviceManagementClientModule extends BaseGoogleServiceModule implements ExposedKeyModule<GoogleSmartDeviceManagementClient> {
+public final class GoogleSmartDeviceManagementClientModule extends BaseGoogleServiceModule<GoogleSmartDeviceManagementClient> {
     private final BindingSpec<String> projectId;
 
-    private GoogleSmartDeviceManagementClientModule(BindingSpec<GoogleAuthorization> googleAuthorizationSpec, BindingSpec<String> projectId) {
-        super(googleAuthorizationSpec);
+    private GoogleSmartDeviceManagementClientModule(BindingSpec<GoogleAuthorization> googleAuthorizationSpec,
+                                                    BindingSpec<String> projectId,
+                                                    SpecifiedAnnotation specifiedAnnotation) {
+        super(googleAuthorizationSpec, specifiedAnnotation);
         this.projectId = checkNotNull(projectId, "projectId is required");
     }
 
@@ -28,8 +31,8 @@ public final class GoogleSmartDeviceManagementClientModule extends BaseGoogleSer
                  .installedBy(this::installLifecycleComponentModule);
         bind(SmartDeviceManagement.class).annotatedWith(GoogleSmartDeviceManagementClientImpl.Dependency.class)
                                          .toProvider(SmartDeviceManagementProvider.class).in(Singleton.class);
-        bind(getExposedKey()).to(GoogleSmartDeviceManagementClientImpl.class);
-        expose(getExposedKey());
+        bind(exposedKey).to(GoogleSmartDeviceManagementClientImpl.class);
+        expose(exposedKey);
     }
 
     public static final class Builder extends BaseBuilder<GoogleSmartDeviceManagementClient, Builder> {
@@ -42,7 +45,7 @@ public final class GoogleSmartDeviceManagementClientModule extends BaseGoogleSer
 
         @Override
         public ExposedKeyModule<GoogleSmartDeviceManagementClient> build() {
-            return new GoogleSmartDeviceManagementClientModule(getAuthorizationSpec(), projectIdSpec);
+            return new GoogleSmartDeviceManagementClientModule(getAuthorizationSpec(), projectIdSpec, specifiedAnnotation());
         }
 
         @Override

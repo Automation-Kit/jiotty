@@ -22,7 +22,7 @@ class PriceForecastServiceRegistryModuleTest {
         ExposedKeyModule<PriceForecastServiceRegistry> module = PriceForecastServiceRegistryModule.builder().build();
 
         assertThat(module.getExposedKey()).isEqualTo(Key.get(PriceForecastServiceRegistry.class));
-        Injector injector = Guice.createInjector(new ExecutorModule(), new TimeModule(), module);
+        Injector injector = Guice.createInjector(ExecutorModule.builder().build(), TimeModule.builder().build(), module);
         assertThat(injector.getBinding(module.getExposedKey())).isNotNull();
     }
 
@@ -37,7 +37,7 @@ class PriceForecastServiceRegistryModuleTest {
                                                   .build();
 
         assertThat(module.getExposedKey()).isNotEqualTo(Key.get(PriceForecastServiceRegistry.class));
-        Injector injector = Guice.createInjector(new ExecutorModule(), new TimeModule(), module);
+        Injector injector = Guice.createInjector(ExecutorModule.builder().build(), TimeModule.builder().build(), module);
         assertThat(injector.getBinding(module.getExposedKey())).isNotNull();
     }
 }

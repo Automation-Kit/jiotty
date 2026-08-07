@@ -20,7 +20,7 @@ class PriceForecastSourcesModuleTest {
         ExposedKeyModule<List<PriceForecastSource>> module = PriceForecastSourcesModule.builder().build();
 
         assertThat(module.getExposedKey()).isEqualTo(Key.get(new TypeLiteral<List<PriceForecastSource>>() {}));
-        Injector injector = Guice.createInjector(new TimeModule(), module);
+        Injector injector = Guice.createInjector(TimeModule.builder().build(), module);
         assertThat(injector.getBinding(module.getExposedKey())).isNotNull();
     }
 
@@ -31,7 +31,7 @@ class PriceForecastSourcesModuleTest {
                                                                                        .build();
 
         assertThat(module.getExposedKey()).isNotEqualTo(Key.get(new TypeLiteral<List<PriceForecastSource>>() {}));
-        Injector injector = Guice.createInjector(new TimeModule(), module);
+        Injector injector = Guice.createInjector(TimeModule.builder().build(), module);
         assertThat(injector.getBinding(module.getExposedKey())).isNotNull();
     }
 }

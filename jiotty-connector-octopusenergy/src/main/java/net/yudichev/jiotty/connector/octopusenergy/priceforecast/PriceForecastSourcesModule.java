@@ -1,43 +1,26 @@
 package net.yudichev.jiotty.connector.octopusenergy.priceforecast;
 
-import com.google.inject.Key;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
-import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
 import java.util.List;
 
+import static net.yudichev.jiotty.common.inject.BaseModuleBuilder.simpleBuilder;
+
 /// Exposes the [PriceForecastSource]s in failover order.
-public final class PriceForecastSourcesModule extends BaseLifecycleComponentModule implements ExposedKeyModule<List<PriceForecastSource>> {
-    private final Key<List<PriceForecastSource>> exposedKey;
-
+public final class PriceForecastSourcesModule extends BaseExposedKeyModule<List<PriceForecastSource>> {
     private PriceForecastSourcesModule(SpecifiedAnnotation specifiedAnnotation) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
     }
 
-    public static Builder builder() {
-        return new Builder();
-    }
-
-    @Override
-    public Key<List<PriceForecastSource>> getExposedKey() {
-        return exposedKey;
+    public static BaseModuleBuilder<List<PriceForecastSource>, ?> builder() {
+        return simpleBuilder(PriceForecastSourcesModule::new);
     }
 
     @Override
     protected void configure() {
         bind(exposedKey).toProvider(registerLifecycleComponent(PriceForecastSourcesProvider.class));
         expose(exposedKey);
-    }
-
-    public static final class Builder extends BaseModuleBuilder<List<PriceForecastSource>, Builder> {
-        private Builder() {
-        }
-
-        @Override
-        public ExposedKeyModule<List<PriceForecastSource>> build() {
-            return new PriceForecastSourcesModule(specifiedAnnotation());
-        }
     }
 }

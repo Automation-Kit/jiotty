@@ -21,8 +21,8 @@ final class ShellyPlugManualRunner {
 
     static void main(String[] args) {
         Application.builder()
-                   .addModule(TimeModule::new)
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> TimeModule.builder().build())
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> ShellyPlugModule.builder()
                                                     .setHost(literally(args[0]))
                                                     .build())

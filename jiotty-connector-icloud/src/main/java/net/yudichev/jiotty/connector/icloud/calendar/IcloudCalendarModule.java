@@ -2,10 +2,9 @@ package net.yudichev.jiotty.connector.icloud.calendar;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
-import com.google.inject.Key;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -18,25 +17,24 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
-public final class IcloudCalendarModule extends BaseLifecycleComponentModule implements ExposedKeyModule<CalendarService> {
+public final class IcloudCalendarModule extends BaseExposedKeyModule<CalendarService> {
     private static final String BASE_EXECUTOR_NAME = "Icloud-Calendar";
 
     private final BindingSpec<String> usernameSpec;
     private final BindingSpec<String> passwordSpec;
     private final BindingSpec<String> logSubjectIdSpec;
     private final BindingSpec<SchedulingExecutor> executorSpec;
-    private final Key<CalendarService> exposedKey;
 
     private IcloudCalendarModule(BindingSpec<String> usernameSpec,
                                  BindingSpec<String> passwordSpec,
                                  BindingSpec<String> logSubjectIdSpec,
                                  BindingSpec<SchedulingExecutor> executorSpec,
                                  SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.usernameSpec = checkNotNull(usernameSpec);
         this.passwordSpec = checkNotNull(passwordSpec);
         this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
         this.executorSpec = checkNotNull(executorSpec);
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
     /// The executor thread name: tags the thread with the supplied subject id so `[%t]` in the log pattern and the executor's `name` metric label distinguish
@@ -44,11 +42,6 @@ public final class IcloudCalendarModule extends BaseLifecycleComponentModule imp
     @VisibleForTesting
     static String threadName(String logSubjectId) {
         return logSubjectId.isBlank() ? BASE_EXECUTOR_NAME : BASE_EXECUTOR_NAME + '-' + logSubjectId;
-    }
-
-    @Override
-    public Key<CalendarService> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

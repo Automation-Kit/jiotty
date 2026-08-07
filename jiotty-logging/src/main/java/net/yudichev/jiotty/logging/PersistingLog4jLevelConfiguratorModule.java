@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.logging;
 
-import com.google.inject.Key;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -11,26 +10,20 @@ import net.yudichev.jiotty.persistence.varstore.VarStore;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
-public final class PersistingLog4jLevelConfiguratorModule extends BaseLifecycleComponentModule implements ExposedKeyModule<LoggingLevelConfigurator> {
+public final class PersistingLog4jLevelConfiguratorModule extends BaseExposedKeyModule<LoggingLevelConfigurator> {
     private final BindingSpec<VarStore> varStoreSpec;
     private final BindingSpec<String> varStoreKeyPrefixSpec;
-    private final Key<LoggingLevelConfigurator> exposedKey;
 
     private PersistingLog4jLevelConfiguratorModule(SpecifiedAnnotation specifiedAnnotation,
                                                    BindingSpec<VarStore> varStoreSpec,
                                                    BindingSpec<String> varStoreKeyPrefixSpec) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.varStoreSpec = checkNotNull(varStoreSpec);
         this.varStoreKeyPrefixSpec = checkNotNull(varStoreKeyPrefixSpec);
     }
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<LoggingLevelConfigurator> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

@@ -24,7 +24,7 @@ final class LocalIcloudCalendarRunner {
 
     static void main(String[] args) {
         Application.builder()
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> IcloudCalendarModule.builder()
                                                         .setUsername(literally(args[0]))
                                                         .setPassword(literally(args[1]))

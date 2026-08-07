@@ -9,6 +9,6 @@ class OctopusEnergyModuleTest {
     @Test
     void configure() {
         var module = OctopusEnergyModule.builder().build();
-        Guice.createInjector(new ExecutorModule(), new TimeModule(), module).getBinding(module.getExposedKey());
+        Guice.createInjector(ExecutorModule.builder().build(), TimeModule.builder().build(), module).getBinding(module.getExposedKey());
     }
 }

@@ -2,11 +2,10 @@ package net.yudichev.jiotty.security;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
-import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -32,7 +31,7 @@ import static net.yudichev.jiotty.security.Bindings.LoginPending;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
-public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule implements ExposedKeyModule<OAuth2TokenManager> {
+public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2TokenManager> {
     private final BindingSpec<String> clientIdSpec;
     private final BindingSpec<Optional<String>> clientSecretSpec;
     private final BindingSpec<String> apiNameSpec;
@@ -45,7 +44,6 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
     private final BindingSpec<String> logSubjectIdSpec;
     private final BindingSpec<SchedulingExecutor> executorSpec;
     private final BindingSpec<Boolean> loginPendingSpec;
-    private final Key<OAuth2TokenManager> exposedKey;
 
     private OAuth2TokenManagerModule(BindingSpec<String> clientIdSpec,
                                      BindingSpec<Optional<String>> clientSecretSpec,
@@ -60,6 +58,7 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
                                      BindingSpec<SchedulingExecutor> executorSpec,
                                      BindingSpec<Boolean> loginPendingSpec,
                                      SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.clientSecretSpec = checkNotNull(clientSecretSpec);
         this.apiNameSpec = checkNotNull(apiNameSpec);
@@ -72,12 +71,6 @@ public final class OAuth2TokenManagerModule extends BaseLifecycleComponentModule
         this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
         this.executorSpec = checkNotNull(executorSpec);
         this.loginPendingSpec = checkNotNull(loginPendingSpec);
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
-    }
-
-    @Override
-    public Key<OAuth2TokenManager> getExposedKey() {
-        return exposedKey;
     }
 
     /// The executor thread name: `{apiName}-oauth2`, carrying the subject id when one is supplied so concurrent per-user instances stay distinguishable in a

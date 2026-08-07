@@ -5,16 +5,14 @@ import com.google.inject.Key;
 import net.yudichev.jiotty.appliance.Appliance;
 import net.yudichev.jiotty.appliance.ApplianceModule;
 import net.yudichev.jiotty.common.async.backoff.BackOffConfig;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forNoAnnotation;
 import static net.yudichev.jiotty.connector.slide.Bindings.SlideId;
 
 public final class SlideApplianceModule extends ApplianceModule {
@@ -22,11 +20,11 @@ public final class SlideApplianceModule extends ApplianceModule {
     private final BindingSpec<SlideService> slideServiceSpec;
     private final BindingSpec<String> nameSpec;
 
-    public SlideApplianceModule(BindingSpec<Long> slideIdSpec,
-                                BindingSpec<SlideService> slideServiceSpec,
-                                BindingSpec<String> nameSpec,
-                                Optional<BindingSpec<BackOffConfig>> backOffConfigSpec,
-                                SpecifiedAnnotation specifiedAnnotation) {
+    private SlideApplianceModule(BindingSpec<Long> slideIdSpec,
+                                 BindingSpec<SlideService> slideServiceSpec,
+                                 BindingSpec<String> nameSpec,
+                                 Optional<BindingSpec<BackOffConfig>> backOffConfigSpec,
+                                 SpecifiedAnnotation specifiedAnnotation) {
         super(specifiedAnnotation, backOffConfigSpec);
         this.slideIdSpec = checkNotNull(slideIdSpec);
         this.slideServiceSpec = checkNotNull(slideServiceSpec);
@@ -40,23 +38,22 @@ public final class SlideApplianceModule extends ApplianceModule {
     @Override
     protected Key<? extends Appliance> configureDependencies() {
         slideIdSpec.bind(Long.class)
-                .annotatedWith(SlideId.class)
-                .installedBy(this::installLifecycleComponentModule);
+                   .annotatedWith(SlideId.class)
+                   .installedBy(this::installLifecycleComponentModule);
         slideServiceSpec.bind(SlideService.class)
-                .annotatedWith(SlideAsAppliance.Dependency.class)
-                .installedBy(this::installLifecycleComponentModule);
+                        .annotatedWith(SlideAsAppliance.Dependency.class)
+                        .installedBy(this::installLifecycleComponentModule);
         nameSpec.bind(String.class)
                 .annotatedWith(SlideAsAppliance.Name.class)
                 .installedBy(this::installLifecycleComponentModule);
         return Key.get(SlideAsAppliance.class);
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<Appliance>>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<Appliance, Builder> {
         private BindingSpec<SlideService> slideServiceSpec = BindingSpec.boundTo(SlideService.class);
         private BindingSpec<Long> slideIdSpec;
         private BindingSpec<String> nameSpec;
         private BindingSpec<BackOffConfig> backOffConfigSpec;
-        private SpecifiedAnnotation specifiedAnnotation = forNoAnnotation();
 
         public Builder setSlideIdSpec(BindingSpec<Long> slideIdSpec) {
             this.slideIdSpec = checkNotNull(slideIdSpec);
@@ -79,17 +76,11 @@ public final class SlideApplianceModule extends ApplianceModule {
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExposedKeyModule<Appliance> build() {
             if (nameSpec == null) {
                 nameSpec = slideIdSpec.map(TypeToken.of(Long.class), TypeToken.of(String.class), Object::toString);
             }
-            return new SlideApplianceModule(slideIdSpec, slideServiceSpec, nameSpec, Optional.ofNullable(backOffConfigSpec), specifiedAnnotation);
+            return new SlideApplianceModule(slideIdSpec, slideServiceSpec, nameSpec, Optional.ofNullable(backOffConfigSpec), specifiedAnnotation());
         }
     }
 }

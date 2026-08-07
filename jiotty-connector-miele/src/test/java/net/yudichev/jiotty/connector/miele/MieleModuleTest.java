@@ -18,8 +18,8 @@ class MieleModuleTest {
                                 .setClientId(literally("ci"))
                                 .setClientSecret(literally("cs"))
                                 .build();
-        Guice.createInjector(new TimeModule(),
-                             new ExecutorModule(),
+        Guice.createInjector(TimeModule.builder().build(),
+                             ExecutorModule.builder().build(),
                              new AbstractModule() {
                                  @Override
                                  protected void configure() {

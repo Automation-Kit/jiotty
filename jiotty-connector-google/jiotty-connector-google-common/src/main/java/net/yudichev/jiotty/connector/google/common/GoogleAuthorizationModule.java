@@ -4,10 +4,11 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.TypeLiteral;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.lang.Optionals;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 
 import java.net.URL;
 import java.util.Collection;
@@ -15,11 +16,12 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class GoogleAuthorizationModule extends BaseLifecycleComponentModule implements ExposedKeyModule<GoogleAuthorization> {
+public final class GoogleAuthorizationModule extends BaseExposedKeyModule<GoogleAuthorization> {
     private final GoogleApiAuthSettings settings;
     private final Collection<String> requiredScopes;
 
-    private GoogleAuthorizationModule(GoogleApiAuthSettings settings, Collection<String> requiredScopes) {
+    private GoogleAuthorizationModule(GoogleApiAuthSettings settings, Collection<String> requiredScopes, SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.settings = checkNotNull(settings);
         this.requiredScopes = ImmutableList.copyOf(requiredScopes);
     }
@@ -40,15 +42,15 @@ public final class GoogleAuthorizationModule extends BaseLifecycleComponentModul
                 .installedBy(this::installLifecycleComponentModule);
         bind(GoogleApiAuthSettings.class).annotatedWith(GoogleAuthorizationProvider.Dependency.class).toInstance(settings);
         bind(new TypeLiteral<Collection<String>>() {}).annotatedWith(GoogleAuthorizationProvider.Scopes.class).toInstance(requiredScopes);
-        bind(getExposedKey()).toProvider(GoogleAuthorizationProvider.class);
-        expose(getExposedKey());
+        bind(exposedKey).toProvider(GoogleAuthorizationProvider.class);
+        expose(exposedKey);
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<GoogleAuthorization>> {
+    public static final class Builder extends BaseModuleBuilder<GoogleAuthorization, Builder> {
         private final ImmutableSet.Builder<String> requiredScopesBuilder = ImmutableSet.builder();
         private GoogleApiAuthSettings settings;
 
@@ -74,10 +76,9 @@ public final class GoogleAuthorizationModule extends BaseLifecycleComponentModul
             return addRequiredScopes(ImmutableList.copyOf(requiredScopes));
         }
 
-
         @Override
         public ExposedKeyModule<GoogleAuthorization> build() {
-            return new GoogleAuthorizationModule(settings, requiredScopesBuilder.build());
+            return new GoogleAuthorizationModule(settings, requiredScopesBuilder.build(), specifiedAnnotation());
         }
     }
 }

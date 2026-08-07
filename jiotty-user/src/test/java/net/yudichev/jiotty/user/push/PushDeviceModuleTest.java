@@ -23,7 +23,7 @@ class PushDeviceModuleTest {
 
         assertThat(module.getExposedKey()).isEqualTo(Key.get(PushDeviceStore.class));
 
-        var injector = Guice.createInjector(new ExecutorModule(), module);
+        var injector = Guice.createInjector(ExecutorModule.builder().build(), module);
         assertThat(injector.getBinding(module.getExposedKey())).isNotNull();
     }
 }

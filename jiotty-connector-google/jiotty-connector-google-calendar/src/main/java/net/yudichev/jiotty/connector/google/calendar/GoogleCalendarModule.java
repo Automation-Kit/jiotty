@@ -1,9 +1,8 @@
 package net.yudichev.jiotty.connector.google.calendar;
 
 import com.google.common.reflect.TypeToken;
-import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -25,7 +24,7 @@ import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotatio
 /// Exposes a [CalendarService] backed by the Google Calendar API. The service authenticates as an OAuth2 public client via PKCE: the UI obtains the auth code
 /// and code verifier and supplies them via [Builder#withAuthCode]/[Builder#withCodeVerifier]. Token exchange, persistence and refresh are handled by the
 /// embedded [OAuth2TokenManagerModule].
-public final class GoogleCalendarModule extends BaseLifecycleComponentModule implements ExposedKeyModule<CalendarService> {
+public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarService> {
     private static final String TOKEN_URL = "https://oauth2.googleapis.com/token";
     private static final String AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth";
     private static final String BASE_API_NAME = "GoogleCalendar";
@@ -39,7 +38,6 @@ public final class GoogleCalendarModule extends BaseLifecycleComponentModule imp
     private final BindingSpec<VarStore> varStoreSpec;
     private final @Nullable BindingSpec<String> clientSecretSpec;
     private final boolean localLogin;
-    private final Key<CalendarService> exposedKey;
 
     private GoogleCalendarModule(SpecifiedAnnotation specifiedAnnotation,
                                  BindingSpec<String> clientIdSpec,
@@ -51,7 +49,7 @@ public final class GoogleCalendarModule extends BaseLifecycleComponentModule imp
                                  BindingSpec<VarStore> varStoreSpec,
                                  @Nullable BindingSpec<String> clientSecretSpec,
                                  boolean localLogin) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.redirectUriSpec = checkNotNull(redirectUriSpec);
         this.authCodeSpec = checkNotNull(authCodeSpec);
@@ -65,11 +63,6 @@ public final class GoogleCalendarModule extends BaseLifecycleComponentModule imp
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<CalendarService> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

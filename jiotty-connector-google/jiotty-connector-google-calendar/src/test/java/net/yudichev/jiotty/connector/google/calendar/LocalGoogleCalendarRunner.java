@@ -63,8 +63,8 @@ final class LocalGoogleCalendarRunner {
     static void main(String[] args) {
         checkArgument(args.length >= 2, "usage: pass the Desktop OAuth client id and client secret as the two arguments");
         Application.builder()
-                   .addModule(TimeModule::new)
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> TimeModule.builder().build())
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> GoogleCalendarModule
                            .builder()
                            .setClientId(literally(args[0]))

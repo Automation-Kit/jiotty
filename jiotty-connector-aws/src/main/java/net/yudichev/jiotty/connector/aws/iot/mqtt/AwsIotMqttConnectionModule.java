@@ -1,19 +1,21 @@
 package net.yudichev.jiotty.connector.aws.iot.mqtt;
 
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
 import java.time.Duration;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class AwsIotMqttConnectionModule extends BaseLifecycleComponentModule implements ExposedKeyModule<AwsIotMqttConnection> {
+public final class AwsIotMqttConnectionModule extends BaseExposedKeyModule<AwsIotMqttConnection> {
     private final String clientId;
     private final String clientEndpoint;
     private final Duration timeout;
 
-    private AwsIotMqttConnectionModule(String clientId, String clientEndpoint, Duration timeout) {
+    private AwsIotMqttConnectionModule(String clientId, String clientEndpoint, Duration timeout, SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.clientId = checkNotNull(clientId);
         this.clientEndpoint = checkNotNull(clientEndpoint);
         this.timeout = checkNotNull(timeout);
@@ -29,11 +31,11 @@ public final class AwsIotMqttConnectionModule extends BaseLifecycleComponentModu
         bindConstant().annotatedWith(AwsIotMqttConnectionImpl.ClientEndpoint.class).to(clientEndpoint);
         bind(Duration.class).annotatedWith(AwsIotMqttConnectionImpl.Timeout.class).toInstance(timeout);
 
-        bind(getExposedKey()).to(registerLifecycleComponent(AwsIotMqttConnectionImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(AwsIotMqttConnectionImpl.class));
+        expose(exposedKey);
     }
 
-    public static class Builder implements TypedBuilder<ExposedKeyModule<AwsIotMqttConnection>> {
+    public static class Builder extends BaseModuleBuilder<AwsIotMqttConnection, Builder> {
         private String clientId;
         private String clientEndpoint;
         private Duration timeout;
@@ -55,7 +57,7 @@ public final class AwsIotMqttConnectionModule extends BaseLifecycleComponentModu
 
         @Override
         public ExposedKeyModule<AwsIotMqttConnection> build() {
-            return new AwsIotMqttConnectionModule(clientId, clientEndpoint, timeout);
+            return new AwsIotMqttConnectionModule(clientId, clientEndpoint, timeout, specifiedAnnotation());
         }
     }
 }

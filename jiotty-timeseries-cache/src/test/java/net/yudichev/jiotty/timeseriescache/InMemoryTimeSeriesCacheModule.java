@@ -1,27 +1,19 @@
 package net.yudichev.jiotty.timeseriescache;
 
-import com.google.inject.Key;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
 /// Installs an [InMemoryTimeSeriesCache] and exposes it as [TimeSeriesCache]. Suitable for deployments that don't need cross-process persistence — data is lost
 /// on restart. For production deployments with persistence requirements, use [TimeSeriesCacheModule] (Postgres-backed) instead.
-public final class InMemoryTimeSeriesCacheModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TimeSeriesCache> {
-    private final Key<TimeSeriesCache> exposedKey;
-
+public final class InMemoryTimeSeriesCacheModule extends BaseExposedKeyModule<TimeSeriesCache> {
     private InMemoryTimeSeriesCacheModule(SpecifiedAnnotation specifiedAnnotation) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
     }
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<TimeSeriesCache> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

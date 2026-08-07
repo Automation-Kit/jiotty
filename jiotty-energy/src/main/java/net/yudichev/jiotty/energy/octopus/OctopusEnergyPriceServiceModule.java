@@ -7,11 +7,10 @@ import net.yudichev.jiotty.common.async.backoff.BackOffConfig;
 import net.yudichev.jiotty.common.async.backoff.BackingOffExceptionHandlerModule;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutorModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
 
@@ -84,8 +83,7 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
         expose(exposedKey);
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<EnergyProviderService>>, HasWithAnnotation {
-        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
+    public static final class Builder extends BaseModuleBuilder<EnergyProviderService, Builder> {
         private BindingSpec<String> octopusApiKeySpec;
         private BindingSpec<String> octopusAccountIdSpec;
         private BindingSpec<SchedulingExecutor> executorSpec = exposedBy(ExecutorProviderModule.builder()
@@ -110,14 +108,8 @@ public final class OctopusEnergyPriceServiceModule extends BaseLifecycleComponen
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExposedKeyModule<EnergyProviderService> build() {
-            return new OctopusEnergyPriceServiceModule(specifiedAnnotation, octopusApiKeySpec, octopusAccountIdSpec, executorSpec);
+            return new OctopusEnergyPriceServiceModule(specifiedAnnotation(), octopusApiKeySpec, octopusAccountIdSpec, executorSpec);
         }
     }
 }

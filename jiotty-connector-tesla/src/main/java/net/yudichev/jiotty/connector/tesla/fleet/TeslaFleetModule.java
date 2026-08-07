@@ -3,9 +3,8 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
-import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
@@ -22,7 +21,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
-public final class TeslaFleetModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TeslaFleet> {
+public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
     private static final String BASE_API_NAME = "TeslaFleet";
     private static final String OFFLINE_ACCESS_SCOPE = "offline_access";
 
@@ -34,7 +33,6 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
     private final BindingSpec<String> logSubjectIdSpec;
     private final @Nullable BindingSpec<VarStore> varStoreSpec;
     private final boolean localLogin;
-    private final Key<TeslaFleet> exposedKey;
 
     private TeslaFleetModule(BindingSpec<String> clientIdSpec,
                              BindingSpec<String> clientSecretSpec,
@@ -45,6 +43,7 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
                              @Nullable BindingSpec<VarStore> varStoreSpec,
                              boolean localLogin,
                              SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.clientSecretSpec = checkNotNull(clientSecretSpec);
         this.baseUrlSpec = checkNotNull(baseUrlSpec);
@@ -53,7 +52,6 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
         this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
         this.varStoreSpec = varStoreSpec;
         this.localLogin = localLogin;
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
     /// The space-separated OAuth2 scope string. Always carries {@value #OFFLINE_ACCESS_SCOPE}, which is what makes the token endpoint return a refresh token,
@@ -62,11 +60,6 @@ public final class TeslaFleetModule extends BaseLifecycleComponentModule impleme
     static String scope(Set<String> scopeSet) {
         String joined = String.join(" ", scopeSet);
         return scopeSet.contains(OFFLINE_ACCESS_SCOPE) ? joined : joined + ' ' + OFFLINE_ACCESS_SCOPE;
-    }
-
-    @Override
-    public Key<TeslaFleet> getExposedKey() {
-        return exposedKey;
     }
 
     @Override

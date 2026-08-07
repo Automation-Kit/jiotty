@@ -1,19 +1,21 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
 import com.google.inject.assistedinject.FactoryModuleBuilder;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.connector.mqtt.Mqtt;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class MqttTeslaTelemetryModule extends BaseLifecycleComponentModule implements ExposedKeyModule<TeslaTelemetryFactory> {
+public final class MqttTeslaTelemetryModule extends BaseExposedKeyModule<TeslaTelemetryFactory> {
     private final BindingSpec<Mqtt> mqttSpec;
     private final BindingSpec<String> topicBaseSpec;
 
-    private MqttTeslaTelemetryModule(BindingSpec<Mqtt> mqttSpec, BindingSpec<String> topicBaseSpec) {
+    private MqttTeslaTelemetryModule(BindingSpec<Mqtt> mqttSpec, BindingSpec<String> topicBaseSpec, SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.mqttSpec = checkNotNull(mqttSpec);
         this.topicBaseSpec = checkNotNull(topicBaseSpec);
     }
@@ -24,15 +26,15 @@ public final class MqttTeslaTelemetryModule extends BaseLifecycleComponentModule
         topicBaseSpec.bind(String.class).annotatedWith(MqttTeslaTelemetry.TopicBase.class).installedBy(this::installLifecycleComponentModule);
         install(new FactoryModuleBuilder()
                         .implement(TeslaTelemetry.class, MqttTeslaTelemetry.class)
-                        .build(getExposedKey()));
-        expose(getExposedKey());
+                        .build(exposedKey));
+        expose(exposedKey);
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<TeslaTelemetryFactory>> {
+    public static final class Builder extends BaseModuleBuilder<TeslaTelemetryFactory, Builder> {
         private BindingSpec<Mqtt> mqttSpec = BindingSpec.boundTo(Mqtt.class);
         private BindingSpec<String> topicBaseSpec = BindingSpec.literally("tesla/telemetry");
 
@@ -48,7 +50,7 @@ public final class MqttTeslaTelemetryModule extends BaseLifecycleComponentModule
 
         @Override
         public ExposedKeyModule<TeslaTelemetryFactory> build() {
-            return new MqttTeslaTelemetryModule(mqttSpec, topicBaseSpec);
+            return new MqttTeslaTelemetryModule(mqttSpec, topicBaseSpec, specifiedAnnotation());
         }
     }
 }

@@ -2,7 +2,7 @@ package net.yudichev.jiotty.common.async.backoff;
 
 import java.util.Optional;
 
-interface BackingOffExceptionHandler {
+public interface BackingOffExceptionHandler {
     /// Decides whether the given exception is retryable and, if so, computes the backoff delay the caller must wait before the next attempt. Returns
     /// immediately; applying the delay is the caller's responsibility.
     ///

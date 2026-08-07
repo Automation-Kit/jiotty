@@ -2,13 +2,13 @@ package net.yudichev.jiotty.user.persistence;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
-import com.google.inject.Module;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainModule;
@@ -26,7 +26,7 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.annotatedWith;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
-public final class UserPersistenceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<UserPersistence> {
+public final class UserPersistenceModule extends BaseExposedKeyModule<UserPersistence> {
     /// Thread-name base of the single-threaded executor this module's persistence work runs on.
     @VisibleForTesting
     public static final String EXECUTOR_THREAD_NAME = "UserPersistence";
@@ -43,7 +43,9 @@ public final class UserPersistenceModule extends BaseLifecycleComponentModule im
                                   BindingSpec<Integer> schemaVersionSpec,
                                   BindingSpec<String> domainNameSpec,
                                   BindingSpec<List<String>> initStatementsSpec,
-                                  BindingSpec<PersistenceDomainMigrator> migratorSpec) {
+                                  BindingSpec<PersistenceDomainMigrator> migratorSpec,
+                                  SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec, "dataSourceFactorySpec");
         this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
         this.domainNameSpec = checkNotNull(domainNameSpec, "domainNameSpec");
@@ -82,8 +84,8 @@ public final class UserPersistenceModule extends BaseLifecycleComponentModule im
                                                                .setExecutor(annotatedWith(Executor.class))
                                                                .build());
 
-        bind(getExposedKey()).to(registerLifecycleComponent(UserPersistenceImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(UserPersistenceImpl.class));
+        expose(exposedKey);
     }
 
     @BindingAnnotation
@@ -122,7 +124,7 @@ public final class UserPersistenceModule extends BaseLifecycleComponentModule im
     @interface Executor {
     }
 
-    public static final class Builder implements TypedBuilder<Module> {
+    public static final class Builder extends BaseModuleBuilder<UserPersistence, Builder> {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec;
         private BindingSpec<Integer> schemaVersionSpec;
         private BindingSpec<String> domainNameSpec = literally(DEFAULT_DOMAIN_NAME);
@@ -155,8 +157,9 @@ public final class UserPersistenceModule extends BaseLifecycleComponentModule im
         }
 
         @Override
-        public Module build() {
-            return new UserPersistenceModule(dataSourceFactorySpec, schemaVersionSpec, domainNameSpec, initStatementsSpec, migratorSpec);
+        public ExposedKeyModule<UserPersistence> build() {
+            return new UserPersistenceModule(dataSourceFactorySpec, schemaVersionSpec, domainNameSpec, initStatementsSpec, migratorSpec,
+                                             specifiedAnnotation());
         }
     }
 }

@@ -60,8 +60,8 @@ final class TeslaFleetManualRunner {
         caCertPath = Paths.get(args[10]);
         Application.builder()
                    .addModule(() -> VarStoreModule.builder().withPath(literally(Paths.get(args[0]))).build())
-                   .addModule(TimeModule::new)
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> TimeModule.builder().build())
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> KeyStoreAccessModule.builder()
                                                         .setPathToKeystore(literally(args[7]).map(new TypeToken<>() {}, new TypeToken<>() {}, Paths::get))
                                                         .setKeystorePass(literally(args[8]))

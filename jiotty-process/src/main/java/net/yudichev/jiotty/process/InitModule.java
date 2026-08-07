@@ -64,13 +64,13 @@ public final class InitModule extends AbstractModule {
 
     @Override
     protected void configure() {
-        install(new ExecutorModule());
+        install(ExecutorModule.builder().build());
         if (applicationName != null) {
             install(MetricsModule.builder()
                                  .withCommonTag("application", applicationName)
                                  .build());
         }
-        install(new TimeModule());
+        install(TimeModule.builder().build());
         var keyStoreAccessModule = KeyStoreAccessModule.builder()
                                                        .setPathToKeystore(pathToKeystoreSpec)
                                                        .setKeystorePass(keystorePassSpec)

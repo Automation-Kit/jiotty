@@ -16,8 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.stream.Stream;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @ExtendWith(MockitoExtension.class)
 class SlideApplianceModuleTest {
@@ -29,12 +28,12 @@ class SlideApplianceModuleTest {
                                                                           .withRetries(literally(BackOffConfig.builder().build()))
                                                                           .build();
         Injector injector = Guice.createInjector(
-                new TimeModule(),
-                new ExecutorModule(),
+                TimeModule.builder().build(),
+                ExecutorModule.builder().build(),
                 slideServiceModule,
                 applianceModule);
 
-        assertThat(applianceModule.getExposedKey(), is(Key.get(Appliance.class)));
+        assertThat(applianceModule.getExposedKey()).isEqualTo(Key.get(Appliance.class));
         injector.getBinding(applianceModule.getExposedKey());
     }
 

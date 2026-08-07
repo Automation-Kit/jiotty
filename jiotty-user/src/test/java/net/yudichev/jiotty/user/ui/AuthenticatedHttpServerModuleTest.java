@@ -6,6 +6,7 @@ import com.google.inject.Injector;
 import com.google.inject.TypeLiteral;
 import io.micrometer.core.instrument.MeterRegistry;
 import net.yudichev.jiotty.common.async.ExecutorModule;
+import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
 import net.yudichev.jiotty.common.metrics.NoopMeterRegistry;
 import net.yudichev.jiotty.common.time.TimeModule;
@@ -52,9 +53,9 @@ class AuthenticatedHttpServerModuleTest {
         assertThat(injector.findBindingsByType(new TypeLiteral<LifecycleComponent>() {})).isNotEmpty();
     }
 
-    private static Injector injectorFor(AuthenticatedHttpServerModule module) {
-        return Guice.createInjector(new ExecutorModule(),
-                                    new TimeModule(),
+    private static Injector injectorFor(ExposedKeyModule<UIHttpServer> module) {
+        return Guice.createInjector(ExecutorModule.builder().build(),
+                                    TimeModule.builder().build(),
                                     new AbstractModule() {
                                         @Override
                                         protected void configure() {

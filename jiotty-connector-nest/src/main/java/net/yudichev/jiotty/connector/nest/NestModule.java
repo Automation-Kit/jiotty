@@ -1,16 +1,18 @@
 package net.yudichev.jiotty.connector.nest;
 
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class NestModule extends BaseLifecycleComponentModule implements ExposedKeyModule<NestThermostat> {
+public final class NestModule extends BaseExposedKeyModule<NestThermostat> {
     private final String accessToken;
     private final String deviceId;
 
-    private NestModule(String accessToken, String deviceId) {
+    private NestModule(String accessToken, String deviceId, SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
         this.accessToken = checkNotNull(accessToken);
         this.deviceId = checkNotNull(deviceId);
     }
@@ -23,11 +25,11 @@ public final class NestModule extends BaseLifecycleComponentModule implements Ex
     protected void configure() {
         bindConstant().annotatedWith(NestThermostatImpl.AccessToken.class).to(accessToken);
         bindConstant().annotatedWith(NestThermostatImpl.DeviceId.class).to(deviceId);
-        bind(getExposedKey()).to(registerLifecycleComponent(NestThermostatImpl.class));
-        expose(getExposedKey());
+        bind(exposedKey).to(registerLifecycleComponent(NestThermostatImpl.class));
+        expose(exposedKey);
     }
 
-    public static class Builder implements TypedBuilder<ExposedKeyModule<NestThermostat>> {
+    public static class Builder extends BaseModuleBuilder<NestThermostat, Builder> {
         private String accessToken;
         private String deviceId;
 
@@ -43,7 +45,7 @@ public final class NestModule extends BaseLifecycleComponentModule implements Ex
 
         @Override
         public ExposedKeyModule<NestThermostat> build() {
-            return new NestModule(accessToken, deviceId);
+            return new NestModule(accessToken, deviceId, specifiedAnnotation());
         }
     }
 }

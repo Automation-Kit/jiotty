@@ -12,8 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 class TpLinkSmartPlugModuleTest {
     @Test
@@ -28,10 +27,10 @@ class TpLinkSmartPlugModuleTest {
                                                                   .withAnnotation(forAnnotation(annotation))
                                                                   .build();
 
-        assertThat(module.getExposedKey(), is(Key.get(Appliance.class, annotation)));
+        assertThat(module.getExposedKey()).isEqualTo(Key.get(Appliance.class, annotation));
 
         Injector injector = Guice.createInjector(module,
-                                                 new ExecutorModule());
+                                                 ExecutorModule.builder().build());
 
         injector.getBinding(module.getExposedKey());
     }
@@ -45,10 +44,10 @@ class TpLinkSmartPlugModuleTest {
                                                                   .withAnnotation(forAnnotation(annotation))
                                                                   .build();
 
-        assertThat(module.getExposedKey(), is(Key.get(Appliance.class, annotation)));
+        assertThat(module.getExposedKey()).isEqualTo(Key.get(Appliance.class, annotation));
 
         Injector injector = Guice.createInjector(module,
-                                                 new ExecutorModule());
+                                                 ExecutorModule.builder().build());
 
         injector.getBinding(module.getExposedKey());
     }

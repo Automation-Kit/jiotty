@@ -28,7 +28,7 @@ final class ManualSonyProjectorClientTest {
         String password = "-".equals(args[1]) ? null : args[1];
 
         Application.builder()
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> {
                        var builder = SonyProjectorClientModule.builder()
                                                               .setHost(literally(host));

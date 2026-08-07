@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ExecutorModuleTest {
     @Test
     void injector() {
-        var module = new ExecutorModule();
+        var module = ExecutorModule.builder().build();
         Injector injector = Guice.createInjector(module);
 
         injector.getBinding(module.getExposedKey());
@@ -24,7 +24,7 @@ class ExecutorModuleTest {
     @Test
     void meterRegistryOptionallyReachesTheFactoryAcrossThePrivateModule() {
         var registry = new SimpleMeterRegistry();
-        var module = new ExecutorModule();
+        var module = ExecutorModule.builder().build();
         Injector injector = Guice.createInjector(module, binder -> binder.bind(MeterRegistry.class).toInstance(registry));
 
         SchedulingExecutor executor = injector.getInstance(module.getExposedKey()).createSingleThreadedSchedulingExecutor("wired", "wiredfam", 10);
@@ -39,7 +39,7 @@ class ExecutorModuleTest {
     void meterRegistryExposedFromSiblingPrivateModuleReachesTheFactory() {
         // The registry is exposed from a sibling PrivateModule (as MetricsModule does), not bound directly — the OptionalBinder must still resolve it.
         var registry = new SimpleMeterRegistry();
-        var module = new ExecutorModule();
+        var module = ExecutorModule.builder().build();
         Injector injector = Guice.createInjector(module, new PrivateModule() {
             @Override
             protected void configure() {
@@ -58,7 +58,7 @@ class ExecutorModuleTest {
 
     @Test
     void executorsAreCreatedUnmeteredWhenNoRegistryBound() {
-        var module = new ExecutorModule();
+        var module = ExecutorModule.builder().build();
         Injector injector = Guice.createInjector(module);
 
         // No MeterRegistry bound: the optional injection is skipped and executor creation still succeeds.

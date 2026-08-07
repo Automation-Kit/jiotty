@@ -1,22 +1,19 @@
 package net.yudichev.jiotty.connector.google.maps;
 
-import com.google.inject.Key;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class RoutesServiceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<RoutesService> {
+public final class RoutesServiceModule extends BaseExposedKeyModule<RoutesService> {
     private final BindingSpec<String> apiKeySpec;
-    private final Key<RoutesService> exposedKey;
 
     private RoutesServiceModule(SpecifiedAnnotation specifiedAnnotation, BindingSpec<String> apiKeySpec) {
+        super(specifiedAnnotation);
         this.apiKeySpec = checkNotNull(apiKeySpec);
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
     }
 
     @Override
@@ -27,18 +24,12 @@ public final class RoutesServiceModule extends BaseLifecycleComponentModule impl
         expose(exposedKey);
     }
 
-    @Override
-    public Key<RoutesService> getExposedKey() {
-        return exposedKey;
-    }
-
     public static Builder builder() {
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<RoutesService>>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<RoutesService, Builder> {
         private BindingSpec<String> apiKeySpec;
-        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
 
         public Builder setApiKey(BindingSpec<String> apiKeySpec) {
             this.apiKeySpec = checkNotNull(apiKeySpec);
@@ -46,14 +37,8 @@ public final class RoutesServiceModule extends BaseLifecycleComponentModule impl
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExposedKeyModule<RoutesService> build() {
-            return new RoutesServiceModule(specifiedAnnotation, apiKeySpec);
+            return new RoutesServiceModule(specifiedAnnotation(), apiKeySpec);
         }
     }
 }

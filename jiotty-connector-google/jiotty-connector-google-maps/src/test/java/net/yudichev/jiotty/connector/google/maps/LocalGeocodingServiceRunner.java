@@ -15,7 +15,7 @@ final class LocalGeocodingServiceRunner {
 
     static void main(String[] args) {
         Application.builder()
-                   .addModule(ExecutorModule::new)
+                   .addModule(() -> ExecutorModule.builder().build())
                    .addModule(() -> GeocodingServiceModule.builder()
                                                           .setApiKey(literally(args[0]))
                                                           .build())

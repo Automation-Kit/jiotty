@@ -3,11 +3,10 @@ package net.yudichev.jiotty.connector.mqtt.presence;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.connector.mqtt.Mqtt;
 
 import java.lang.annotation.Retention;
@@ -71,17 +70,10 @@ public final class MqttPresenceServiceModule extends BaseLifecycleComponentModul
     @interface Dependency {
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<MqttPresenceService>>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<MqttPresenceService, Builder> {
         private BindingSpec<String> nameSpec;
         private BindingSpec<Mqtt> mqttSpec;
         private BindingSpec<String> topicSpec;
-        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
-
-        @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
 
         public Builder setName(BindingSpec<String> nameSpec) {
             this.nameSpec = checkNotNull(nameSpec);
@@ -100,7 +92,7 @@ public final class MqttPresenceServiceModule extends BaseLifecycleComponentModul
 
         @Override
         public ExposedKeyModule<MqttPresenceService> build() {
-            return new MqttPresenceServiceModule(nameSpec, mqttSpec, topicSpec, specifiedAnnotation);
+            return new MqttPresenceServiceModule(nameSpec, mqttSpec, topicSpec, specifiedAnnotation());
         }
     }
 }

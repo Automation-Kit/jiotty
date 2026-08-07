@@ -3,10 +3,21 @@ package net.yudichev.jiotty.common.async;
 import com.google.inject.Singleton;
 import com.google.inject.multibindings.OptionalBinder;
 import io.micrometer.core.instrument.MeterRegistry;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
-public final class ExecutorModule extends BaseLifecycleComponentModule implements ExposedKeyModule<ExecutorFactory> {
+import static net.yudichev.jiotty.common.inject.BaseModuleBuilder.simpleBuilder;
+
+public final class ExecutorModule extends BaseExposedKeyModule<ExecutorFactory> {
+    private ExecutorModule(SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
+    }
+
+    public static BaseModuleBuilder<ExecutorFactory, ?> builder() {
+        return simpleBuilder(ExecutorModule::new);
+    }
+
     @Override
     protected void configure() {
         // Scoped singleton so the factory and the exposed registry resolve to the same instance.
@@ -15,7 +26,7 @@ public final class ExecutorModule extends BaseLifecycleComponentModule implement
         expose(TaskExceptionHandlerRegistry.class);
         // Optional so executors are created (unmetered) where no metrics module is installed; present it as Optional<MeterRegistry> to the factory.
         OptionalBinder.newOptionalBinder(binder(), MeterRegistry.class);
-        bind(getExposedKey()).to(ExecutorFactoryImpl.class).in(Singleton.class);
-        expose(getExposedKey());
+        bind(exposedKey).to(ExecutorFactoryImpl.class).in(Singleton.class);
+        expose(exposedKey);
     }
 }

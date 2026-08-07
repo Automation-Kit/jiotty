@@ -44,7 +44,7 @@ class TeslaFleetModuleTest {
                                                               .withLocalLogin(localLogin)
                                                               .withAnnotation(forAnnotation(annotation))
                                                               .build();
-        var injector = Guice.createInjector(new TimeModule(), new ExecutorModule(), module);
+        var injector = Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), module);
 
         assertThat(module.getExposedKey()).isEqualTo(Key.get(TeslaFleet.class, annotation));
         assertThat(injector.getInstance(module.getExposedKey())).isInstanceOf(TeslaFleetImpl.class);
@@ -58,8 +58,8 @@ class TeslaFleetModuleTest {
                                                               .setClientSecret(literally("test-client-secret"))
                                                               .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                               .build();
-        var injector = Guice.createInjector(new TimeModule(),
-                                            new ExecutorModule(),
+        var injector = Guice.createInjector(TimeModule.builder().build(),
+                                            ExecutorModule.builder().build(),
                                             new AbstractModule() {
                                                 @Override
                                                 protected void configure() {
@@ -77,7 +77,7 @@ class TeslaFleetModuleTest {
     void supportsTwoInstancesSideBySide() {
         ExposedKeyModule<TeslaFleet> first = moduleForSubject("user-1");
         ExposedKeyModule<TeslaFleet> second = moduleForSubject("user-2");
-        var injector = Guice.createInjector(new TimeModule(), new ExecutorModule(), first, second);
+        var injector = Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), first, second);
 
         assertThat(injector.getInstance(first.getExposedKey())).isNotSameAs(injector.getInstance(second.getExposedKey()));
     }

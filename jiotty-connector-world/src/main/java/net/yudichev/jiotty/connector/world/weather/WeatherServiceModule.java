@@ -1,14 +1,12 @@
 package net.yudichev.jiotty.connector.world.weather;
 
-import com.google.inject.Key;
 import com.google.inject.Singleton;
 import net.yudichev.jiotty.common.async.backoff.BackOffConfig;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.common.misc.LoggingUpstreamHealthHandler;
 import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 
@@ -18,26 +16,20 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.async.backoff.SharedUpstreamOutageBackOff.sharedOutageRetryExecutorModule;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
-public final class WeatherServiceModule extends BaseLifecycleComponentModule implements ExposedKeyModule<WeatherService> {
+public final class WeatherServiceModule extends BaseExposedKeyModule<WeatherService> {
     private final BindingSpec<String> apiKeySpec;
     private final BindingSpec<UpstreamHealthHandler> healthHandlerSpec;
-    private final Key<WeatherService> exposedKey;
 
     private WeatherServiceModule(SpecifiedAnnotation specifiedAnnotation,
                                  BindingSpec<String> apiKeySpec,
                                  BindingSpec<UpstreamHealthHandler> healthHandlerSpec) {
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
+        super(specifiedAnnotation);
         this.apiKeySpec = checkNotNull(apiKeySpec);
         this.healthHandlerSpec = checkNotNull(healthHandlerSpec);
     }
 
     public static Builder builder() {
         return new Builder();
-    }
-
-    @Override
-    public Key<WeatherService> getExposedKey() {
-        return exposedKey;
     }
 
     @Override
@@ -63,10 +55,9 @@ public final class WeatherServiceModule extends BaseLifecycleComponentModule imp
         expose(exposedKey);
     }
 
-    public static final class Builder implements TypedBuilder<ExposedKeyModule<WeatherService>>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<WeatherService, Builder> {
         private BindingSpec<String> apiKeySpec;
         private BindingSpec<UpstreamHealthHandler> healthHandlerSpec = literally(new LoggingUpstreamHealthHandler("weather API"));
-        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
 
         public Builder setApiKey(BindingSpec<String> apiKeySpec) {
             this.apiKeySpec = checkNotNull(apiKeySpec);
@@ -80,14 +71,8 @@ public final class WeatherServiceModule extends BaseLifecycleComponentModule imp
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = checkNotNull(specifiedAnnotation);
-            return this;
-        }
-
-        @Override
         public ExposedKeyModule<WeatherService> build() {
-            return new WeatherServiceModule(specifiedAnnotation, apiKeySpec, healthHandlerSpec);
+            return new WeatherServiceModule(specifiedAnnotation(), apiKeySpec, healthHandlerSpec);
         }
     }
 }

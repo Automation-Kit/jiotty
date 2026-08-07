@@ -1,27 +1,23 @@
 package net.yudichev.jiotty.connector.fieldglass;
 
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
-import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
+import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 
-public final class FieldglassTimeSheetsModule extends BaseLifecycleComponentModule implements ExposedKeyModule<FieldglassTimeSheetsClient> {
-    private FieldglassTimeSheetsModule() {
+import static net.yudichev.jiotty.common.inject.BaseModuleBuilder.simpleBuilder;
+
+public final class FieldglassTimeSheetsModule extends BaseExposedKeyModule<FieldglassTimeSheetsClient> {
+    private FieldglassTimeSheetsModule(SpecifiedAnnotation specifiedAnnotation) {
+        super(specifiedAnnotation);
     }
 
-    public static Builder builder() {
-        return new Builder();
+    public static BaseModuleBuilder<FieldglassTimeSheetsClient, ?> builder() {
+        return simpleBuilder(FieldglassTimeSheetsModule::new);
     }
 
     @Override
     protected void configure() {
-        bind(getExposedKey()).to(FieldglassTimeSheetsClientImpl.class);
-        expose(getExposedKey());
-    }
-
-    public static class Builder implements TypedBuilder<ExposedKeyModule<FieldglassTimeSheetsClient>> {
-        @Override
-        public ExposedKeyModule<FieldglassTimeSheetsClient> build() {
-            return new FieldglassTimeSheetsModule();
-        }
+        bind(exposedKey).to(FieldglassTimeSheetsClientImpl.class);
+        expose(exposedKey);
     }
 }

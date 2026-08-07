@@ -38,8 +38,8 @@ class UIServerModuleTest {
     /// rather than only its bindings.
     @BeforeEach
     void setUp() {
-        injector = Guice.createInjector(new ExecutorModule(),
-                                        new TimeModule(),
+        injector = Guice.createInjector(ExecutorModule.builder().build(),
+                                        TimeModule.builder().build(),
                                         new AbstractModule() {
                                             @Override
                                             protected void configure() {

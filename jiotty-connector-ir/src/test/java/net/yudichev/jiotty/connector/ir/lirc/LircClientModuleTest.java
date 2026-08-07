@@ -5,14 +5,14 @@ import com.google.inject.Key;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import org.junit.jupiter.api.Test;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 class LircClientModuleTest {
     @Test
     void injector() {
         var module = LircClientModule.builder().build();
-        assertThat(module.getExposedKey(), is(Key.get(LircClient.class)));
-        Guice.createInjector(new ExecutorModule(), module).getBinding(module.getExposedKey());
+        assertThat(module.getExposedKey()).isEqualTo(Key.get(LircClient.class));
+        Guice.createInjector(ExecutorModule.builder().build(), module).getBinding(module.getExposedKey());
     }
 }

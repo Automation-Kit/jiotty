@@ -43,8 +43,8 @@ class OAuth2TokenManagerModuleTest {
                    .withLoginExtraParams(literally(Map.of("access_type", "offline")));
         }
         var module = builder.build();
-        Guice.createInjector(new TimeModule(),
-                             new ExecutorModule(),
+        Guice.createInjector(TimeModule.builder().build(),
+                             ExecutorModule.builder().build(),
                              new AbstractModule() {
                                  @Override
                                  protected void configure() {
@@ -65,8 +65,8 @@ class OAuth2TokenManagerModuleTest {
                                                                               .setScope(literally("scope"))
                                                                               .withAnnotation(forAnnotation(annotation))
                                                                               .build();
-        var injector = Guice.createInjector(new TimeModule(),
-                                            new ExecutorModule(),
+        var injector = Guice.createInjector(TimeModule.builder().build(),
+                                            ExecutorModule.builder().build(),
                                             new AbstractModule() {
                                                 @Override
                                                 protected void configure() {
@@ -106,7 +106,7 @@ class OAuth2TokenManagerModuleTest {
                                                                                   .withVarStore(literally(varStore))
                                                                                   .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                                                   .build();
-            var injector = Guice.createInjector(new TimeModule(), new ExecutorModule(), module);
+            var injector = Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), module);
             List<LifecycleComponent> components = injector.findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
                                                           .stream()
                                                           .map(binding -> injector.getInstance(binding.getKey()))
@@ -146,7 +146,7 @@ class OAuth2TokenManagerModuleTest {
                                                                               .withLoginPending(literally(true))
                                                                               .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                                               .build();
-        var injector = Guice.createInjector(new TimeModule(), new ExecutorModule(), module);
+        var injector = Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), module);
         List<LifecycleComponent> components = injector.findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
                                                       .stream()
                                                       .map(binding -> injector.getInstance(binding.getKey()))
@@ -174,8 +174,8 @@ class OAuth2TokenManagerModuleTest {
                                              .setTokenUrl(literally("http://token"))
                                              .setScope(literally("scope"))
                                              .build();
-        Guice.createInjector(new TimeModule(),
-                             new ExecutorModule(),
+        Guice.createInjector(TimeModule.builder().build(),
+                             ExecutorModule.builder().build(),
                              new AbstractModule() {
                                  @Override
                                  protected void configure() {

@@ -1,16 +1,14 @@
 package net.yudichev.jiotty.persistence.varstore;
 
 import com.google.common.reflect.TypeToken;
-import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import com.google.inject.multibindings.OptionalBinder;
-import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
+import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
+import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
-import net.yudichev.jiotty.common.inject.HasWithAnnotation;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccess;
-import net.yudichev.jiotty.common.lang.TypedBuilder;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import org.jspecify.annotations.Nullable;
 
@@ -22,8 +20,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.Boolean.FALSE;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
-public final class VarStoreModule extends BaseLifecycleComponentModule implements ExposedKeyModule<VarStore> {
-    private final Key<VarStore> exposedKey;
+public final class VarStoreModule extends BaseExposedKeyModule<VarStore> {
     private final @Nullable BindingSpec<Path> pathSpec;
     private final @Nullable BindingSpec<DataSourceFactory> dataSourceFactorySpec;
     private final BindingSpec<String> tableNameSpec;
@@ -38,18 +35,13 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
                            BindingSpec<Boolean> singleUserSpec,
                            @Nullable BindingSpec<String> encryptionKeyAliasSpec,
                            @Nullable BindingSpec<KeyStoreAccess> keyStoreAccessSpec) {
+        super(specifiedAnnotation);
         this.pathSpec = pathSpec;
         this.dataSourceFactorySpec = dataSourceFactorySpec;
         this.tableNameSpec = checkNotNull(tableNameSpec);
         this.singleUserSpec = checkNotNull(singleUserSpec);
         this.encryptionKeyAliasSpec = encryptionKeyAliasSpec;
         this.keyStoreAccessSpec = keyStoreAccessSpec;
-        exposedKey = specifiedAnnotation.specify(ExposedKeyModule.super.getExposedKey().getTypeLiteral());
-    }
-
-    @Override
-    public Key<VarStore> getExposedKey() {
-        return exposedKey;
     }
 
     @Override
@@ -80,21 +72,21 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
                                                                                          new TypeToken<>() {},
                                                                                          Optional::of);
             legacyPathSpec.bind(new TypeLiteral<>() {}).annotatedWith(Bindings.ThePath.class).installedBy(this::installLifecycleComponentModule);
-            bind(getExposedKey()).to(registerLifecycleComponent(SqlVarStore.class));
+            bind(exposedKey).to(registerLifecycleComponent(SqlVarStore.class));
         } else {
             checkArgument(pathSpec != null, "At least one of 'path', 'dataSourceFactory' is required");
             pathSpec.bind(new TypeLiteral<>() {}).annotatedWith(Bindings.ThePath.class).installedBy(this::installLifecycleComponentModule);
-            bind(getExposedKey()).to(FileVarStore.class);
+            bind(exposedKey).to(FileVarStore.class);
         }
 
-        expose(getExposedKey());
+        expose(exposedKey);
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
-    public static final class Builder implements TypedBuilder<VarStoreModule>, HasWithAnnotation {
+    public static final class Builder extends BaseModuleBuilder<VarStore, Builder> {
 
         private BindingSpec<Path> pathSpec;
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec;
@@ -102,7 +94,6 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
         private BindingSpec<Boolean> singleUserSpec = literally(FALSE);
         private BindingSpec<String> encryptionKeyAliasSpec;
         private BindingSpec<KeyStoreAccess> keyStoreAccessSpec;
-        private SpecifiedAnnotation specifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
 
         private Builder() {
         }
@@ -138,14 +129,8 @@ public final class VarStoreModule extends BaseLifecycleComponentModule implement
         }
 
         @Override
-        public Builder withAnnotation(SpecifiedAnnotation specifiedAnnotation) {
-            this.specifiedAnnotation = specifiedAnnotation;
-            return this;
-        }
-
-        @Override
-        public VarStoreModule build() {
-            return new VarStoreModule(specifiedAnnotation,
+        public ExposedKeyModule<VarStore> build() {
+            return new VarStoreModule(specifiedAnnotation(),
                                       pathSpec,
                                       dataSourceFactorySpec,
                                       tableNameSpec,
