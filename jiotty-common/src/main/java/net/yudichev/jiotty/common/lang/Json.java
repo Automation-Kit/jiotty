@@ -7,11 +7,14 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.guava.GuavaModule;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.google.common.io.CharSource;
+import com.google.common.io.CharStreams;
 import com.google.common.reflect.TypeToken;
 
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.Reader;
+import java.net.http.HttpResponse;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
@@ -43,6 +46,12 @@ public final class Json {
         return getAsUnchecked(() -> mapper.readValue(bytes, type));
     }
 
+    /// Parses JSON straight out of `chars` — typically a [StringBuilder] the caller has just assembled — reading its characters in place.
+    /// Use when the payload was built up piecewise and [CharSequence#toString()] would be a whole second copy of it purely to satisfy the parser.
+    public static <T> T parse(CharSequence chars, Class<T> type) {
+        return getAsUnchecked(() -> mapper.readValue(CharSource.wrap(chars).openStream(), type));
+    }
+
     /// Parses JSON read directly from `reader`, avoiding the intermediate [String]/byte-array copy that reading the whole payload into memory first would
     /// incur. Jackson reads `reader` to completion and closes it. A caller holding a byte stream wraps it in an [InputStreamReader] with the desired charset.
     public static <T> T parse(Reader reader, Class<T> type) {
@@ -63,10 +72,17 @@ public final class Json {
     }
 
     /// Streams the JSON-encoded form of `value` directly into `output`. Jackson uses an internal small buffer; no full-payload [String] or byte array is
-    /// allocated on the caller's side. Useful for piping straight into an [java.net.http.HttpResponse] body, a `ServletOutputStream`, a `GZIPOutputStream`,
+    /// allocated on the caller's side. Useful for piping straight into an [HttpResponse] body, a `ServletOutputStream`, a `GZIPOutputStream`,
     /// or any other sink whose lifetime the caller manages.
     public static void writeTo(OutputStream output, Object value) {
         asUnchecked(() -> mapper.writeValue(output, value));
+    }
+
+    /// Streams the JSON-encoded form of `value` straight into `output` — typically a [StringBuilder] the caller is assembling a larger document in. Use when
+    /// the encoded form is destined for a buffer the caller already holds: [#stringify] would materialise the whole payload as a [String] only for the caller
+    /// to copy it across and drop it.
+    public static void writeTo(Appendable output, Object value) {
+        asUnchecked(() -> mapper.writeValue(CharStreams.asWriter(output), value));
     }
 
     /// Returns an [ObjectWriter] pre-configured for the given Java type. The writer caches Jackson's serialiser graph for `type` once; subsequent

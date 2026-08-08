@@ -21,7 +21,7 @@ public interface StringFormattable extends StringBuilderFormattable {
     ///
     /// @param bufferCapacity initial buffer size; pick a value that comfortably fits the formatted form
     default String toString(int bufferCapacity) {
-        StringBuilder sb = new StringBuilder(bufferCapacity);
+        var sb = new StringBuilder(bufferCapacity);
         formatTo(sb);
         return sb.toString();
     }

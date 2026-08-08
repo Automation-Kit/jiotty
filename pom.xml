@@ -273,6 +273,7 @@
         <module>jiotty-appliance</module>
         <module>jiotty-bom</module>
         <module>jiotty-common</module>
+        <module>jiotty-connector-anthropic</module>
         <module>jiotty-connector-aws</module>
         <module>jiotty-connector-expo-push</module>
         <module>jiotty-connector-firebase</module>

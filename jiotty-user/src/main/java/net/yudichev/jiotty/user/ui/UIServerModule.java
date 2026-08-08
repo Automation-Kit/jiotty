@@ -97,6 +97,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                                    .installedBy(this::installLifecycleComponentModule);
 
         bind(OptionRegistry.class).to(registerLifecycleComponent(OptionRegistryImpl.class));
+        expose(OptionRegistry.class);
         bind(DisplayableRegistry.class).to(registerLifecycleComponent(DisplayableRegistryImpl.class));
         bind(SseService.class).to(registerLifecycleComponent(SseServiceImpl.class));
 

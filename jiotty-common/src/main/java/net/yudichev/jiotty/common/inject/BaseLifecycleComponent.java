@@ -16,7 +16,7 @@ public abstract class BaseLifecycleComponent implements LifecycleComponent {
     /// out of order with later writes to the same variable — while emitting no barrier, which is what keeps the callback path as cheap as it is. The
     /// lifecycle transitions below are already ordered by the lock they run under, so their accesses need no mode stronger than that.
     private final AtomicBoolean startAttempted = new AtomicBoolean();
-    private volatile boolean started;
+    private final AtomicBoolean started = new AtomicBoolean();
 
     @Override
     public final void start() {
@@ -24,7 +24,7 @@ public abstract class BaseLifecycleComponent implements LifecycleComponent {
             checkState(!startAttempted.getPlain(), "Component %s is already started", this);
             startAttempted.setOpaque(true);
             doStart();
-            started = true;
+            started.set(true);
         });
     }
 
@@ -33,14 +33,22 @@ public abstract class BaseLifecycleComponent implements LifecycleComponent {
         inLock(lifecycleStateLock, () -> {
             if (startAttempted.getPlain()) {
                 startAttempted.setOpaque(false);
-                started = false;
+                started.set(false);
                 doStop();
             }
         });
     }
 
     protected final boolean isStarted() {
-        return started;
+        return started.get();
+    }
+
+    protected final boolean isStartedOpaque() {
+        return started.getOpaque();
+    }
+
+    protected final boolean isStartedPlain() {
+        return started.getPlain();
     }
 
     protected final void checkStarted() {
