@@ -28,6 +28,7 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.CONFLICT_409;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
@@ -192,6 +193,8 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
             case INVALID -> UNAUTHORIZED_401;
             // 403, not 401: the bearer token is valid, so clients must not treat the refusal as an expired session.
             case USER_DISABLED, REGISTRATION_REFUSED -> FORBIDDEN_403;
+            // 409, not 403: the request conflicts with an existing account rather than being forbidden, and the client renders its own remedy for it.
+            case EMAIL_ALREADY_REGISTERED -> CONFLICT_409;
             case TECHNICAL_FAILURE -> SERVICE_UNAVAILABLE_503;
         };
     }

@@ -37,6 +37,7 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.CONFLICT_409;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
@@ -458,6 +459,7 @@ class AuthenticatedUIRequestAuthoriserTest {
         return switch (reason) {
             case INVALID -> UNAUTHORIZED_401;
             case USER_DISABLED, REGISTRATION_REFUSED -> FORBIDDEN_403;
+            case EMAIL_ALREADY_REGISTERED -> CONFLICT_409;
             case TECHNICAL_FAILURE -> SERVICE_UNAVAILABLE_503;
         };
     }

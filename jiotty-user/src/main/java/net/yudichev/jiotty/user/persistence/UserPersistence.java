@@ -14,12 +14,13 @@ import static com.google.common.base.Preconditions.checkNotNull;
 public interface UserPersistence {
     /// Returns an existing user for `identity`, or creates a new user atomically with `profile`.
     ///
-    /// If concurrent creation results in a uniqueness conflict, the existing user for the identity is returned.
+    /// If concurrent creation results in a uniqueness conflict on the identity, the existing user for it is returned.
     ///
     /// @param identity provider identity used for lookup and creation
     /// @param profile  initial profile details for a newly created user
-    /// @return the existing or newly created user profile
-    CompletableFuture<UserProfile> getOrCreateByIdentity(UserIdentity identity, UserProfileInput profile);
+    /// @return [UserCreationResult.Resolved] with the existing or newly created user profile, or [UserCreationResult.EmailAlreadyInUse] if `profile.email()`
+    /// already belongs to a different user
+    CompletableFuture<UserCreationResult> getOrCreateByIdentity(UserIdentity identity, UserProfileInput profile);
 
     /// Returns the active user profile by identity.
     ///
@@ -95,6 +96,25 @@ public interface UserPersistence {
     ///
     /// @param userId internal user id
     CompletableFuture<Void> restore(String userId);
+
+    /// The outcome of [#getOrCreateByIdentity].
+    sealed interface UserCreationResult permits UserCreationResult.Resolved, UserCreationResult.EmailAlreadyInUse {
+        /// The identity resolved to an existing user, or a new user was created for it.
+        record Resolved(UserProfile profile) implements UserCreationResult {
+            public Resolved {
+                checkNotNull(profile, "profile");
+            }
+        }
+
+        /// No user could be created because the requested email already belongs to a different user. Clearing it needs an operator to reconcile the identity
+        /// provider with this store, so surface it as its own state rather than retrying.
+        final class EmailAlreadyInUse implements UserCreationResult {
+            public static final EmailAlreadyInUse INSTANCE = new EmailAlreadyInUse();
+
+            private EmailAlreadyInUse() {
+            }
+        }
+    }
 
     /// The outcome of [#resolveByIdentity].
     sealed interface IdentityResolution permits IdentityResolution.Active, IdentityResolution.SoftDeleted, IdentityResolution.Absent {

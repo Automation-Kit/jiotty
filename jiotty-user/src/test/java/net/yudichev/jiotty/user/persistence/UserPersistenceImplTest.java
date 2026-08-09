@@ -22,17 +22,22 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.util.concurrent.Uninterruptibles.awaitUninterruptibly;
 import static java.util.Optional.of;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static net.yudichev.jiotty.user.persistence.UserPersistence.UserCreationResult;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.InstanceOfAssertFactories.list;
 
 class UserPersistenceImplTest {
     private static final String DOMAIN_NAME = "users";
@@ -47,6 +52,9 @@ class UserPersistenceImplTest {
     private DataSource dataSource;
     private DataSourceFactory dataSourceFactory;
     private SingleThreadedSchedulingExecutor executor;
+    /// The second instance's executor in the concurrent-creation test. A separate thread is the whole point: one instance's single-threaded executor serialises
+    /// its own tasks, so a race can only be staged between two instances.
+    private SingleThreadedSchedulingExecutor racingExecutor;
     private Provider<SchedulingExecutor> executorProvider;
     private PersistenceDomainServiceImpl domainService;
     private PersistenceDomain domain;
@@ -57,6 +65,7 @@ class UserPersistenceImplTest {
         dataSource = postgres.dataSource();
         dataSourceFactory = postgres.dataSourceFactory();
         executor = new SingleThreadedSchedulingExecutor("user-persistence-test");
+        racingExecutor = new SingleThreadedSchedulingExecutor("user-persistence-test-racer");
         executorProvider = () -> executor;
         domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
         domain = new PersistenceDomain(DOMAIN_NAME);
@@ -65,7 +74,8 @@ class UserPersistenceImplTest {
 
     @AfterEach
     void tearDown() {
-        Closeable.closeIfNotNull(userPersistence == null ? null : userPersistence::stop, domainService == null ? null : domainService::stop, executor);
+        Closeable.closeIfNotNull(userPersistence == null ? null : userPersistence::stop, domainService == null ? null : domainService::stop,
+                                 executor, racingExecutor);
     }
 
     @Test
@@ -86,14 +96,14 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of(EXTRA_INIT_STATEMENT));
         var identity = new UserIdentity("firebase", "uid-1");
         var profileInput = createProfileInput("user@example.com", "Alex", UTC);
-        var created = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
+        var created = createUser(identity, profileInput);
 
         assertThat(created.id()).startsWith("u");
         assertThat(created.email()).contains("user@example.com");
         assertThat(created.displayName()).contains("Alex");
         assertThat(created.timezone()).isEqualTo(UTC);
 
-        var fetched = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
+        var fetched = createUser(identity, profileInput);
         assertThat(fetched.id()).isEqualTo(created.id());
 
         var identities = userPersistence.listIdentities(created.id()).get(5, SECONDS);
@@ -114,10 +124,13 @@ class UserPersistenceImplTest {
         assertThat(linked).hasSize(2);
         assertThat(userPersistence.getByIdentity(googleIdentity).get(5, SECONDS)).contains(created);
 
+        // A brand-new identity carrying an email that already backs another user cannot be created: the unique `email` column rejects it. The store reports
+        // that as a value the caller branches on, NOT a failure — a failure here would surface as a 503 the user could never get past.
         var duplicateIdentity = new UserIdentity("apple.com", "apple-uid");
         var duplicateProfile = createProfileInput("user@example.com", "Duplicate", UTC);
-        assertThatThrownBy(() -> userPersistence.getOrCreateByIdentity(duplicateIdentity, duplicateProfile).get(5, SECONDS))
-                .hasRootCauseInstanceOf(IllegalStateException.class);
+        assertThat(userPersistence.getOrCreateByIdentity(duplicateIdentity, duplicateProfile).get(5, SECONDS))
+                .isSameAs(UserCreationResult.EmailAlreadyInUse.INSTANCE);
+        assertThat(userPersistence.getByIdentity(duplicateIdentity).get(5, SECONDS)).isEmpty();
 
         var update = createProfileInput("new@example.com", "Alexey", EUROPE_LONDON);
         var updated = userPersistence.updateProfile(created.id(), update).get(5, SECONDS);
@@ -149,10 +162,74 @@ class UserPersistenceImplTest {
     }
 
     @Test
+    void refusesCreationWhenTheEmailBelongsToASoftDeletedUser() throws Exception {
+        // A soft-deleted user keeps its email until it is hard-deleted, so the address is still taken. The recovery path
+        // must decide from the identity, not from a select that hides deleted rows.
+        startUserPersistence(dataSourceFactory, List.of());
+        var created = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+
+        var creation = userPersistence.getOrCreateByIdentity(new UserIdentity("firebase", "uid-2"),
+                                                             createProfileInput("user@example.com", "Other", UTC)).get(5, SECONDS);
+
+        assertThat(creation).isSameAs(UserCreationResult.EmailAlreadyInUse.INSTANCE);
+    }
+
+    @Test
+    void concurrentCreationOfOneIdentity_bothCallersResolveToTheSameUser() throws Exception {
+        // Two instances, so two connections race the way two server processes would — one instance's single-threaded
+        // executor could never interleave with itself. The racing instance blocks in the create transaction after its
+        // identity lookup came back empty; the other then claims that identity and commits, which is the only way to
+        // reach the unique-violation recovery's Active arm.
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var atRaceWindow = new CountDownLatch(1);
+        var competitorCommitted = new CountDownLatch(1);
+        var racer = new UserPersistenceImpl(dataSourceFactory, () -> racingExecutor, domainService, new TimeProvider(), 1,
+                                            domain.name(), List.of(), PersistenceDomainMigrator.FAIL_ON_MIGRATION) {
+            @Override
+            boolean onBeforeInsertingNewUser() {
+                atRaceWindow.countDown();
+                return awaitUninterruptibly(competitorCommitted, 10, SECONDS);
+            }
+        };
+        racer.start();
+
+        // Distinct emails, so the ONLY constraint the racer can violate is the identity's — an email collision would take
+        // a different arm and prove nothing about this one.
+        var racerCreation = racer.getOrCreateByIdentity(identity, createProfileInput("racer@example.com", "Racer", UTC));
+        assertThat(atRaceWindow.await(10, SECONDS))
+                .as("racer reached the create window — if this times out, assertions are off and the `assert` seam never ran (needs -ea)")
+                .isTrue();
+        var winner = createUser(identity, createProfileInput("winner@example.com", "Winner", UTC));
+        competitorCommitted.countDown();
+
+        // The racer loses the insert and adopts the winner's user rather than failing or creating a second one.
+        assertThat(racerCreation).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(new UserCreationResult.Resolved(winner));
+        // Its own half-written user row was rolled back, so the race leaves no orphan behind.
+        assertThat(userPersistence.listAllProfiles()).succeedsWithin(Duration.ofSeconds(5)).asInstanceOf(list(UserProfile.class)).containsExactly(winner);
+        Closeable.closeIfNotNull(racer::stop);
+    }
+
+    @Test
+    void refusesCreationForAnIdentityHeldByASoftDeletedUser() throws Exception {
+        // Not an email conflict: the identity itself is unavailable. Reporting EmailAlreadyInUse here would tell the caller
+        // to try a different sign-in method when the real answer is that this account is pending deletion.
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+
+        assertThatThrownBy(() -> userPersistence.getOrCreateByIdentity(identity, createProfileInput("fresh@example.com", "Alex", UTC)).get(5, SECONDS))
+                .hasRootCauseInstanceOf(IllegalStateException.class)
+                .rootCause().hasMessageContaining("soft-deleted");
+    }
+
+    @Test
     void existsIgnoringDeletionSeesSoftDeletedButNotHardDeletedUsers() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
-        var created = userPersistence.getOrCreateByIdentity(new UserIdentity("firebase", "uid-1"),
-                                                            createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        var created = createUser(new UserIdentity("firebase", "uid-1"),
+                                 createProfileInput("user@example.com", "Alex", UTC));
 
         assertThat(userPersistence.existsIgnoringDeletion(created.id()).get(5, SECONDS)).isTrue();
         assertThat(userPersistence.existsIgnoringDeletion("u-does-not-exist").get(5, SECONDS)).isFalse();
@@ -193,7 +270,7 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
         var profileInput = createProfileInput("user@example.com", "Alex", UTC);
-        var created = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
+        var created = createUser(identity, profileInput);
         var oldGoogleIdentity = new UserIdentity("google.com", "google-uid-1");
         var newGoogleIdentity = new UserIdentity("google.com", "google-uid-2");
 
@@ -213,7 +290,7 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
         var profileInput = createProfileInput("user@example.com", "Alex", UTC);
-        var created = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
+        var created = createUser(identity, profileInput);
 
         dropIdentityTable(dataSource, domain);
 
@@ -228,11 +305,11 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of());
         var identity1 = new UserIdentity("firebase", "uid-1");
         var profile1 = createProfileInput("user1@example.com", "User One", UTC);
-        var user1 = userPersistence.getOrCreateByIdentity(identity1, profile1).get(5, SECONDS);
+        var user1 = createUser(identity1, profile1);
 
         var identity2 = new UserIdentity("google.com", "uid-2");
         var profile2 = createProfileInput("user2@example.com", "User Two", UTC);
-        var user2 = userPersistence.getOrCreateByIdentity(identity2, profile2).get(5, SECONDS);
+        var user2 = createUser(identity2, profile2);
 
         var profiles = userPersistence.listAllProfiles().get(5, SECONDS);
         assertThat(profiles).hasSize(2);
@@ -250,10 +327,10 @@ class UserPersistenceImplTest {
         var softDeleteTime = Instant.parse("2026-01-02T03:04:05Z");
         clock.setTime(softDeleteTime);
         startUserPersistence(dataSourceFactory, List.of(), clock);
-        var active = userPersistence.getOrCreateByIdentity(new UserIdentity("firebase", "uid-1"),
-                                                           createProfileInput("user1@example.com", "User One", UTC)).get(5, SECONDS);
-        var deleted = userPersistence.getOrCreateByIdentity(new UserIdentity("google.com", "uid-2"),
-                                                            createProfileInput("user2@example.com", "User Two", UTC)).get(5, SECONDS);
+        var active = createUser(new UserIdentity("firebase", "uid-1"),
+                                createProfileInput("user1@example.com", "User One", UTC));
+        var deleted = createUser(new UserIdentity("google.com", "uid-2"),
+                                 createProfileInput("user2@example.com", "User Two", UTC));
 
         userPersistence.softDelete(deleted.id()).get(5, SECONDS);
 
@@ -280,7 +357,7 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
         var profileInput = createProfileInput("user@example.com", "Alex", UTC);
-        var created = userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
+        var created = createUser(identity, profileInput);
 
         assertThat(userPersistence.getByIdentity(identity).get(5, SECONDS)).contains(created);
 
@@ -296,7 +373,7 @@ class UserPersistenceImplTest {
         clock.setTime(softDeleteTime);
         startUserPersistence(dataSourceFactory, List.of(), clock);
         var identity = new UserIdentity("firebase", "uid-1");
-        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
 
         // an active user resolves to Active
         assertThat(userPersistence.resolveByIdentity(identity).get(5, SECONDS))
@@ -328,7 +405,7 @@ class UserPersistenceImplTest {
     void hardDeleteRemovesUserAndIdentitiesPermanently() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
-        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
 
         userPersistence.softDelete(created.id()).get(5, SECONDS);
         userPersistence.hardDelete(created.id()).get(5, SECONDS);
@@ -336,7 +413,7 @@ class UserPersistenceImplTest {
         assertThat(userPersistence.listAllProfiles().get(5, SECONDS)).isEmpty();
 
         // the identity row is physically gone (not merely soft-deleted), so re-registering the same identity yields a brand-new user
-        var recreated = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        var recreated = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
         assertThat(recreated.id()).isNotEqualTo(created.id());
         assertThat(userPersistence.listIdentities(recreated.id()).get(5, SECONDS)).hasSize(1);
     }
@@ -345,7 +422,7 @@ class UserPersistenceImplTest {
     void listIdentitiesIgnoringDeletionReturnsIdentitiesOfSoftDeletedUser() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
-        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
 
         userPersistence.softDelete(created.id()).get(5, SECONDS);
 
@@ -371,7 +448,7 @@ class UserPersistenceImplTest {
     void softDeleteIsIdempotent() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
-        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
 
         userPersistence.softDelete(created.id()).get(5, SECONDS);
         // a second soft-delete on an already-deleted user must be a no-op, not throw
@@ -388,7 +465,7 @@ class UserPersistenceImplTest {
 
         var firebase = new UserIdentity("firebase", "uid-1");
         var google = new UserIdentity("google.com", "g-1");
-        var created = userPersistence.getOrCreateByIdentity(firebase, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        var created = createUser(firebase, createProfileInput("user@example.com", "Alex", UTC));
         userPersistence.updateAllIdentities(created.id(), List.of(firebase, google)).get(5, SECONDS);
 
         // google is unlinked earlier, at a DIFFERENT timestamp than the later account deletion
@@ -415,7 +492,7 @@ class UserPersistenceImplTest {
     void restoreIsNoOpForActiveUser() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
-        var created = userPersistence.getOrCreateByIdentity(identity, createProfileInput("user@example.com", "Alex", UTC)).get(5, SECONDS);
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
 
         userPersistence.restore(created.id()).get(5, SECONDS); // not soft-deleted: no-op
 
@@ -427,14 +504,24 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
         var profileInput = createProfileInput("user@example.com", "Alex", UTC);
-        userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS);
+        createUser(identity, profileInput);
 
         var otherIdentity = new UserIdentity("google.com", "uid-2");
         var otherProfile = createProfileInput("other@example.com", "Morgan", UTC);
-        var user2 = userPersistence.getOrCreateByIdentity(otherIdentity, otherProfile).get(5, SECONDS);
+        var user2 = createUser(otherIdentity, otherProfile);
 
         assertThatThrownBy(() -> userPersistence.updateAllIdentities(user2.id(), List.of(otherIdentity, identity)).get(5, SECONDS))
                 .hasRootCauseInstanceOf(IllegalStateException.class);
+    }
+
+
+    /// Returns the profile for `identity`, creating the user if needed; fails the test if the store reports an email conflict.
+    private UserProfile createUser(UserIdentity identity, UserProfileInput profile) throws Exception {
+        var creation = userPersistence.getOrCreateByIdentity(identity, profile).get(5, SECONDS);
+        return switch (creation) {
+            case UserCreationResult.Resolved(var profileResult) -> profileResult;
+            case UserCreationResult.EmailAlreadyInUse ignored -> throw new AssertionError("expected Resolved, got EmailAlreadyInUse");
+        };
     }
 
     private void startUserPersistence(DataSourceFactory factory, List<String> initStatements) {

@@ -47,6 +47,9 @@ public interface UserTokenAuthoriser {
             /// The token itself verified, but the application refused to register a new account for it — so, unlike [#INVALID], the caller's session is
             /// still good.
             REGISTRATION_REFUSED,
+            /// No account could be registered because the token's email address already belongs to a different account. Distinct from [#REGISTRATION_REFUSED]
+            /// because retrying can never succeed: two provider accounts hold one address, which no client-side flow — including account linking — resolves.
+            EMAIL_ALREADY_REGISTERED,
             TECHNICAL_FAILURE,
         }
     }

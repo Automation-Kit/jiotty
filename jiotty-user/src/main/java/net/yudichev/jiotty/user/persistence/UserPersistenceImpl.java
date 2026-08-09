@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.persistence;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
@@ -44,7 +45,7 @@ import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.Migrato
 import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.SchemaVersion;
 
 @SuppressWarnings("JDBCPrepareStatementWithNonConstantString")
-public final class UserPersistenceImpl extends BaseLifecycleComponent implements UserPersistence {
+public class UserPersistenceImpl extends BaseLifecycleComponent implements UserPersistence {
     private static final Logger logger = LogManager.getLogger(UserPersistenceImpl.class);
     private static final String UNIQUE_VIOLATION_SQL_STATE = "23505";
 
@@ -186,7 +187,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
     }
 
     @Override
-    public CompletableFuture<UserProfile> getOrCreateByIdentity(UserIdentity identity, UserProfileInput profile) {
+    public CompletableFuture<UserCreationResult> getOrCreateByIdentity(UserIdentity identity, UserProfileInput profile) {
         checkNotNull(identity, "identity");
         checkNotNull(profile, "profile");
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doGetOrCreateByIdentity(identity, profile)));
@@ -283,7 +284,7 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
         }));
     }
 
-    private UserProfile doGetOrCreateByIdentity(UserIdentity identity, UserProfileInput profile) {
+    private UserCreationResult doGetOrCreateByIdentity(UserIdentity identity, UserProfileInput profile) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
@@ -291,14 +292,17 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
                     UserProfile existing = selectUserByIdentity(connection, identity);
                     if (existing != null) {
                         connection.commit();
-                        return existing;
+                        return new UserCreationResult.Resolved(existing);
                     }
+                    // The window a competing transaction has to claim this identity. `assert` so production, which runs
+                    // without -ea, never even calls it; surefire enables assertions, so the race test can block here.
+                    assert onBeforeInsertingNewUser();
                     Instant now = timeProvider.currentInstant();
                     String userId = UniqueId.generate('u');
                     insertUser(connection, userId, profile, now);
                     insertIdentity(connection, userId, identity, now);
                     connection.commit();
-                    return new UserProfile(userId, profile.email(), profile.displayName(), profile.timezone(), now, now);
+                    return new UserCreationResult.Resolved(new UserProfile(userId, profile.email(), profile.displayName(), profile.timezone(), now, now));
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     if (!isUniqueViolation(e)) {
@@ -312,9 +316,31 @@ public final class UserPersistenceImpl extends BaseLifecycleComponent implements
             throw new RuntimeException("Failed creating user for identity " + identity, e);
         }
 
-        UserProfile existing = doGetByIdentity(identity);
-        checkState(existing != null, "Unable to create user for identity %s due to a uniqueness conflict", identity);
-        return existing;
+        // Either unique constraint can land here, so the re-read decides which one fired. It resolves rather than selects,
+        // because both constraints span soft-deleted rows while the plain select hides them: a soft-deleted user holding
+        // this identity would otherwise look like an absent identity and be misreported as an email conflict.
+        return switch (doResolveByIdentity(identity)) {
+            // A concurrent call created the very user we wanted between our select and our insert, so both callers get it.
+            case IdentityResolution.Active(UserProfile concurrentlyCreated) -> new UserCreationResult.Resolved(concurrentlyCreated);
+            // The identity itself is taken by a user that is soft-deleted, so it is unavailable and no email conflict
+            // arose. Callers distinguish this state up front with resolveByIdentity; reaching it here means that step was
+            // skipped, which no correct caller does.
+            case IdentityResolution.SoftDeleted _ ->
+                    throw new IllegalStateException("Identity " + identity + " belongs to a soft-deleted user; resolve it before creating");
+            // The identity is genuinely free, so the violation was the email — it belongs to a different user.
+            case IdentityResolution.Absent _ -> {
+                logger.info("[{}] Refusing to create a user: its email already belongs to another user", identity);
+                yield UserCreationResult.EmailAlreadyInUse.INSTANCE;
+            }
+        };
+    }
+
+    /// Test seam: called inside the create transaction, after the identity lookup found nothing and before the rows are written — the window in which a
+    /// competing transaction can claim the same identity. Returns `true` so the call site can be an `assert`, which keeps production (no `-ea`) out of it.
+    @VisibleForTesting
+    @SuppressWarnings("SameReturnValue")
+    boolean onBeforeInsertingNewUser() {
+        return true;
     }
 
     private @Nullable UserProfile doGetByIdentity(UserIdentity identity) {
