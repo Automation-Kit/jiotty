@@ -4,7 +4,7 @@ name: Build
 # CI before it can be merged.
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
   pull_request:
   workflow_dispatch:
 
