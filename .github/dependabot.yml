@@ -1,0 +1,31 @@
+# Every proposed bump arrives as a pull request gated by the Build workflow, so an upgrade is verified by CI
+# before it can be merged.
+# Security review: car-server M-7 (supply chain), car-ui N7 (residual advisories).
+version: 2
+updates:
+  # Each directory listed here is scanned for poms. Both module levels are included because third-party
+  # versions are literal in module poms down to the nested aggregators (jiotty-connector-google/*).
+  - package-ecosystem: "maven"
+    directories:
+      - "/"
+      - "/*"
+      - "/*/*"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    # One PR per month for the routine noise, individual PRs for majors — a grouped major is impossible to
+    # review or revert selectively. Security advisories are never grouped and ignore the schedule.
+    groups:
+      maven-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "ci"

@@ -15,10 +15,14 @@ import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -30,6 +34,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
@@ -40,6 +45,8 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class AdminAlertResolveServletTest {
     private static final String VALID_TOKEN = "tok-correct";
@@ -94,27 +101,30 @@ class AdminAlertResolveServletTest {
                                  executor);
     }
 
-    @Test
-    void missingBearer_returns401() {
+    @ParameterizedTest
+    @MethodSource
+    void unacceptableAuthorization_returns401(String authorization) {
         String alertId = raiseActive();
 
-        HttpResponse<String> response = sendResolve(alertId, null, GRAFANA_USER);
+        HttpResponse<String> response = sendResolveAuthorized(alertId, authorization, GRAFANA_USER, "{}");
 
         assertThat(response.statusCode()).isEqualTo(UNAUTHORIZED_401);
     }
 
+    static Stream<Arguments> unacceptableAuthorization_returns401() {
+        return Stream.of(arguments((String) null),             // no Authorization header at all
+                         arguments("Basic dXNlcjpwYXNz"),      // a scheme other than Bearer
+                         arguments("Bearer wrong-token"));     // the Bearer scheme carrying the wrong token
+    }
+
     @Test
-    void wrongBearer_returns401() {
-        String alertId = raiseActive();
-
-        HttpResponse<String> response = sendResolve(alertId, "wrong-token", GRAFANA_USER);
-
-        assertThat(response.statusCode()).isEqualTo(UNAUTHORIZED_401);
+    void blankToken_isRejectedAtConstruction() {
+        assertThatThrownBy(() -> new AdminBearerAuthFilter("   ")).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void unknownId_returns404() {
-        HttpResponse<String> response = sendResolve("a-nonexistent", VALID_TOKEN, GRAFANA_USER);
+        HttpResponse<String> response = sendResolve("a-nonexistent", GRAFANA_USER);
 
         assertThat(response.statusCode()).isEqualTo(NOT_FOUND_404);
     }
@@ -125,7 +135,7 @@ class AdminAlertResolveServletTest {
         String key = readDedupKey(alertId);
         getAsUnchecked(() -> alertService.resolve(key, "note").get(10, SECONDS));
 
-        HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER);
+        HttpResponse<String> response = sendResolve(alertId, GRAFANA_USER);
 
         assertThat(response.statusCode()).isEqualTo(CONFLICT_409);
     }
@@ -134,20 +144,29 @@ class AdminAlertResolveServletTest {
     void activeAlert_resolvesAndStampsGrafanaUser() {
         String alertId = raiseActive();
 
-        HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER);
+        HttpResponse<String> response = sendResolve(alertId, GRAFANA_USER);
 
         assertThat(response.statusCode()).isEqualTo(NO_CONTENT_204);
         assertThat(readResolvedBy(alertId)).contains(GRAFANA_USER);
     }
 
-    @Test
-    void missingGrafanaUserHeader_resolvesWithFallbackIdentity() {
+    /// The header is asserted by whoever holds the bearer token, so a claim the audit column cannot keep verbatim is recorded as unknown.
+    @ParameterizedTest
+    @MethodSource
+    void unusableGrafanaUserHeader_resolvesWithFallbackIdentity(String grafanaUser) {
         String alertId = raiseActive();
 
-        HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, null);
+        HttpResponse<String> response = sendResolve(alertId, grafanaUser);
 
         assertThat(response.statusCode()).isEqualTo(NO_CONTENT_204);
         assertThat(readResolvedBy(alertId)).contains(AdminBearerAuthFilter.DEFAULT_GRAFANA_USER);
+    }
+
+    static Stream<Arguments> unusableGrafanaUserHeader_resolvesWithFallbackIdentity() {
+        return Stream.of(arguments((String) null),                    // header absent
+                         arguments("   "),                            // whitespace only
+                         arguments("alice@example.com<script>"),      // characters a login never carries
+                         arguments("a".repeat(AdminBearerAuthFilter.MAX_CLAIMED_ACTOR_LENGTH + 1)));  // one over the ceiling
     }
 
     @Test
@@ -155,7 +174,7 @@ class AdminAlertResolveServletTest {
         String alertId = raiseActive();
         String oversizedBody = "{\"note\":\"" + "x".repeat(9 * 1024) + "\"}";
 
-        HttpResponse<String> response = sendResolve(alertId, VALID_TOKEN, GRAFANA_USER, oversizedBody);
+        HttpResponse<String> response = sendResolve(alertId, GRAFANA_USER, oversizedBody);
 
         assertThat(response.statusCode()).isEqualTo(PAYLOAD_TOO_LARGE_413);
         assertThat(readResolvedBy(alertId)).isEmpty();
@@ -217,17 +236,21 @@ class AdminAlertResolveServletTest {
         return readIdByKey(key);
     }
 
-    private HttpResponse<String> sendResolve(String alertId, String bearerToken, String grafanaUser) {
-        return sendResolve(alertId, bearerToken, grafanaUser, "{}");
+    private HttpResponse<String> sendResolve(String alertId, @Nullable String grafanaUser) {
+        return sendResolve(alertId, grafanaUser, "{}");
     }
 
-    private HttpResponse<String> sendResolve(String alertId, String bearerToken, String grafanaUser, String body) {
+    private HttpResponse<String> sendResolve(String alertId, @Nullable String grafanaUser, String body) {
+        return sendResolveAuthorized(alertId, "Bearer " + VALID_TOKEN, grafanaUser, body);
+    }
+
+    private HttpResponse<String> sendResolveAuthorized(String alertId, @Nullable String authorization, @Nullable String grafanaUser, String body) {
         var requestBuilder = HttpRequest.newBuilder()
                                         .uri(URI.create("http://localhost:" + port + "/admin/api/alerts/" + alertId + "/resolve"))
                                         .POST(HttpRequest.BodyPublishers.ofString(body))
                                         .header("Content-Type", "application/json");
-        if (bearerToken != null) {
-            requestBuilder.header("Authorization", "Bearer " + bearerToken);
+        if (authorization != null) {
+            requestBuilder.header("Authorization", authorization);
         }
         if (grafanaUser != null) {
             requestBuilder.header("X-Grafana-User", grafanaUser);
