@@ -40,8 +40,13 @@ class FriendlyDurationFormatTest {
                 // ISO-8601, case-insensitive "P..."
                 Arguments.of("PT2H30M", Duration.ofHours(2).plusMinutes(30)),
                 Arguments.of("pt1h", Duration.ofHours(1)),
-                // zero value via tokens or clock
-                Arguments.of("00:00", Duration.ZERO)
+                // zero value via tokens or clock — "0s" is what formatHuman emits for zero, so it must parse back
+                Arguments.of("00:00", Duration.ZERO),
+                Arguments.of("0s", Duration.ZERO),
+                Arguments.of("0m", Duration.ZERO),
+                Arguments.of("0h", Duration.ZERO),
+                Arguments.of("0d", Duration.ZERO),
+                Arguments.of("PT0S", Duration.ZERO)
         );
     }
 
@@ -112,6 +117,12 @@ class FriendlyDurationFormatTest {
                 // all zeros -> 0s
                 Arguments.of(Duration.ZERO, "0s")
         );
+    }
+
+    @ParameterizedTest
+    @MethodSource("formats")
+    void formattedValueParsesBackToSameDuration(Duration input, String formatted) {
+        assertThat(FriendlyDurationFormat.parseHuman(formatted)).isEqualTo(input);
     }
 
     @Test

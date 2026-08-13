@@ -40,11 +40,14 @@ public final class FriendlyDurationFormat {
         }
 
         long days = 0, hours = 0, minutes = 0, seconds = 0;
+        // Zero is a legitimate duration ("0s"), so an input is invalid exactly when it contains no recognised token.
+        boolean anyTokenMatched = false;
 
         // Extract days token if present (e.g., "2d")
         Matcher matcher = DAYS_TOKEN.matcher(s.toLowerCase(Locale.ROOT));
         if (matcher.find()) {
             days = Long.parseLong(matcher.group(1));
+            anyTokenMatched = true;
             // remove the matched days token for simpler further parsing
             s = new StringBuilder(s.length()).append(s).delete(matcher.start(), matcher.end()).toString();
         }
@@ -63,21 +66,25 @@ public final class FriendlyDurationFormat {
             }
         } else {
             // Fallback to unit tokens h/m/s in any order (e.g., "2h 30m 5s" or "90m")
-            Matcher mh = H_TOKEN.matcher(s.toLowerCase(Locale.ROOT));
+            String lowerCase = s.toLowerCase(Locale.ROOT);
+            Matcher mh = H_TOKEN.matcher(lowerCase);
             if (mh.find()) {
                 hours = Long.parseLong(mh.group(1));
+                anyTokenMatched = true;
             }
-            Matcher mm = M_TOKEN.matcher(s.toLowerCase(Locale.ROOT));
+            Matcher mm = M_TOKEN.matcher(lowerCase);
             if (mm.find()) {
                 minutes = Long.parseLong(mm.group(1));
+                anyTokenMatched = true;
             }
-            Matcher ms = S_TOKEN.matcher(s.toLowerCase(Locale.ROOT));
+            Matcher ms = S_TOKEN.matcher(lowerCase);
             if (ms.find()) {
                 seconds = Long.parseLong(ms.group(1));
+                anyTokenMatched = true;
             }
 
             // If nothing matched at all, it's an error
-            if (days == 0 && hours == 0 && minutes == 0 && seconds == 0) {
+            if (!anyTokenMatched) {
                 throw new IllegalArgumentException("Invalid duration: '" + raw + "'");
             }
         }
