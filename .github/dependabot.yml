@@ -1,3 +1,5 @@
+# Version updates are off (open-pull-requests-limit: 0); this file exists for the registry
+# credentials and ignore rules that Dependabot's SECURITY updates still read.
 # Every proposed bump arrives as a pull request gated by the Build workflow, so an upgrade is verified by CI
 # before it can be merged.
 # Security review: car-server M-7 (supply chain), car-ui N7 (residual advisories).
@@ -12,7 +14,7 @@ updates:
       - "/*/*"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     # One PR per month for the routine noise, individual PRs for majors — a grouped major is impossible to
     # review or revert selectively. Security advisories are never grouped and ignore the schedule.
     groups:
@@ -27,5 +29,6 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "ci"
