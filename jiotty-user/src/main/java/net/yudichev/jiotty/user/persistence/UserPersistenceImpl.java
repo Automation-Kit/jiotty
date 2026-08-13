@@ -26,6 +26,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -297,7 +298,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                     // The window a competing transaction has to claim this identity. `assert` so production, which runs
                     // without -ea, never even calls it; surefire enables assertions, so the race test can block here.
                     assert onBeforeInsertingNewUser();
-                    Instant now = timeProvider.currentInstant();
+                    Instant now = persistenceNow();
                     String userId = UniqueId.generate('u');
                     insertUser(connection, userId, profile, now);
                     insertIdentity(connection, userId, identity, now);
@@ -397,7 +398,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
-                    Instant now = timeProvider.currentInstant();
+                    Instant now = persistenceNow();
                     doUpdate(connection, updateUserSql, stmt -> {
                         stmt.setString(1, profile.email().orElse(null));
                         stmt.setString(2, profile.displayName().orElse(null));
@@ -427,7 +428,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                 connection.setAutoCommit(false);
                 try {
                     checkState(userExists(connection, userId), "User %s not found or deleted", userId);
-                    Instant now = timeProvider.currentInstant();
+                    Instant now = persistenceNow();
                     var identitiesByProvider = LinkedHashMap.<String, UserIdentity>newLinkedHashMap(identities.size());
                     identities.forEach(identity -> identitiesByProvider.put(identity.provider(), identity));
                     for (UserIdentity identity : identitiesByProvider.values()) {
@@ -485,7 +486,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
-                    Instant now = timeProvider.currentInstant();
+                    Instant now = persistenceNow();
                     // Idempotent: the WHERE deleted_at IS NULL guard makes a repeat call a no-op (0 rows), mirroring restore/hardDelete — a re-issued
                     // soft-delete (e.g. crash-recovery reconciliation) must not fail.
                     doUpdate(connection,
@@ -548,7 +549,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                         connection.commit(); // not soft-deleted: nothing to restore
                         return;
                     }
-                    Instant now = timeProvider.currentInstant();
+                    Instant now = persistenceNow();
                     doUpdate(connection, restoreUserSql, 1, stmt -> {
                         stmt.setTimestamp(1, Timestamp.from(now));
                         stmt.setString(2, userId);
@@ -691,6 +692,12 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                      stmt.setString(3, userId);
                      stmt.setString(4, provider);
                  });
+    }
+
+    /// The current instant at the resolution `timestamptz` stores, so a profile this class returns equals the one a later read produces. A raw
+    /// [Instant] carries nanoseconds on Linux, which Postgres drops on write.
+    private Instant persistenceNow() {
+        return timeProvider.currentInstant().truncatedTo(ChronoUnit.MICROS);
     }
 
     private void insertUser(Connection connection, String userId, UserProfileInput profile, Instant now) throws SQLException {

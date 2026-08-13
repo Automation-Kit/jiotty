@@ -24,6 +24,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
@@ -89,6 +90,19 @@ class UserPersistenceImplTest {
                                                          List.of(),
                                                          PersistenceDomainMigrator.FAIL_ON_MIGRATION))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /// The returned profile must equal what a later read produces, which `timestamptz` limits to microseconds — a nanosecond-bearing instant would make the
+    /// two differ on any platform whose clock offers that resolution.
+    @Test
+    void createdProfileTimestampsMatchWhatIsPersisted() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of(EXTRA_INIT_STATEMENT));
+        var identity = new UserIdentity("firebase", "uid-precision");
+
+        var created = createUser(identity, createProfileInput("precision@example.com", "Precision", UTC));
+
+        assertThat(created.createdAt()).isEqualTo(created.createdAt().truncatedTo(ChronoUnit.MICROS));
+        assertThat(userPersistence.getByIdentity(identity).get(5, SECONDS)).contains(created);
     }
 
     @Test
