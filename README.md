@@ -5,12 +5,12 @@
 [![License][license-badge]][license-url]
 [![Java][java-badge]][java-url]
 
-[build-badge]: https://github.com/ylexus/jiotty/actions/workflows/build.yml/badge.svg
-[build-url]: https://github.com/ylexus/jiotty/actions/workflows/build.yml
+[build-badge]: https://github.com/Automation-Kit/jiotty/actions/workflows/build.yml/badge.svg
+[build-url]: https://github.com/Automation-Kit/jiotty/actions/workflows/build.yml
 [maven-badge]: https://img.shields.io/maven-central/v/net.yudichev.jiotty/jiotty-common?label=Maven%20Central
 [maven-url]: https://central.sonatype.com/search?namespace=net.yudichev.jiotty
 [license-badge]: https://img.shields.io/badge/License-Apache%202.0-blue.svg
-[license-url]: https://www.apache.org/licenses/LICENSE-2.0
+[license-url]: LICENSE
 [java-badge]: https://img.shields.io/badge/Java-25-orange
 [java-url]: https://openjdk.org/projects/jdk/25/
 
@@ -401,7 +401,7 @@ interface — you then get `Command` metadata, `RetryingAppliance` and the appli
 Requirements: **JDK 25** and Git. Maven comes with the wrapper (Maven ≥ 3.8.7 is enforced if you use your own).
 
 ```bash
-git clone https://github.com/ylexus/jiotty.git
+git clone https://github.com/Automation-Kit/jiotty.git
 cd jiotty
 ./mvnw -T1C verify
 ```
@@ -423,19 +423,12 @@ Every push and pull request is built by the [Build workflow](.github/workflows/b
 
 ## Contributing
 
-Issues and pull requests are welcome.
-
-- Open an issue first for anything larger than a bug fix — a connector is a long-term maintenance commitment, and it
-  helps to agree on the shape of its module and builder up front.
-- Follow the surrounding conventions: a public interface plus a public implementation with a public constructor (so the
-  component works without Guice), one module per component exposing a single key, `BaseLifecycleComponent` for anything
-  holding a resource, `BindingSpec` for builder parameters, and no blocking calls outside `doStart()`.
-- Add tests. `./mvnw -T1C verify` must pass before you open the PR; CI runs the same command.
-- New third-party dependencies should be the latest stable (GA) release; version-manage the shared ones in `jiotty-bom`
-  or `jiotty-parent` rather than repeating a version across modules.
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the build, the conventions a component
+is expected to follow, and the testing and dependency rules. The short version: open an issue first for anything larger
+than a bug fix, add tests, and make sure `./mvnw -T1C verify` passes.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Copyright © Alexey Yudichev.
+Copyright © 2019-2026 Alexey Yudichev.
