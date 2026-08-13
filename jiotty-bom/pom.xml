@@ -12,7 +12,7 @@
 
     <artifactId>jiotty-bom</artifactId>
     <properties>
-        <version.org.apache.logging.log4j>2.26.0</version.org.apache.logging.log4j>
+        <version.org.apache.logging.log4j>2.26.1</version.org.apache.logging.log4j>
         <org.immutables.version>2.12.2</org.immutables.version>
         <com.google.maps.version>1.78.0</com.google.maps.version>
         <com.google.http-client.version>2.1.0</com.google.http-client.version>
