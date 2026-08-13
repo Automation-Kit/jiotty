@@ -131,9 +131,10 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         countEventsForBundleSql = "SELECT count(*) FROM " + eventTable + " WHERE alert_id=?";
         deleteOldestBundlesSql = "DELETE FROM " + alertTable +
                                  " WHERE id IN (SELECT id FROM " + alertTable + " ORDER BY first_seen_at ASC LIMIT ?)";
+        // `id` is a bigserial, so it breaks a tie between two events sharing an instant by insertion order.
         deleteOldestEventsForBundleSql = "DELETE FROM " + eventTable +
                                          " WHERE id IN (SELECT id FROM " + eventTable +
-                                         " WHERE alert_id=? ORDER BY occurred_at ASC LIMIT ?)";
+                                         " WHERE alert_id=? ORDER BY occurred_at ASC, id ASC LIMIT ?)";
     }
 
     @Override
@@ -155,7 +156,10 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
             AdminAlertData effectiveData = augmentWithFrameworkLabels(data);
             String key = effectiveData.key();
             logger.info("NEW ALERT {}", effectiveData);
-            executor.submit(() -> doRaise(effectiveData))
+            // Stamped on the calling thread: the write runs on the executor, which under a backlog lands later
+            // than the event it describes, and both eviction orders sort on these instants.
+            Instant raisedAt = timeProvider.currentInstant();
+            executor.submit(() -> doRaise(effectiveData, raisedAt))
                     .whenComplete((_, error) -> {
                         if (error != null) {
                             // WARN, not INFO, despite the jiotty library log rule: a failed alert raise is an
@@ -211,20 +215,19 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
     }
 
     /// `data` here is already augmented with framework labels (see `raise(...)`); we use it as-is.
-    private String doRaise(AdminAlertData data) {
-        Instant now = timeProvider.currentInstant();
+    private String doRaise(AdminAlertData data, Instant raisedAt) {
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
                 String existingId = findActiveBundleId(connection, data.key());
                 String bundleId;
                 if (existingId == null) {
-                    bundleId = insertNewBundle(connection, data, now);
+                    bundleId = insertNewBundle(connection, data, raisedAt);
                 } else {
-                    bumpExistingBundle(connection, data.key(), now);
+                    bumpExistingBundle(connection, data.key(), raisedAt);
                     bundleId = existingId;
                 }
-                appendEvent(connection, bundleId, now, data.description());
+                appendEvent(connection, bundleId, raisedAt, data.description());
                 connection.commit();
                 return bundleId;
             } catch (SQLException e) {
@@ -247,7 +250,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         }
     }
 
-    private String insertNewBundle(Connection connection, AdminAlertData data, Instant now) throws SQLException {
+    private String insertNewBundle(Connection connection, AdminAlertData data, Instant raisedAt) throws SQLException {
         enforceBundleCap(connection);
         String newId = UniqueId.generate('a');
         String labelsJson = Json.stringify(data.labels());
@@ -257,9 +260,9 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
             stmt.setString(3, data.title());
             stmt.setString(4, data.severity().name());
             stmt.setString(5, labelsJson);
-            var nowTimestamp = Timestamp.from(now);
-            stmt.setTimestamp(6, nowTimestamp);
-            stmt.setTimestamp(7, nowTimestamp);
+            var raisedAtTimestamp = Timestamp.from(raisedAt);
+            stmt.setTimestamp(6, raisedAtTimestamp);
+            stmt.setTimestamp(7, raisedAtTimestamp);
             try {
                 stmt.executeUpdate();
             } catch (SQLException e) {
@@ -267,7 +270,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
                     // Lost the race against a concurrent raise; fall back to bump path.
                     String existingId = findActiveBundleId(connection, data.key());
                     checkState(existingId != null, "raise: key %s collided then disappeared", data.key());
-                    bumpExistingBundle(connection, data.key(), now);
+                    bumpExistingBundle(connection, data.key(), raisedAt);
                     return existingId;
                 }
                 throw e;
@@ -276,9 +279,9 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         return newId;
     }
 
-    private void bumpExistingBundle(Connection connection, String key, Instant now) throws SQLException {
+    private void bumpExistingBundle(Connection connection, String key, Instant raisedAt) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(bumpActiveBundleSql)) {
-            stmt.setTimestamp(1, Timestamp.from(now));
+            stmt.setTimestamp(1, Timestamp.from(raisedAt));
             stmt.setString(2, key);
             try (ResultSet rs = stmt.executeQuery()) {
                 checkState(rs.next(), "bump: active bundle for key %s disappeared", key);

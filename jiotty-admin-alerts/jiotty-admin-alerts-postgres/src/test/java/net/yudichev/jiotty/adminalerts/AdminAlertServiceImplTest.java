@@ -152,6 +152,22 @@ class AdminAlertServiceImplTest {
     }
 
     @Test
+    void raise_clockAdvancesBeforeTheWriteRuns_recordsTheInstantTheAlertWasRaised() {
+        AdminAlertData data = data("title", "ignored", AdminAlertSeverity.ERROR, Map.of());
+
+        clock.setTime(T0);
+        String key = service.raise(data.withDescription("e1"));
+        clock.setTime(T0.plus(ONE_MINUTE));
+        service.raise(data.withDescription("e2"));
+        flush();
+
+        AdminAlert alert = service.findByKey(key).orElseThrow();
+        assertThat(selectEvents(alert.id()))
+                .extracting(EventRow::occurredAt)
+                .containsExactly(T0, T0.plus(ONE_MINUTE));
+    }
+
+    @Test
     void raise_overMaxEventsPerBundle_dropsOldestEvent() {
         setUpService(100, 3);
         AdminAlertData data = data("title", "ignored", AdminAlertSeverity.ERROR, Map.of());
