@@ -3,6 +3,7 @@ package net.yudichev.jiotty.persistence.varstore;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
+import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,6 +34,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
+@UsingEmbeddedPostgres
 class SqlVarStoreTest {
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
@@ -347,6 +349,23 @@ class SqlVarStoreTest {
     }
 
     @Test
+    void encryptedReadThatCannotBeDeserialisedKeepsThePlaintextOutOfTheFailure() {
+        configuredEncryption = Optional.of(encryption);
+        // A shape the caller's type no longer parses: Jackson quotes the offending content in its own message, and that message ends up in log lines and
+        // admin-alert descriptions.
+        when(encryption.decrypt("", "token", "ENC1$stored-envelope")).thenReturn("\"rf-super-secret-refresh-token\"");
+        startVarStore();
+        seedRawRowAndReload("", "token", "ENC1$stored-envelope");
+
+        assertThatThrownBy(() -> varStore.readValueEncrypted(StoredToken.class, "token"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("token")
+                .hasMessageContaining("MismatchedInputException")
+                .hasNoCause()
+                .hasMessageNotContaining("rf-super-secret-refresh-token");
+    }
+
+    @Test
     void encryptedReadRejectsNonEnvelopeValue() {
         configuredEncryption = Optional.of(encryption);
         startVarStore();
@@ -513,4 +532,7 @@ class SqlVarStoreTest {
     }
 
     private record Timestamps(Timestamp createTime, Timestamp updateTime) {}
+
+    /// A record the seeded plaintext cannot be read as, so deserialisation fails with the value in Jackson's message.
+    private record StoredToken(String clientId, String refreshToken) {}
 }

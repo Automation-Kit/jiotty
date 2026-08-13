@@ -10,6 +10,7 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
 import net.yudichev.jiotty.persistence.recording.PostgresqlDestination.Column;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
+import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 
+@UsingEmbeddedPostgres
 class PostgresqlDestinationImplTest {
     private static final String CREATE_AUX_TABLE_SQL = "CREATE TABLE IF NOT EXISTS %TABLE_NAME%_init (id integer);";
     private static final String ADD_AUX_NOTE_COLUMN_SQL = "ALTER TABLE %TABLE_NAME%_init ADD COLUMN note text;";

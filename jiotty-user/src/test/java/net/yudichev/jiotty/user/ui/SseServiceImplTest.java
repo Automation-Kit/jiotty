@@ -1,20 +1,15 @@
 package net.yudichev.jiotty.user.ui;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.google.common.reflect.TypeToken;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
-import jakarta.servlet.AsyncListener;
 import jakarta.servlet.ServletOutputStream;
-import jakarta.servlet.WriteListener;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.TaskExecutor;
@@ -24,6 +19,9 @@ import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionMeta;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import net.yudichev.jiotty.user.ui.options.TextOption;
+import net.yudichev.jiotty.user.ui.sse.SseChannel;
+import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
+import net.yudichev.jiotty.user.ui.sse.testing.SseChannels;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,11 +29,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -43,6 +39,7 @@ import java.util.concurrent.CompletableFuture;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.user.ui.sse.testing.SseFrames.dataOf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
@@ -50,18 +47,18 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/// End-to-end pipeline test: real [OptionRegistryImpl] + [DisplayableRegistryImpl] + [SseServiceImpl] wired together. Exercises the SSE broadcast surface,
-/// option/displayable lifecycle events, heartbeat, hello frames, per-client snapshot delivery, and option persistence interactions. Handler-level behaviour for
-/// individual `/api/*` endpoints is covered separately in per-handler tests.
+/// End-to-end pipeline test: real [OptionRegistryImpl] + [DisplayableRegistryImpl] + [SseServiceImpl] wired together, covering option/displayable lifecycle
+/// events, throttling, per-client snapshot delivery, snapshot timers, and option persistence. The transport carrying them is covered by [SseChannel]'s test.
 @ExtendWith(MockitoExtension.class)
 class SseServiceImplTest {
-    private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory()).registerModule(new JavaTimeModule());
     private static final Duration THROTTLING_PERIOD = Duration.ofMillis(100);
 
+    private static final String USER_ID = "user-1";
+
+    private final TestAdminAlertService alertService = new TestAdminAlertService();
     private ProgrammableClock clock;
     @Mock
     private OptionPersistence persistence;
@@ -78,7 +75,13 @@ class SseServiceImplTest {
         optionRegistry = new OptionRegistryImpl(persistence);
         displayableRegistry = new DisplayableRegistryImpl(executorProvider);
         meterRegistry = new SimpleMeterRegistry();
-        sseService = new SseServiceImpl(executorProvider, optionRegistry, displayableRegistry, clock, THROTTLING_PERIOD, meterRegistry);
+        sseService = new SseServiceImpl(executorProvider,
+                                        optionRegistry,
+                                        displayableRegistry,
+                                        SseChannels.factory(clock, alertService),
+                                        THROTTLING_PERIOD,
+                                        USER_ID,
+                                        meterRegistry);
         optionRegistry.start();
         displayableRegistry.start();
         sseService.start();
@@ -283,7 +286,7 @@ class SseServiceImplTest {
 
         String output = capture.output();
         assertThat(output).contains("event: options-update");
-        String eventData = extractSseEventData(output, "options-update");
+        String eventData = dataOf(output, "options-update");
         assertThat(eventData).doesNotContain("\"opt1\"");
         assertThat(eventData).contains("\"opt2\"");
     }
@@ -306,8 +309,7 @@ class SseServiceImplTest {
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
-        String eventData = extractSseEventData(capture.output(), "options-update");
-        Map<String, Object> parsed = parseJson(eventData);
+        Map<String, Object> parsed = dataOf(capture.output(), "options-update", new TypeToken<>() {});
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> tabs = (List<Map<String, Object>>) parsed.get("tabs");
@@ -357,7 +359,7 @@ class SseServiceImplTest {
 
             String output = capture.output();
             assertThat(output).contains("event: options-update");
-            String eventData = extractSseEventData(output, "options-update");
+            String eventData = dataOf(output, "options-update");
             assertThat(eventData).contains("\"opt1\"");
             assertThat(eventData).contains("new value");
         } finally {
@@ -380,71 +382,14 @@ class SseServiceImplTest {
 
         String output = capture.output();
         assertThat(output).contains("event: options-update");
-        String eventData = extractSseEventData(output, "options-update");
+        String eventData = dataOf(output, "options-update");
         assertThat(eventData).contains("\"opt1\"");
         assertThat(eventData).contains("programmatic value");
     }
 
     // endregion
 
-    // region SSE heartbeat
-
-    @Test
-    void sseHeartbeatSentEvery15Seconds() {
-        var capture = connectSseClient();
-        capture.reset();
-
-        clock.advanceTimeAndTick(Duration.ofSeconds(15));
-
-        assertThat(capture.output()).contains("event: ping");
-    }
-
-    @Test
-    void heartbeatPingIncludesCurrentServerTimeOnEachTick() {
-        var capture = connectSseClient();
-        capture.reset();
-
-        clock.advanceTimeAndTick(Duration.ofSeconds(15));
-        var firstPingTime = clock.currentInstant();
-        var firstData = parseJson(extractSseEventData(capture.output(), "ping"));
-        assertThat(MAPPER.convertValue(firstData.get("serverTime"), Instant.class)).isEqualTo(firstPingTime);
-
-        capture.reset();
-        clock.advanceTimeAndTick(Duration.ofSeconds(15));
-        var secondPingTime = clock.currentInstant();
-        var secondData = parseJson(extractSseEventData(capture.output(), "ping"));
-        assertThat(MAPPER.convertValue(secondData.get("serverTime"), Instant.class)).isEqualTo(secondPingTime);
-        assertThat(secondPingTime).isNotEqualTo(firstPingTime);
-    }
-
-    // endregion
-
     // region SSE client lifecycle
-
-    @Test
-    void sseClientDisconnectRemovesClient() {
-        var capture = connectSseClient();
-        capture.reset();
-
-        asUnchecked(() -> capture.asyncListener.get().onComplete(null));
-        clock.tick();
-
-        registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(THROTTLING_PERIOD);
-        // mainly verifies no exceptions are thrown after the disconnected client is removed
-    }
-
-    @Test
-    void closeReturnedFromStartSseClosesStream() {
-        var capture = connectSseClient();
-        capture.reset();
-
-        capture.closeHandle.get().close();
-        clock.tick();
-
-        registerTestOption("tab1", "opt1", "Option 1");
-        clock.advanceTimeAndTick(THROTTLING_PERIOD);
-    }
 
     @Test
     void doStopClosesSseClients() {
@@ -457,6 +402,7 @@ class SseServiceImplTest {
         when(request.getRemoteHost()).thenReturn("localhost");
         when(request.getRemotePort()).thenReturn(12345);
         when(request.startAsync()).thenReturn(asyncContext);
+        when(asyncContext.getRequest()).thenReturn(request);
         lenient().when(asyncContext.getResponse()).thenReturn(response);
         asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
 
@@ -470,17 +416,6 @@ class SseServiceImplTest {
     }
 
     @Test
-    void closeHandleAfterStopIsNoOpAndDoesNotThrow() {
-        var capture = connectSseClient();
-        // Terminate the service's executor, mirroring component shutdown while a stream close is still pending. The returned close handle must then be a silent
-        // no-op, not a RejectedExecutionException scheduled onto the terminated executor.
-        sseService.stop();
-        clock.tick();
-
-        assertThatCode(() -> capture.closeHandle.get().close()).doesNotThrowAnyException();
-    }
-
-    @Test
     void startSseInitialImageDrainedAfterStopClosesClientWithoutReadingRegistries() {
         var onStreamClosed = mock(Runnable.class);
         var request = mock(HttpServletRequest.class);
@@ -491,6 +426,7 @@ class SseServiceImplTest {
         when(request.getRemoteHost()).thenReturn("localhost");
         when(request.getRemotePort()).thenReturn(12345);
         when(request.startAsync()).thenReturn(asyncContext);
+        when(asyncContext.getRequest()).thenReturn(request);
         lenient().when(asyncContext.getResponse()).thenReturn(response);
         asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
 
@@ -509,36 +445,6 @@ class SseServiceImplTest {
         // registries. onStreamClosed still fires so the connection is not leaked.
         assertThat(capture.output()).isEmpty();
         verify(onStreamClosed).run();
-    }
-
-    @Test
-    void sseClientCloseIsIdempotentAcrossMultipleTriggers() {
-        var onStreamClosed = mock(Runnable.class);
-        var request = mock(HttpServletRequest.class);
-        var response = mock(HttpServletResponse.class);
-        var asyncContext = mock(AsyncContext.class);
-        var capture = new SseCapture();
-
-        when(request.getRemoteHost()).thenReturn("localhost");
-        when(request.getRemotePort()).thenReturn(12345);
-        when(request.startAsync()).thenReturn(asyncContext);
-        lenient().when(asyncContext.getResponse()).thenReturn(response);
-        asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
-        doAnswer(invocation -> {
-            capture.asyncListener.set(invocation.getArgument(0));
-            return null;
-        }).when(asyncContext).addListener(any(AsyncListener.class));
-
-        var handle = getAsUnchecked(() -> sseService.startSse(request, response, onStreamClosed));
-        clock.tick();
-
-        handle.close();
-        clock.tick();
-        asUnchecked(() -> capture.asyncListener.get().onComplete(null));
-        clock.tick();
-
-        verify(asyncContext, times(1)).complete();
-        verify(onStreamClosed, times(1)).run();
     }
 
     // endregion
@@ -614,42 +520,6 @@ class SseServiceImplTest {
 
     // endregion
 
-    // region SSE hello event
-
-    @Test
-    void sseHelloEventContainsClientIdSeqNum() {
-        var capture = connectSseClient();
-        String output = capture.output();
-        assertThat(output).contains("event: hello");
-        assertThat(output).contains("clientIdSeqNum");
-    }
-
-    @Test
-    void sseClientIdsAreSequential() {
-        var capture1 = connectSseClient("host1", 1111);
-        var capture2 = connectSseClient("host2", 2222);
-
-        String hello1 = extractSseEventData(capture1.output(), "hello");
-        String hello2 = extractSseEventData(capture2.output(), "hello");
-
-        Map<String, Object> data1 = parseJson(hello1);
-        Map<String, Object> data2 = parseJson(hello2);
-        int seq1 = ((Number) data1.get("clientIdSeqNum")).intValue();
-        int seq2 = ((Number) data2.get("clientIdSeqNum")).intValue();
-        assertThat(seq2).isEqualTo(seq1 + 1);
-    }
-
-    @Test
-    void helloEventIncludesServerTime() {
-        var capture = connectSseClient();
-
-        var data = parseJson(extractSseEventData(capture.output(), "hello"));
-        assertThat(data).containsKey("clientIdSeqNum");
-        assertThat(MAPPER.convertValue(data.get("serverTime"), Instant.class)).isEqualTo(clock.currentInstant());
-    }
-
-    // endregion
-
     // region displayable + options combined initial image
 
     @Test
@@ -675,8 +545,7 @@ class SseServiceImplTest {
     @Test
     void emptyOptionsProducesEmptyTabsArray() {
         var capture = connectSseClient();
-        String eventData = extractSseEventData(capture.output(), "options-update");
-        Map<String, Object> parsed = parseJson(eventData);
+        Map<String, Object> parsed = dataOf(capture.output(), "options-update", new TypeToken<>() {});
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> tabs = (List<Map<String, Object>>) parsed.get("tabs");
@@ -702,12 +571,29 @@ class SseServiceImplTest {
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         var capture = connectSseClient();
-        String eventData = extractSseEventData(capture.output(), "options-update");
-        Map<String, Object> parsed = parseJson(eventData);
+        Map<String, Object> parsed = dataOf(capture.output(), "options-update", new TypeToken<>() {});
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> tabs = (List<Map<String, Object>>) parsed.get("tabs");
         assertThat(tabs.getFirst().get("id")).isEqualTo("My-Tab-");
+    }
+
+    @Test
+    void refusesAStreamOnceStoppedAndReleasesTheExchange(@Mock HttpServletRequest request,
+                                                         @Mock HttpServletResponse response,
+                                                         @Mock AsyncContext asyncContext,
+                                                         @Mock Runnable onStreamClosed) {
+        when(request.startAsync()).thenReturn(asyncContext);
+        sseService.stop();
+        clock.tick();
+
+        Closeable handle = getAsUnchecked(() -> sseService.startSse(request, response, onStreamClosed));
+        clock.tick();
+
+        // Nobody owns the exchange once the channel is closed, so startSse has to complete it itself and say the stream ended.
+        verify(asyncContext).complete();
+        verify(onStreamClosed).run();
+        assertThatCode(handle::close).doesNotThrowAnyException();
     }
 
     // endregion
@@ -727,14 +613,10 @@ class SseServiceImplTest {
         when(request.getRemoteHost()).thenReturn(host);
         when(request.getRemotePort()).thenReturn(port);
         when(request.startAsync()).thenReturn(asyncContext);
+        when(asyncContext.getRequest()).thenReturn(request);
         lenient().when(asyncContext.getResponse()).thenReturn(response);
         asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
-        doAnswer(invocation -> {
-            capture.asyncListener.set(invocation.getArgument(0));
-            return null;
-        }).when(asyncContext).addListener(any(AsyncListener.class));
-
-        capture.closeHandle.set(getAsUnchecked(() -> sseService.startSse(request, response, capture.closedRunnable)));
+        getAsUnchecked(() -> sseService.startSse(request, response, capture.closedRunnable));
         clock.tick();
         return capture;
     }
@@ -765,23 +647,6 @@ class SseServiceImplTest {
         return displayable;
     }
 
-    private static String extractSseEventData(String sseOutput, String eventName) {
-        String marker = "event: " + eventName + "\n";
-        int eventStart = sseOutput.lastIndexOf(marker);
-        if (eventStart < 0) {
-            return "";
-        }
-        int dataStart = sseOutput.indexOf("data: ", eventStart);
-        if (dataStart < 0) {
-            return "";
-        }
-        int dataEnd = sseOutput.indexOf('\n', dataStart + 6);
-        if (dataEnd < 0) {
-            return sseOutput.substring(dataStart + 6);
-        }
-        return sseOutput.substring(dataStart + 6, dataEnd);
-    }
-
     private static long countOccurrences(String text, String substring) {
         long count = 0;
         int idx = 0;
@@ -790,14 +655,6 @@ class SseServiceImplTest {
             idx += substring.length();
         }
         return count;
-    }
-
-    private static Map<String, Object> parseJson(String json) {
-        try {
-            return MAPPER.readValue(json, new TypeReference<>() {});
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to parse JSON: " + json, e);
-        }
     }
 
     // endregion
@@ -816,50 +673,19 @@ class SseServiceImplTest {
     }
 
     private static final class SseCapture {
-        final MutableReference<AsyncListener> asyncListener = new MutableReference<>();
-        final MutableReference<Closeable> closeHandle = new MutableReference<>();
         final Runnable closedRunnable = () -> {};
-        private final ByteArrayOutputStream buffer = new ByteArrayOutputStream(4096);
+        private final CapturingServletOutputStream out = new CapturingServletOutputStream();
 
         String output() {
-            return buffer.toString();
+            return out.output();
         }
 
         void reset() {
-            buffer.reset();
+            out.reset();
         }
 
         ServletOutputStream outputStream() {
-            return new ServletOutputStream() {
-                @Override
-                public boolean isReady() {
-                    return true;
-                }
-
-                @Override
-                public void setWriteListener(WriteListener writeListener) {
-                }
-
-                @Override
-                public void write(int b) {
-                    buffer.write(b);
-                }
-
-                @Override
-                public void write(byte[] b, int off, int len) {
-                    buffer.write(b, off, len);
-                }
-
-                @Override
-                public void print(String s) {
-                    byte[] bytes = s.getBytes();
-                    buffer.write(bytes, 0, bytes.length);
-                }
-
-                @Override
-                public void flush() {
-                }
-            };
+            return out;
         }
     }
 

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.guava.GuavaModule;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.google.common.base.Throwables;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
@@ -137,7 +138,7 @@ final class SqlVarStoreOperations {
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return Optional.ofNullable((T) cache.computeIfPresent(key, (_, v) -> {
             if (v instanceof Json(var json)) {
-                return deserialize(type, json);
+                return deserialise(type, json);
             }
             return v;
         }));
@@ -150,7 +151,7 @@ final class SqlVarStoreOperations {
             if (v instanceof Json(var json)) {
                 checkState(VarStoreEncryption.isEnvelope(json),
                            "[%s] value under '%s' read via readValueEncrypted is not an encryption envelope", userId, k);
-                return deserialize(type, enc.decrypt(userId, k, json));
+                return deserialiseSecret(type, k, enc.decrypt(userId, k, json));
             }
             return v;
         }));
@@ -183,11 +184,29 @@ final class SqlVarStoreOperations {
         }));
     }
 
-    private static Object deserialize(TypeToken<?> type, String json) {
+    private static Object deserialise(TypeToken<?> type, String json) {
         return getAsUnchecked(() -> {
             JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
             return OBJECT_MAPPER.readerFor(javaType).readValue(json);
         });
+    }
+
+    /// Deserialises a decrypted value, replacing any failure with one that carries no part of the plaintext.
+    ///
+    /// Jackson quotes the offending content in its message — a token, a credential, whatever the caller chose to encrypt — and that message travels into
+    /// log lines and admin-alert descriptions. A value stored through [#saveValueEncrypted] is encrypted at rest and reported as redacted by
+    /// [VarStore#exportEntries] precisely so it never reaches either, and a shape it no longer parses as must not be the one hole in that. The replacement
+    /// names the key, the expected type and the failure's class, which is what an operator needs to act, and drops the cause, whose message is the leak.
+    private Object deserialiseSecret(TypeToken<?> type, String key, String json) {
+        try {
+            return deserialise(type, json);
+        } catch (RuntimeException e) {
+            // The root cause names the actual parse failure, and a class name carries none of the content — the wrapper this arrives in says only
+            // "RuntimeException".
+            throw new IllegalStateException("[" + userId + "] encrypted value under '" + key + "' could not be read as " + type + ": "
+                                            + Throwables.getRootCause(e).getClass().getSimpleName()
+                                            + " (its content is withheld, being encrypted at rest)");
+        }
     }
 
     private VarStoreEncryption requireEncryption() {

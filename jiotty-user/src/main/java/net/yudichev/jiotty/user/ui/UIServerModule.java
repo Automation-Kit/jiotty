@@ -6,6 +6,7 @@ import com.google.inject.BindingAnnotation;
 import com.google.inject.Key;
 import com.google.inject.Singleton;
 import com.google.inject.TypeLiteral;
+import com.google.inject.assistedinject.FactoryModuleBuilder;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -17,6 +18,7 @@ import net.yudichev.jiotty.user.push.PushDeviceModule;
 import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import net.yudichev.jiotty.user.ui.options.OptionPersistenceImpl;
+import net.yudichev.jiotty.user.ui.sse.SseChannel;
 
 import java.lang.annotation.Annotation;
 import java.lang.annotation.Retention;
@@ -72,9 +74,17 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         varStoreSpec.bind(new TypeLiteral<>() {}).annotatedWith(OptionPersistenceImpl.Dependency.class).installedBy(this::installLifecycleComponentModule);
         bind(OptionPersistence.class).to(OptionPersistenceImpl.class);
 
+        // The per-user suffix already names the UI executor's thread; bound here as well so a component logging from a container thread — where the thread
+        // name carries no subject — can still say which user's stream it is talking about.
+        threadNameSuffixSpec.bind(String.class)
+                            .annotatedWith(SubjectId.class)
+                            .installedBy(this::installLifecycleComponentModule);
+
         adminAlertServiceSpec.bind(AdminAlertService.class)
                              .annotatedWith(AdminAlert.class)
                              .installedBy(this::installLifecycleComponentModule);
+        bind(AdminAlertService.class).annotatedWith(SseChannel.Dependency.class).to(Key.get(AdminAlertService.class, AdminAlert.class));
+        install(new FactoryModuleBuilder().build(SseChannel.Factory.class));
 
         // Registered ahead of every component that resolves the executor in its doStart(): lifecycle components start in registration order, and
         // ExecutorProvider supplies the executor only once it has started itself.
@@ -140,6 +150,13 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface AdminAlert {
+    }
+
+    /// Identifies whose UI this server serves.
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface SubjectId {
     }
 
     public static final class Builder implements TypedBuilder<UIServerModule> {

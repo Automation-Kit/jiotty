@@ -4,6 +4,7 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
+import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,7 @@ import java.util.concurrent.TimeoutException;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@UsingEmbeddedPostgres
 class PersistenceDomainServiceImplTest {
     private static final String CREATE_SAMPLE_TABLE_SQL = "CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%sample (id integer);";
     private static final String ADD_SAMPLE_NAME_COLUMN_SQL = "ALTER TABLE %DOMAIN_PREFIX%sample ADD COLUMN name text;";

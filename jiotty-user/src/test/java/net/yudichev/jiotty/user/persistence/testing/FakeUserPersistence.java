@@ -1,6 +1,8 @@
 package net.yudichev.jiotty.user.persistence.testing;
 
 import com.google.common.collect.ImmutableList;
+import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.user.persistence.UserIdentity;
 import net.yudichev.jiotty.user.persistence.UserIdentityRecord;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -28,6 +31,7 @@ public final class FakeUserPersistence implements UserPersistence {
     private final CurrentDateTimeProvider timeProvider;
     private final Map<String, StoredUser> usersById = new LinkedHashMap<>();
     private final Map<UserIdentity, String> activeUserIdsByIdentity = new HashMap<>();
+    private final Listeners<String> changeListeners = new Listeners<>();
 
     private int nextUserNumber = 1;
     private @Nullable CompletableFuture<Void> nextResolveByIdentityGate;
@@ -63,6 +67,7 @@ public final class FakeUserPersistence implements UserPersistence {
             storedUser.replaceActiveIdentities(List.of(identity), timestamp);
             usersById.put(userId, storedUser);
             activeUserIdsByIdentity.put(identity, userId);
+            changeListeners.notify(userId);
             return completedFuture(new UserCreationResult.Resolved(createdProfile));
         }
     }
@@ -161,6 +166,7 @@ public final class FakeUserPersistence implements UserPersistence {
                                                  storedUser.profile().createdAt(),
                                                  timestamp);
             storedUser.updateProfile(updatedProfile);
+            changeListeners.notify(userId);
             return completedFuture(updatedProfile);
         }
     }
@@ -185,6 +191,7 @@ public final class FakeUserPersistence implements UserPersistence {
             Instant timestamp = currentInstant();
             storedUser.replaceActiveIdentities(identitiesByProvider.values(), timestamp);
             identitiesByProvider.values().forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
+            changeListeners.notify(userId);
             return completedFuture(null);
         }
     }
@@ -220,6 +227,7 @@ public final class FakeUserPersistence implements UserPersistence {
                 assert userId.equals(removedUserId);
             }
             storedUser.softDelete(currentInstant());
+            changeListeners.notify(userId);
             return completedFuture(null);
         }
     }
@@ -231,6 +239,7 @@ public final class FakeUserPersistence implements UserPersistence {
             StoredUser removed = usersById.remove(userId);
             if (removed != null) {
                 activeUserIdsByIdentity.values().removeIf(userId::equals);
+                changeListeners.notify(userId);
             }
             return completedFuture(null);
         }
@@ -244,9 +253,16 @@ public final class FakeUserPersistence implements UserPersistence {
             if (storedUser != null && !storedUser.active()) {
                 storedUser.restore();
                 storedUser.activeIdentities().forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
+                changeListeners.notify(userId);
             }
             return completedFuture(null);
         }
+    }
+
+    /// Notifies on the calling thread inside this fake's reentrant lock, matching the real store, which notifies on the thread that performed the write.
+    @Override
+    public Closeable subscribeToChanges(Consumer<? super String> userIdUpdateListener) {
+        return changeListeners.addListener(checkNotNull(userIdUpdateListener, "listener"));
     }
 
     public Optional<UserProfile> findActiveProfileByIdentity(UserIdentity identity) {

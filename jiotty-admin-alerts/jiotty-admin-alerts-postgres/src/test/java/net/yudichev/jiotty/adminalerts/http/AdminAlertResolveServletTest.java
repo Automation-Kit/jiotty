@@ -12,6 +12,7 @@ import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
+import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
@@ -48,6 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
+@UsingEmbeddedPostgres
 class AdminAlertResolveServletTest {
     private static final String VALID_TOKEN = "tok-correct";
     private static final String GRAFANA_USER = "alice@example.com";

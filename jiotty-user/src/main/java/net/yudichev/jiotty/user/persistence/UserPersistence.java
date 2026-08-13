@@ -1,8 +1,11 @@
 package net.yudichev.jiotty.user.persistence;
 
+import net.yudichev.jiotty.common.lang.Closeable;
+
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -96,6 +99,12 @@ public interface UserPersistence {
     ///
     /// @param userId internal user id
     CompletableFuture<Void> restore(String userId);
+
+    /// Calls the listener with the affected user's internal id once any change to a user record has committed, including one that changed nothing. No image is
+    /// delivered on subscribe: a subscriber reads the current state from this store itself.
+    ///
+    /// @return a handle that unsubscribes the listener
+    Closeable subscribeToChanges(Consumer<? super String> userIdUpdateListener);
 
     /// The outcome of [#getOrCreateByIdentity].
     sealed interface UserCreationResult permits UserCreationResult.Resolved, UserCreationResult.EmailAlreadyInUse {

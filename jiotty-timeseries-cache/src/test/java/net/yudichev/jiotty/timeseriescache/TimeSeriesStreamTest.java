@@ -12,6 +12,7 @@ import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
+import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
 import net.yudichev.jiotty.timeseriescache.TimeSeriesCache.Scope;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +34,7 @@ import java.util.function.Function;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 
+@UsingEmbeddedPostgres
 class TimeSeriesStreamTest {
     private static final Instant T0 = Instant.parse("2026-04-15T10:00:00Z");
     private static final Instant SLOT_APR_1 = Instant.parse("2026-04-01T00:00:00Z");

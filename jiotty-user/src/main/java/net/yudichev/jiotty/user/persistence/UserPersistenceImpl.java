@@ -7,6 +7,7 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.misc.UniqueId;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
@@ -33,6 +34,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -104,6 +106,8 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     private final String restoreUserSql;
     private final String restoreIdentitiesSql;
     private final String updateUserSql;
+
+    private final Listeners<String> changeListeners = new Listeners<>();
 
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
@@ -285,6 +289,11 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         }));
     }
 
+    @Override
+    public Closeable subscribeToChanges(Consumer<? super String> userIdUpdateListener) {
+        return changeListeners.addListener(checkNotNull(userIdUpdateListener, "listener"));
+    }
+
     private UserCreationResult doGetOrCreateByIdentity(UserIdentity identity, UserProfileInput profile) {
         try {
             try (Connection connection = dataSource.getConnection()) {
@@ -303,6 +312,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                     insertUser(connection, userId, profile, now);
                     insertIdentity(connection, userId, identity, now);
                     connection.commit();
+                    notifyChanged(userId);
                     return new UserCreationResult.Resolved(new UserProfile(userId, profile.email(), profile.displayName(), profile.timezone(), now, now));
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
@@ -409,6 +419,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                     UserProfile updated = selectUserById(connection, userId);
                     checkState(updated != null, "User %s not found after update", userId);
                     connection.commit();
+                    notifyChanged(userId);
                     return updated;
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
@@ -447,6 +458,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                         }
                     }
                     connection.commit();
+                    notifyChanged(userId);
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     throw new RuntimeException("Failed to update identities of user " + userId, e);
@@ -506,6 +518,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                                  stmt.setString(3, userId);
                              });
                     connection.commit();
+                    notifyChanged(userId);
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     throw new RuntimeException("Failed to delete user " + userId, e);
@@ -526,6 +539,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                     int identityRows = doUpdate(connection, hardDeleteIdentitiesSql, -1, stmt -> stmt.setString(1, userId));
                     int userRows = doUpdate(connection, hardDeleteUserSql, -1, stmt -> stmt.setString(1, userId));
                     connection.commit();
+                    notifyChanged(userId);
                     logger.info("Hard-deleted user {}: {} identity row(s), {} user row(s)", userId, identityRows, userRows);
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
@@ -561,6 +575,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                         stmt.setTimestamp(3, deletedAt);
                     });
                     connection.commit();
+                    notifyChanged(userId);
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     throw new RuntimeException("Failed to restore user " + userId, e);
@@ -570,6 +585,16 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
             }
         } catch (SQLException e) {
             throw new RuntimeException("Failed to restore user " + userId, e);
+        }
+    }
+
+    /// Announces a committed change to the subscribers of [#subscribeToChanges]. A subscriber's failure is contained here: the write it is reacting to has
+    /// already committed, so it must not be turned into a failure of the caller's operation.
+    private void notifyChanged(String userId) {
+        try {
+            changeListeners.notify(userId);
+        } catch (RuntimeException e) {
+            logger.info("[{}] User-change listener failed", userId, e);
         }
     }
 

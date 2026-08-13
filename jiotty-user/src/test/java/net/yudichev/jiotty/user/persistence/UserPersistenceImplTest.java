@@ -13,6 +13,7 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
+import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,8 +25,10 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -40,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
 
+@UsingEmbeddedPostgres
 class UserPersistenceImplTest {
     private static final String DOMAIN_NAME = "users";
     private static final String EXTRA_INIT_STATEMENT = "CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%extra (id integer);";
@@ -528,6 +532,57 @@ class UserPersistenceImplTest {
                 .hasRootCauseInstanceOf(IllegalStateException.class);
     }
 
+    @Test
+    void notifiesSubscribersOfEveryCommittedChange() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var changedUserIds = Collections.synchronizedList(new ArrayList<String>());
+        Closeable subscription = userPersistence.subscribeToChanges(changedUserIds::add);
+
+        var identity = new UserIdentity("firebase", "uid-1");
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
+        userPersistence.updateProfile(created.id(), createProfileInput("user@example.com", "Alexandra", UTC)).get(5, SECONDS);
+        userPersistence.updateAllIdentities(created.id(), List.of(identity, new UserIdentity("google.com", "uid-g"))).get(5, SECONDS);
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        userPersistence.restore(created.id()).get(5, SECONDS);
+        userPersistence.hardDelete(created.id()).get(5, SECONDS);
+
+        assertThat(changedUserIds).containsExactly(created.id(), created.id(), created.id(), created.id(), created.id(), created.id());
+
+        subscription.close();
+        createUser(new UserIdentity("firebase", "uid-2"), createProfileInput("other@example.com", "Morgan", UTC));
+        assertThat(changedUserIds).hasSize(6);
+    }
+
+    @Test
+    void doesNotNotifyWhenGetOrCreateResolvesAnExistingUser() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
+        var created = createUser(identity, profileInput);
+        var changedUserIds = Collections.synchronizedList(new ArrayList<String>());
+        userPersistence.subscribeToChanges(changedUserIds::add);
+
+        createUser(identity, profileInput);
+
+        assertThat(changedUserIds).isEmpty();
+        assertThat(created.id()).isNotBlank();
+    }
+
+    @Test
+    void containsAFailingSubscriberSoTheCommittedChangeStillSucceeds() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var changedUserIds = Collections.synchronizedList(new ArrayList<String>());
+        userPersistence.subscribeToChanges(_ -> {
+            throw new RuntimeException("listener boom");
+        });
+        userPersistence.subscribeToChanges(changedUserIds::add);
+
+        var created = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
+
+        assertThat(created.id()).startsWith("u");
+        // The surviving listener still ran, so one listener's failure neither aborted the write nor stopped the fan-out.
+        assertThat(changedUserIds).containsExactly(created.id());
+    }
 
     /// Returns the profile for `identity`, creating the user if needed; fails the test if the store reports an email conflict.
     private UserProfile createUser(UserIdentity identity, UserProfileInput profile) throws Exception {

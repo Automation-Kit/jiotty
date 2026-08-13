@@ -42,6 +42,10 @@
             <artifactId>guice</artifactId>
             <classifier>classes</classifier>
         </dependency>
+        <dependency>
+            <groupId>com.google.inject.extensions</groupId>
+            <artifactId>guice-assistedinject</artifactId>
+        </dependency>
         <!-- guice ASM workaround (see jiotty-bom): unshaded runtime ASM for the guice:classes above; keep it paired with guice:classes. -->
         <dependency>
             <groupId>org.ow2.asm</groupId>
