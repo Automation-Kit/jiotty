@@ -13,7 +13,7 @@
 
     <artifactId>jiotty-appliance</artifactId>
     <description>Appliance abstraction that helps control IoT things</description>
-    <url>https://github.com/ylexus/jiotty</url>
+    <url>https://github.com/Automation-Kit/jiotty</url>
     <dependencies>
         <dependency>
             <groupId>${project.groupId}</groupId>
