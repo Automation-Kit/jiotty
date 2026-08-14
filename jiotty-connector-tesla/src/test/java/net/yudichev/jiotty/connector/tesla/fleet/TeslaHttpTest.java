@@ -2,23 +2,28 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 
 import org.junit.jupiter.api.Test;
 
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.withVinsRedacted;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/// Covers the shared partner-endpoint response unwrapping used by [TeslaFleetPartnerImpl] via [TeslaHttp].
 class TeslaHttpTest {
     @Test
-    void unwrapOrFailReturnsResponseWhenPresent() {
-        PartnerAccount account = PartnerAccount.builder().setName("My App").setDomain("example.com").build();
-        var wrapper = ResponseWrapper.builder().setResponse(account).build();
-        assertThat(TeslaHttp.unwrapOrFail().apply(wrapper)).isEqualTo(account);
+    void redactsAVinInARequestPath() {
+        assertThat(withVinsRedacted("https://vehicle-command:4443/api/1/vehicles/LRWYHCEK2NC222579/command/charge_stop").toString(96))
+                .isEqualTo("https://vehicle-command:4443/api/1/vehicles/LRW…/command/charge_stop")
+                .doesNotContain("222579");
     }
 
     @Test
-    void unwrapOrFailThrowsErrorTextWhenResponseAbsent() {
-        var wrapper = ResponseWrapper.<PartnerAccount>builder().setError("domain not registered").build();
-        assertThatThrownBy(() -> TeslaHttp.<PartnerAccount>unwrapOrFail().apply(wrapper))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessage("domain not registered");
+    void redactsEveryVinInABody() {
+        assertThat(withVinsRedacted("{\"vins\":[\"LRWYHCEK2NC222579\",\"XP7YHCEK9TB885083\"]}").toString(64))
+                .isEqualTo("{\"vins\":[\"LRW…\",\"XP7…\"]}")
+                .doesNotContain("222579")
+                .doesNotContain("885083");
+    }
+
+    @Test
+    void leavesTextCarryingNoVinUnchanged() {
+        assertThat(withVinsRedacted("https://fleet-api.tesla.com/oauth2/v3/token").toString(64))
+                .isEqualTo("https://fleet-api.tesla.com/oauth2/v3/token");
     }
 }

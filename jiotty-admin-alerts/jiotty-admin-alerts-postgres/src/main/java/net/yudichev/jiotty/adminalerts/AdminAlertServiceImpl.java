@@ -44,6 +44,7 @@ import static net.yudichev.jiotty.adminalerts.AdminAlertServiceModule.MaxEventsP
 import static net.yudichev.jiotty.adminalerts.AdminAlertServiceModule.Migrator;
 import static net.yudichev.jiotty.adminalerts.AdminAlertServiceModule.SchemaVersion;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
 
 @SuppressWarnings("JDBCPrepareStatementWithNonConstantString")
 public final class AdminAlertServiceImpl extends BaseLifecycleComponent implements AdminAlertService {
@@ -155,7 +156,8 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         return whenStartedAndNotLifecycling(() -> {
             AdminAlertData effectiveData = augmentWithFrameworkLabels(data);
             String key = effectiveData.key();
-            logger.info("NEW ALERT {}", effectiveData);
+            // The alert store holds the description, which callers are free to fill with personal data and some deliberately do, so support can act on it.
+            logger.info("NEW ALERT {} [{}]", effectiveData.title(), key);
             // Stamped on the calling thread: the write runs on the executor, which under a backlog lands later
             // than the event it describes, and both eviction orders sort on these instants.
             Instant raisedAt = timeProvider.currentInstant();
@@ -188,7 +190,8 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         validateResolvedBy(resolvedBy);
         checkNotNull(note, "note");
         return whenStartedAndNotLifecycling(() -> {
-            logger.info("ADMIN RESOLVE ALERT {} by {}{}", alertId, resolvedBy, note.map(n -> ": " + n).orElse(""));
+            // resolvedBy is the operator's email address; the resolved_by column keeps it in full for the audit trail.
+            logger.info("ADMIN RESOLVE ALERT {} by {}{}", alertId, redacted(resolvedBy), note.map(n -> ": " + n).orElse(""));
             return executor.submit(() -> doResolveById(alertId, resolvedBy, note));
         });
     }
