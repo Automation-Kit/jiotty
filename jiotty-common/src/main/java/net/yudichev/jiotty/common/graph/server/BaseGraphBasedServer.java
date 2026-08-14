@@ -54,13 +54,13 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     protected final void doStart() {
         executor = executorProvider.get();
         doStart0();
-        executor.execute(() -> {
+        executor.execute(() -> ifNotStopped(() -> {
             try {
                 createGraph();
             } catch (RuntimeException e) {
                 panic(e);
             }
-        });
+        }));
     }
 
     protected final SchedulingExecutor executor() {
@@ -75,7 +75,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
         doStop0();
         // Hand the graph teardown to the executor and return: it runs on the executor's own thread, before the executor is closed, because the executor is
         // registered ahead of this server and therefore closed after it. Waiting here would deadlock whenever this server is stopped from a task already
-        // running on that executor.
+        // running on that executor; a wave still queued behind this one instead finds the component stopped and returns without running.
         executor.execute(name(), this::stopSync);
     }
 
@@ -83,6 +83,8 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
         try {
             closeSafelyIfNotNull(logger, panicResetSchedule);
             closeSafelyIfNotNull(logger, nodes.reversed());
+            // Cleared so a repeat call closes nothing twice: an owner that both stops and closes this server runs this method more than once.
+            nodes.clear();
             closeSafelyIfNotNull(logger, graphRunner);
             graphRunner = null;
         } catch (RuntimeException e) {
@@ -127,7 +129,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
                     logger.debug("Not scheduling anything as closed");
                     return;
                 }
-                executor().execute(() -> {
+                executor().execute(() -> ifNotStopped(() -> {
                     if (isClosed()) {
                         logger.debug("Not starting new wave as closed");
                         return;
@@ -147,7 +149,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
                     if (panicReason != null) {
                         reinitBackoff.reset();
                     }
-                });
+                }));
             }
 
             @Override
@@ -228,10 +230,10 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
 
         var delay = Duration.ofMillis(reinitBackoff.nextBackOffMillis());
         logger.info("Will re-init after {}", delay);
-        executor.schedule(delay, () -> {
+        executor.schedule(delay, () -> ifNotStopped(() -> {
             panicReason = null;
             createGraph();
-        });
+        }));
     }
 
     protected interface NodeRegistrator {

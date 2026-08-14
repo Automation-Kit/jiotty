@@ -38,6 +38,28 @@ class BaseGraphBasedServerTest {
     }
 
     @Test
+    void waveQueuedBeforeStopDoesNotRunAfterIt() {
+        int recordStateCallsBeforeStop = server.recordStateCalls;
+
+        server.runner().scheduleNewWave("test");
+        server.stop();
+        clock.tick();
+
+        assertThat(server.recordStateCalls).as("a wave dequeued after stop returns without running").isEqualTo(recordStateCallsBeforeStop);
+    }
+
+    @Test
+    void graphIsNotCreatedWhenStopPrecedesTheQueuedCreation() {
+        var stoppedBeforeCreation = new TestServer();
+        stoppedBeforeCreation.start();
+        stoppedBeforeCreation.stop();
+
+        clock.tick();
+
+        assertThat(stoppedBeforeCreation.createNodesCalls).as("the queued graph creation returns without running").isZero();
+    }
+
+    @Test
     void panic_messageOnly_handlePanicReceivesMessageAndNullCause() {
         server.runner().panic("disk full", null);
         clock.tick();
@@ -101,6 +123,8 @@ class BaseGraphBasedServerTest {
 
     private final class TestServer extends BaseGraphBasedServer {
         final List<HandlePanicCall> handlePanicCalls = new ArrayList<>();
+        int createNodesCalls;
+        int recordStateCalls;
         private @Nullable GraphRunner capturedRunner;
 
         TestServer() {
@@ -117,11 +141,13 @@ class BaseGraphBasedServerTest {
 
         @Override
         protected void createNodes(GraphRunner graphRunner, NodeRegistrator registrator) {
+            createNodesCalls++;
             capturedRunner = graphRunner;
         }
 
         @Override
         protected void recordState() {
+            recordStateCalls++;
         }
 
         @Override
