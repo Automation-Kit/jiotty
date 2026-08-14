@@ -1,6 +1,8 @@
 package net.yudichev.jiotty.common.misc;
 
 import com.google.common.annotations.VisibleForTesting;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -12,7 +14,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 ///
 /// The default level is INFO, leaving the WARN/ERROR decision to the host application; a host whose operator channel is level-gated (e.g. a WARN-routed
 /// mail appender) chooses the level via [#LoggingUpstreamHealthHandler(String, Level)].
-public final class LoggingUpstreamHealthHandler implements UpstreamHealthHandler {
+public final class LoggingUpstreamHealthHandler implements UpstreamHealthHandler, StringFormattable {
     private final Logger logger;
 
     private final String upstreamName;
@@ -60,6 +62,13 @@ public final class LoggingUpstreamHealthHandler implements UpstreamHealthHandler
 
     @Override
     public String toString() {
-        return "LoggingUpstreamHealthHandler[" + upstreamName + ']';
+        return toString(48);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "LoggingUpstreamHealthHandler[");
+        Append.to(appendable, upstreamName);
+        Append.to(appendable, ']');
     }
 }

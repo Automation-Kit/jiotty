@@ -6,8 +6,11 @@ import com.google.api.services.gmail.model.Message;
 import com.google.api.services.gmail.model.MessagePartHeader;
 import com.google.api.services.gmail.model.ModifyMessageRequest;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.inject.assistedinject.Assisted;
 import jakarta.inject.Inject;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.connector.google.gmail.Bindings.GmailService;
 
 import java.util.Collection;
@@ -16,7 +19,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -25,14 +27,15 @@ import static java.util.stream.Collectors.toList;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.toFutureOfList;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 import static net.yudichev.jiotty.connector.google.gmail.Constants.ME;
 
-final class InternalGmailMessage implements GmailMessage {
-    private static final Set<String> TO_STRING_HEADERS = ImmutableSet.of("From", "To", "Subject", "Date");
+final class InternalGmailMessage implements GmailMessage, StringFormattable {
+    private static final String DATE_HEADER = "Date";
+    private static final Set<String> TO_STRING_HEADERS = ImmutableSet.of("From", "To", "Subject", DATE_HEADER);
     private final Gmail gmail;
     private final InternalGmailObjectFactory internalGmailObjectFactory;
     private final Message message;
-    private String asString;
 
     @Inject
     InternalGmailMessage(@GmailService Gmail gmail,
@@ -100,13 +103,29 @@ final class InternalGmailMessage implements GmailMessage {
 
     @Override
     public String toString() {
-        if (asString == null) {
-            asString = message.getPayload().getHeaders().stream()
-                              .filter(messagePartHeader -> TO_STRING_HEADERS.contains(messagePartHeader.getName()))
-                              .map(messagePartHeader -> messagePartHeader.getName() + "=" + messagePartHeader.getValue())
-                              .collect(Collectors.joining(", "));
+        return toString(128);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable,
+                  Iterables.filter(message.getPayload().getHeaders(), header -> header != null && TO_STRING_HEADERS.contains(header.getName())),
+                  "",
+                  ", ",
+                  "",
+                  InternalGmailMessage::appendHeader);
+    }
+
+    /// {@value #DATE_HEADER} is not personal data and renders whole; `From`, `To` and `Subject` are an address, an address and message content, so
+    /// they render redacted.
+    private static void appendHeader(Appendable appendable, MessagePartHeader header) {
+        Append.to(appendable, header.getName());
+        Append.to(appendable, '=');
+        if (DATE_HEADER.equals(header.getName())) {
+            Append.to(appendable, header.getValue());
+        } else {
+            appendRedacted(appendable, header.getValue());
         }
-        return asString;
     }
 
     private static List<String> toListOfIds(Collection<GmailLabel> labelsToAdd) {

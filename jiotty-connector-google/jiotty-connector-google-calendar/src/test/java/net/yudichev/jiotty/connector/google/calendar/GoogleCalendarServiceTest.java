@@ -283,11 +283,16 @@ class GoogleCalendarServiceTest {
     }
 
     @Test
-    void googleCalendar_toString_redactsCalendarName() {
+    void googleCalendar_toString_redactsIdAndName() {
+        // A Google calendar id is the account's email address, so it is redacted alongside the title.
         startService((_, _) -> ok("""
-                                  {"items":[{"id":"cal-1","summary":"Private Trip"}],"nextSyncToken":"sync-1"}"""));
+                                  {"items":[{"id":"owner@example.com","summary":"Private Trip"}],"nextSyncToken":"sync-1"}"""));
 
-        assertThat(retrieveCalendars().getFirst()).asString().contains("cal-1").doesNotContain("Private Trip");
+        assertThat(retrieveCalendars().getFirst()).asString()
+                                                  .doesNotContain("owner@example.com")
+                                                  .doesNotContain("Private Trip")
+                                                  .contains("own…")
+                                                  .contains("Pri…");
     }
 
     private static HttpTransport transportThrowing(IOException error) {

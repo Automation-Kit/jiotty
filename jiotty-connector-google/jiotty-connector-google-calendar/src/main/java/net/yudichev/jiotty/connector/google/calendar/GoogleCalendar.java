@@ -6,6 +6,8 @@ import com.google.api.services.calendar.model.EventDateTime;
 import com.google.api.services.calendar.model.Events;
 import com.google.common.collect.ImmutableList;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
 import net.yudichev.jiotty.common.time.calendar.CalendarEvent;
 import org.apache.logging.log4j.LogManager;
@@ -21,7 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.security.LogRedaction.redact;
 
-final class GoogleCalendar implements Calendar {
+final class GoogleCalendar implements Calendar, StringFormattable {
     private static final Logger logger = LogManager.getLogger(GoogleCalendar.class);
 
     private final com.google.api.services.calendar.Calendar calendarApi;
@@ -29,6 +31,8 @@ final class GoogleCalendar implements Calendar {
     private final String name;
     /// Redacted form of [#name], computed once: `name` is a calendar title (PII) that would otherwise be re-redacted on every log line.
     private final String redactedName;
+    /// Redacted form of [#id], computed once for the same reason: a Google calendar id is the account's email address.
+    private final String redactedId;
     private final SchedulingExecutor executor;
 
     public GoogleCalendar(com.google.api.services.calendar.Calendar calendarApi, String id, String name, SchedulingExecutor executor) {
@@ -36,6 +40,7 @@ final class GoogleCalendar implements Calendar {
         this.id = checkNotNull(id);
         this.name = checkNotNull(name);
         redactedName = redact(name);
+        redactedId = redact(id);
         this.executor = checkNotNull(executor);
     }
 
@@ -103,6 +108,15 @@ final class GoogleCalendar implements Calendar {
 
     @Override
     public String toString() {
-        return "GoogleCalendar{id='" + id + "', name='" + redactedName + "'}";
+        return toString(48);
+    }
+
+    @Override
+    public void formatTo(Appendable appendable) {
+        Append.to(appendable, "GoogleCalendar{id='");
+        Append.to(appendable, redactedId);
+        Append.to(appendable, "', name='");
+        Append.to(appendable, redactedName);
+        Append.to(appendable, "'}");
     }
 }

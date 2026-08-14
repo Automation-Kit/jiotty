@@ -3,14 +3,16 @@ package net.yudichev.jiotty.common.security;
 import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.geo.LatLonRectangle;
 import net.yudichev.jiotty.common.lang.Append;
-import org.apache.logging.log4j.util.StringBuilderFormattable;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import org.jspecify.annotations.Nullable;
+
+import java.util.Optional;
 
 /// Helpers for reducing secrets and PII to a short, non-reversible form before they reach a logger, MDC field, listener callback description, or exception
 /// message.
 ///
 /// The `appendRedacted` variants are the primary implementations: they append directly to the target [Appendable], so the redacted value is built once with
-/// no intermediate string — use them when the caller already holds a buffer. The [StringBuilderFormattable]-returning `redacted` variants are designed to be
+/// no intermediate string — use them when the caller already holds a buffer. The [StringFormattable]-returning `redacted` variants are designed to be
 /// used as logging arguments: they defer the redaction to the logging thread, writing straight into the log line's buffer when the line actually renders.
 /// The plain [String] variants materialise the result only when a caller genuinely needs a [String] (exception messages, MDC, return values).
 public final class LogRedaction {
@@ -19,22 +21,27 @@ public final class LogRedaction {
 
     /// Returns a short non-reversible prefix of `value` suitable for log output: the first 3 characters followed by an ellipsis. For values of 3 characters or
     /// fewer, returns just the ellipsis. Use this for auth tokens, API keys, passwords, push tokens, session cookies, emails, phone numbers, and similar.
-    public static String redact(String value) {
+    /// A `null` value renders as `null`, so a caller holding an absent field logs it without a guard.
+    public static String redact(@Nullable String value) {
         return materialise(redacted(value));
     }
 
     /// [#redact(String)] as a deferred logging argument: the redaction is delegated to the logging thread.
-    public static StringBuilderFormattable redacted(String value) {
+    public static StringFormattable redacted(@Nullable String value) {
         return buffer -> appendRedacted(buffer, value);
     }
 
     /// [#redact(String)] but appending straight to `appendable`, with no intermediate string.
-    public static void appendRedacted(Appendable appendable, String value) {
-        appendRedacted(appendable, value, 0, value.length());
+    public static void appendRedacted(Appendable appendable, @Nullable String value) {
+        if (value == null) {
+            Append.to(appendable, "null");
+        } else {
+            appendRedacted(appendable, value, 0, value.length());
+        }
     }
 
     /// [#redacted(String)] applied to the `[startPos, endPos)` region of `value`, as a deferred logging argument.
-    public static StringBuilderFormattable redacted(String value, int startPos, int endPos) {
+    public static StringFormattable redacted(String value, int startPos, int endPos) {
         return buffer -> appendRedacted(buffer, value, startPos, endPos);
     }
 
@@ -47,6 +54,15 @@ public final class LogRedaction {
         Append.to(appendable, '…');
     }
 
+    /// [#appendRedacted(Appendable, String)] for an optional value, rendering an absent one as `none`.
+    public static void appendRedacted(Appendable appendable, Optional<String> value) {
+        if (value.isPresent()) {
+            appendRedacted(appendable, value.orElseThrow());
+        } else {
+            Append.to(appendable, "none");
+        }
+    }
+
     /// Returns a coarse, non-identifying rendering of `latLon` suitable for log output: each coordinate rounded to one decimal place (~11 km), prefixed
     /// with `~` to flag the loss of precision, e.g. `~{51.5,-0.1}`. This keeps a debuggable hint of the region while preventing a precise home/movement
     /// coordinate from reaching the logs. A `null` location renders as `null` (not PII, and it tells the reader which value was absent). For the strongest
@@ -56,7 +72,7 @@ public final class LogRedaction {
     }
 
     /// [#redact(LatLon)] as a deferred logging argument: the redaction is delegated to the logging thread.
-    public static StringBuilderFormattable redacted(@Nullable LatLon latLon) {
+    public static StringFormattable redacted(@Nullable LatLon latLon) {
         return buffer -> appendRedacted(buffer, latLon);
     }
 
@@ -78,7 +94,7 @@ public final class LogRedaction {
     }
 
     /// [#redact(LatLonRectangle)] as a deferred logging argument: the redaction is delegated to the logging thread.
-    public static StringBuilderFormattable redacted(@Nullable LatLonRectangle rectangle) {
+    public static StringFormattable redacted(@Nullable LatLonRectangle rectangle) {
         return buffer -> appendRedacted(buffer, rectangle);
     }
 
@@ -95,7 +111,7 @@ public final class LogRedaction {
         }
     }
 
-    private static String materialise(StringBuilderFormattable formattable) {
+    private static String materialise(StringFormattable formattable) {
         // 32 comfortably holds every redaction this class produces (longest is the rectangle form ~26 chars), avoiding the JDK default's first resize.
         var buffer = new StringBuilder(32);
         formattable.formatTo(buffer);

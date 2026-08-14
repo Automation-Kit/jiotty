@@ -4,6 +4,8 @@ import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.geo.LatLonRectangle;
 import org.junit.jupiter.api.Test;
 
+import java.util.Optional;
+
 import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 import static net.yudichev.jiotty.common.security.LogRedaction.redact;
 import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
@@ -40,6 +42,32 @@ class LogRedactionTest {
         var buffer = new StringBuilder();
         appendRedacted(buffer, "abcXY", 3, 5);
         assertThat(buffer.toString()).isEqualTo("…");
+    }
+
+    @Test
+    void appendRedactedRendersANullValueAsNull() {
+        var buffer = new StringBuilder();
+        appendRedacted(buffer, (String) null);
+        assertThat(buffer.toString()).isEqualTo("null");
+    }
+
+    @Test
+    void redactRendersANullValueAsNull() {
+        assertThat(redact((String) null)).isEqualTo("null");
+    }
+
+    @Test
+    void appendRedactedOptionalRedactsAPresentValue() {
+        var buffer = new StringBuilder();
+        appendRedacted(buffer, Optional.of("alexey@example.com"));
+        assertThat(buffer.toString()).isEqualTo("ale…").doesNotContain("example.com");
+    }
+
+    @Test
+    void appendRedactedOptionalRendersAnAbsentValueAsNone() {
+        var buffer = new StringBuilder();
+        appendRedacted(buffer, Optional.empty());
+        assertThat(buffer.toString()).isEqualTo("none");
     }
 
     @Test

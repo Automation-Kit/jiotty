@@ -46,6 +46,8 @@ final class IcloudCalendar implements Calendar, StringFormattable {
     private final String name;
     /// Redacted form of [#name], computed once: `name` is a calendar title (PII) that would otherwise be re-redacted on every log line.
     private final String redactedName;
+    /// Redacted form of [#id], computed once for the same reason: a CalDAV href starts with the iCloud account id.
+    private final String redactedId;
     private final SchedulingExecutor executor;
     private final Supplier<CloseableHttpClient> httpClientFactory;
     private final CalDAVCollection calDAVCollection;
@@ -54,6 +56,7 @@ final class IcloudCalendar implements Calendar, StringFormattable {
         id = checkNotNull(href);
         this.name = checkNotNull(name);
         redactedName = redact(name);
+        redactedId = redact(id);
         this.executor = checkNotNull(executor);
         this.httpClientFactory = checkNotNull(httpClientFactory);
 
@@ -148,7 +151,7 @@ final class IcloudCalendar implements Calendar, StringFormattable {
     @Override
     public void formatTo(Appendable appendable) {
         Append.to(appendable, "IcloudCalendar{id='");
-        Append.to(appendable, id);
+        Append.to(appendable, redactedId);
         Append.to(appendable, "', name='");
         Append.to(appendable, redactedName);
         Append.to(appendable, "'}");
