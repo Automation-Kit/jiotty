@@ -112,8 +112,15 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
+                    <properties>
+                        <configurationParameters>
+                            junit.jupiter.extensions.autodetection.enabled=true
+                        </configurationParameters>
+                    </properties>
                     <systemPropertyVariables>
                         <log4j.root.level>OFF</log4j.root.level>
+                        <!-- Activates JiottyPiiLogGuardExtension. Set here rather than in the test-jar so a consumer of that jar never inherits the guard. -->
+                        <pii.log.guard.enabled>true</pii.log.guard.enabled>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

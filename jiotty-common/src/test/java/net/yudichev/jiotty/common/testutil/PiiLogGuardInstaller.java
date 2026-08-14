@@ -14,7 +14,8 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -28,8 +29,12 @@ import static org.junit.jupiter.api.Assertions.fail;
 /// @implNote a violation fails whichever test's `afterEach` drains it, which under concurrent classes can be a different test from the one that logged the
 /// line — hence the logger and statement in the message. A line logged after the run's final `afterEach` goes unreported.
 public class PiiLogGuardInstaller implements BeforeAllCallback, AfterEachCallback {
-    /// JUnit calls `beforeAll` on several of its executor's threads at once where a module runs test classes concurrently, and the install happens once.
-    private static final AtomicBoolean INSTALLED = new AtomicBoolean();
+    /// The build opts in by setting this to `true`. This class ships inside a published test-jar, so a project that enables extension autodetection for its
+    /// own reasons would otherwise find it here and have its logs scanned uninvited.
+    private static final String ENABLED_PROPERTY = "pii.log.guard.enabled";
+    /// The trees already attached to, so several registered installers compose: one naming `net.yudichev` and another naming an application's own tree end up
+    /// guarding both. Added on JUnit's threads, several of which call `beforeAll` at once where a module runs test classes concurrently.
+    private static final Set<String> GUARDED = ConcurrentHashMap.newKeySet();
 
     private final List<String> guardedLoggerTrees;
 
@@ -40,7 +45,7 @@ public class PiiLogGuardInstaller implements BeforeAllCallback, AfterEachCallbac
 
     @Override
     public void beforeAll(ExtensionContext context) {
-        if (INSTALLED.compareAndSet(false, true)) {
+        if (Boolean.getBoolean(ENABLED_PROPERTY)) {
             install();
         }
     }
@@ -67,20 +72,33 @@ public class PiiLogGuardInstaller implements BeforeAllCallback, AfterEachCallbac
         // background thread and make the report arrive whenever it arrives. Keep test logging synchronous.
         checkState(!(context instanceof AsyncLoggerContext), "the PII log guard requires synchronous logging, but log4j is using %s", context.getClass());
         Configuration configuration = context.getConfiguration();
-        List<LoggerConfig> guardedConfigs = guardedLoggerTrees.stream().map(tree -> loggerConfigFor(configuration, tree)).toList();
+        List<LoggerConfig> guardedConfigs = guardedLoggerTrees.stream().filter(GUARDED::add).flatMap(tree -> configsUnder(configuration, tree)).toList();
+        if (guardedConfigs.isEmpty()) {
+            return;
+        }
         guardedConfigs.forEach(loggerConfig -> checkState(!(loggerConfig instanceof AsyncLoggerConfig),
                                                           "the PII log guard requires synchronous logging, but logger %s is asynchronous",
                                                           loggerConfig.getName()));
         var guard = new PiiLogGuard();
         guard.start();
+        // Every raise lands before the first attach: taking over propagation copies an ancestor's appenders, so a guard already attached above would arrive
+        // here capped at this logger's own level and never fire.
         guardedConfigs.forEach(loggerConfig -> {
             if (loggerConfig.getLevel().compareTo(Level.DEBUG) < 0) {
                 takeOverPropagation(loggerConfig);
                 loggerConfig.setLevel(Level.DEBUG);
             }
-            loggerConfig.addAppender(guard, null, null);
         });
+        guardedConfigs.forEach(loggerConfig -> loggerConfig.addAppender(guard, null, null));
         context.updateLoggers();
+    }
+
+    /// The configuration for `tree` and for every logger the module configures beneath it. Log4j resolves a logger to its nearest ancestor configuration, so a
+    /// module that names a sub-tree of its own — `net.yudichev.jiotty.connector.tesla` under `net.yudichev` — keeps that sub-tree's level whatever is done to
+    /// the tree above it.
+    private static Stream<LoggerConfig> configsUnder(Configuration configuration, String tree) {
+        var descendants = configuration.getLoggers().values().stream().filter(config -> config.getName().startsWith(tree + '.')).toList();
+        return Stream.concat(Stream.of(loggerConfigFor(configuration, tree)), descendants.stream());
     }
 
     /// The configuration for `tree` exactly, adding one that inherits the level it would otherwise have resolved to when the module configures no such logger.

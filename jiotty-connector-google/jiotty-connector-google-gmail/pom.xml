@@ -98,6 +98,12 @@
 
         <!-- test dependencies -->
         <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-common</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
         </dependency>

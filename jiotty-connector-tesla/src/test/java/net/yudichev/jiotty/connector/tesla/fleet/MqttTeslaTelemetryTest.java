@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
+import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.connector.mqtt.InMemoryMqtt;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +13,8 @@ import java.util.List;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryConnectivityStatus.CONNECTED;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TBatteryLevel;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TBatteryLevelValue;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TLocation;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TLocationValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class MqttTeslaTelemetryTest {
@@ -35,6 +38,15 @@ class MqttTeslaTelemetryTest {
     void metric_validField_deliveredAsSuccess() {
         mqtt.publish(metricTopic(TBatteryLevel.NAME), "67");
         assertThat(metricResults).singleElement().isEqualTo(new TelemetryResult.Success<>(new TBatteryLevelValue(67)));
+    }
+
+    /// The car's position is the most sensitive thing this connector carries, so its payload gets a case of its own — the PII log guard sees a leak only in a
+    /// line a test actually renders.
+    @Test
+    void metric_location_deliveredAsSuccess() {
+        mqtt.publish(metricTopic(TLocation.NAME), "{\"latitude\":51.501234,\"longitude\":-0.142567}");
+
+        assertThat(metricResults).singleElement().isEqualTo(new TelemetryResult.Success<>(new TLocationValue(new LatLon(51.501234, -0.142567))));
     }
 
     @Test

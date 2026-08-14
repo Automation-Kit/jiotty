@@ -48,7 +48,9 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
         }
         return mqtt.subscribe(metricsTopicFilter, 1, (topic, data) -> {
             if (logger.isDebugEnabled()) {
-                logger.debug("received metric: topic={}, data={}", redactedTopic(topic), data);
+                // The payload carries the metric's value, and a Location metric's value is where the car is; its size still shows a metric arrived
+                // and how big it was.
+                logger.debug("received metric: topic={}, {} chars", redactedTopic(topic), data.length());
             }
             var idx = topic.lastIndexOf('/');
             if (idx < 0 || idx == topic.length() - 1) {

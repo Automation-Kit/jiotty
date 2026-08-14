@@ -77,6 +77,12 @@
         <!-- test dependencies -->
         <dependency>
             <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-common</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
             <artifactId>jiotty-persistence-varstore</artifactId>
             <type>test-jar</type>
             <scope>test</scope>

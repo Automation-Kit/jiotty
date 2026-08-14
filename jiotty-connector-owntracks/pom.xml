@@ -73,5 +73,13 @@
             <groupId>com.spotify</groupId>
             <artifactId>hamcrest-optional</artifactId>
         </dependency>
+
+        <!-- test dependencies -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>jiotty-common</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
