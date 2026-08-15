@@ -91,7 +91,9 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
         executor = executorProvider.get();
         channel = channelFactory.create("ui", executor, UIJson.WRITER, SseChannel.UNBOUNDED);
         channel.start();
-        optionSnapshotThrottle = new ThrottlingConsumer<>(executor, optionsThrottlingPeriod, _ -> sendOptionSnapshotTo(channel::broadcast));
+        optionSnapshotThrottle = new ThrottlingConsumer<>(executor,
+                                                          optionsThrottlingPeriod,
+                                                          _ -> ifStartedAndNotLifecycling(() -> sendOptionSnapshotTo(channel::broadcast)));
         optionRegistrySubscription = optionRegistry.subscribeToSnapshotChanges(() -> optionSnapshotThrottle.accept(null));
         displayableUpdateSubscription = displayableRegistry.subscribeToUpdates(displayable -> sendDisplayableUpdate(displayable, channel::broadcast));
         displayableRegistrationSubscription =
@@ -112,7 +114,20 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     public Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException {
         AsyncContext asyncContext = request.startAsync();
         Timer.Sample headersToSnapshotStartSample = Timer.start(meterRegistry);
-        Optional<SseStream> stream = channel.open(asyncContext, response, onStreamClosed, sink -> {
+        Optional<SseStream> stream = channel.open(asyncContext, response, onStreamClosed, sink -> sendInitialImageTo(sink, headersToSnapshotStartSample));
+        if (stream.isEmpty()) {
+            // The channel is unbounded, so the only refusal is teardown racing this request. Complete the exchange and report the stream closed, so the
+            // request does not hang on an async context nobody owns and the caller releases whatever it attached to the stream.
+            logger.debug("[{}] SSE stream refused: the channel is closed", userId);
+            asyncContext.complete();
+            onStreamClosed.run();
+            return Closeable.noop();
+        }
+        return stream.get();
+    }
+
+    private void sendInitialImageTo(SseSink sink, Timer.Sample headersToSnapshotStartSample) {
+        ifStartedAndNotLifecycling(() -> {
             headersToSnapshotStartSample.stop(headersToSnapshotStartTimer);
             Timer.Sample displayablesSample = Timer.start(meterRegistry);
             Timer.Sample optionsSample = Timer.start(meterRegistry);
@@ -131,15 +146,16 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                 }
             });
         });
-        if (stream.isEmpty()) {
-            // The channel is unbounded, so the only refusal is teardown racing this request. Complete the exchange and report the stream closed, so the
-            // request does not hang on an async context nobody owns and the caller releases whatever it attached to the stream.
-            logger.debug("[{}] SSE stream refused: the channel is closed", userId);
-            asyncContext.complete();
-            onStreamClosed.run();
-            return Closeable.noop();
-        }
-        return stream.get();
+    }
+
+    /// Runs `action` unless this service has stopped, deciding under the lifecycle lock. Teardown runs on a thread of its own and stops the registries
+    /// `action` reads immediately after this service, so holding the lock across the read is what makes that verdict hold for the whole of it.
+    private void ifStartedAndNotLifecycling(Runnable action) {
+        whenNotLifecycling(() -> {
+            if (isStartedOpaque()) {
+                action.run();
+            }
+        });
     }
 
     private CompletableFuture<?> sendOptionSnapshotTo(SseSink target) {

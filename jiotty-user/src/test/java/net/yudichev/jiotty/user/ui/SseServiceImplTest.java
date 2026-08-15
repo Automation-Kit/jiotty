@@ -12,10 +12,12 @@ import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
 import net.yudichev.jiotty.user.ui.options.Option;
+import net.yudichev.jiotty.user.ui.options.OptionDto;
 import net.yudichev.jiotty.user.ui.options.OptionMeta;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import net.yudichev.jiotty.user.ui.options.TextOption;
@@ -35,8 +37,10 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static net.yudichev.jiotty.user.ui.sse.testing.SseFrames.dataOf;
@@ -57,6 +61,10 @@ class SseServiceImplTest {
     private static final Duration THROTTLING_PERIOD = Duration.ofMillis(100);
 
     private static final String USER_ID = "user-1";
+    /// Deadlock safety net for a read parked on another thread, long enough that a loaded machine never trips it.
+    private static final Duration PARKED_READ_TIMEOUT = Duration.ofSeconds(5);
+    /// How long a stop is watched before concluding it is waiting on the parked read.
+    private static final Duration STOP_BLOCK_OBSERVATION = Duration.ofMillis(200);
 
     private final TestAdminAlertService alertService = new TestAdminAlertService();
     private ProgrammableClock clock;
@@ -447,6 +455,35 @@ class SseServiceImplTest {
         verify(onStreamClosed).run();
     }
 
+    @Test
+    void stopWaitsForAnOptionSnapshotDeliveryAlreadyReadingTheRegistry(@Mock Option<String> parkingOption,
+                                                                       @Mock OptionDto parkingOptionDto) throws InterruptedException {
+        try (var race = new TeardownRace(parkingOption, parkingOptionDto)) {
+            assertThat(race.arrivals.tryAcquire(PARKED_READ_TIMEOUT.toSeconds(), SECONDS))
+                    .as("the queued snapshot delivery has read the registry and is mid-flight")
+                    .isTrue();
+
+            assertStopWaitsForTheParkedRead(race);
+        }
+    }
+
+    @Test
+    void stopWaitsForAnInitialImageAlreadyReadingTheRegistry(@Mock Option<String> parkingOption,
+                                                             @Mock OptionDto parkingOptionDto) throws InterruptedException {
+        try (var race = new TeardownRace(parkingOption, parkingOptionDto)) {
+            // Let the subscribe-time delivery run to completion, so the read that parks next is the one a connecting client triggers.
+            assertThat(race.arrivals.tryAcquire(PARKED_READ_TIMEOUT.toSeconds(), SECONDS)).isTrue();
+            race.departures.release();
+
+            race.connectClient();
+            assertThat(race.arrivals.tryAcquire(PARKED_READ_TIMEOUT.toSeconds(), SECONDS))
+                    .as("the initial image has read the registry and is mid-flight")
+                    .isTrue();
+
+            assertStopWaitsForTheParkedRead(race);
+        }
+    }
+
     // endregion
 
     // region multiple SSE clients
@@ -605,6 +642,12 @@ class SseServiceImplTest {
     }
 
     private SseCapture connectSseClient(String host, int port) {
+        SseCapture capture = connectClientTo(sseService, host, port);
+        clock.tick();
+        return capture;
+    }
+
+    private static SseCapture connectClientTo(SseServiceImpl service, String host, int port) {
         var capture = new SseCapture();
         var request = mock(HttpServletRequest.class);
         var response = mock(HttpServletResponse.class);
@@ -616,9 +659,17 @@ class SseServiceImplTest {
         when(asyncContext.getRequest()).thenReturn(request);
         lenient().when(asyncContext.getResponse()).thenReturn(response);
         asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
-        getAsUnchecked(() -> sseService.startSse(request, response, capture.closedRunnable));
-        clock.tick();
+        getAsUnchecked(() -> service.startSse(request, response, capture.closedRunnable));
         return capture;
+    }
+
+    /// Stops `race`'s service on a thread of its own, asserting that stop waits for the parked read and completes once this releases it.
+    private static void assertStopWaitsForTheParkedRead(TeardownRace race) {
+        var stopCompletion = CompletableFuture.runAsync(race.service::stop);
+        assertThat(stopCompletion).as("stop() waits while the parked read holds the lifecycle lock").failsWithin(STOP_BLOCK_OBSERVATION);
+
+        race.departures.release();
+        assertThat(stopCompletion).as("stop() completes once the parked read lets the lock go").succeedsWithin(PARKED_READ_TIMEOUT);
     }
 
     private Closeable registerTestOption(String tabName, String key, String label) {
@@ -633,6 +684,24 @@ class SseServiceImplTest {
                                             .setKey(key)
                                             .setLabel(label)
                                             .build());
+    }
+
+    /// Stubs `option` so its [Option#toDto()] — the step [SseServiceImpl] runs right after reading the registry — signals `arrivals` and then parks until a
+    /// `departures` permit frees it, holding the read that triggered it inside the SSE service's lifecycle lock.
+    private static void stubParkingOnDto(Option<String> option, OptionDto dto, Semaphore arrivals, Semaphore departures) {
+        lenient().when(dto.tabName()).thenReturn("Tab");
+        when(option.meta()).thenReturn(OptionMeta.<String>builder()
+                                                 .setFormOrder(Option.DEFAULT_FORM_ORDER)
+                                                 .setTabName("Tab")
+                                                 .setKey("parking")
+                                                 .setLabel("Parking")
+                                                 .build());
+        when(option.addChangeListener(any())).thenReturn(Closeable.noop());
+        when(option.toDto()).thenAnswer(_ -> {
+            arrivals.release();
+            assertThat(departures.tryAcquire(PARKED_READ_TIMEOUT.toSeconds(), SECONDS)).as("the parked read was released").isTrue();
+            return completedFuture(dto);
+        });
     }
 
     private static Displayable createDisplayable(String id, String displayName, CompletableFuture<DisplayableDto> dto) {
@@ -660,6 +729,44 @@ class SseServiceImplTest {
     // endregion
 
     // region test infrastructure
+
+    /// A second [SseServiceImpl] on a real executor, so a read it runs there can be held mid-flight while the test thread plays the part of the thread that
+    /// tears the user app down. The option passed to the constructor is what holds it, signalling [#arrivals] as each read reaches it and admitting one
+    /// caller per [#departures] permit.
+    private final class TeardownRace implements AutoCloseable {
+        final Semaphore arrivals = new Semaphore(0);
+        final Semaphore departures = new Semaphore(0);
+        final SingleThreadedSchedulingExecutor executor = new SingleThreadedSchedulingExecutor("sse-teardown-race");
+        final OptionRegistryImpl registry = new OptionRegistryImpl(persistence);
+        final SseServiceImpl service = new SseServiceImpl(() -> executor,
+                                                          registry,
+                                                          displayableRegistry,
+                                                          SseChannels.factory(clock, alertService),
+                                                          THROTTLING_PERIOD,
+                                                          USER_ID,
+                                                          meterRegistry);
+
+        TeardownRace(Option<String> parkingOption, OptionDto parkingOptionDto) {
+            stubParkingOnDto(parkingOption, parkingOptionDto, arrivals, departures);
+            registry.start();
+            // Registered before the service subscribes, so the image the subscription delivers is the one and only snapshot read queued by start-up.
+            registry.register(parkingOption);
+            service.start();
+        }
+
+        void connectClient() {
+            connectClientTo(service, "localhost", 54321);
+        }
+
+        @Override
+        public void close() {
+            // The executor is single-threaded, so at most one read is ever parked, however the test ended.
+            departures.release();
+            service.stop();
+            registry.stop();
+            executor.close();
+        }
+    }
 
     private static final class TestTextOption extends TextOption {
         TestTextOption(TaskExecutor executor, OptionMeta<String> meta) {
