@@ -27,6 +27,7 @@ import org.eclipse.jetty.util.thread.QueuedThreadPool;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
+import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -68,6 +69,11 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     static final int MAX_THREADS = 32;
     @VisibleForTesting
     static final int MIN_THREADS = 8;
+    /// How long a connection may make no progress before Jetty closes it, reclaiming both an idle keep-alive connection and a peer that stops reading
+    /// mid-response. A request suspended in async is exempt, held open by the servlet layer's own idle-timeout listener, so an SSE stream's lifetime is
+    /// its token's expiry.
+    @VisibleForTesting
+    static final Duration IDLE_TIMEOUT = Duration.ofSeconds(30);
     private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
     /// Accept backlog bound: excess inbound connections are refused by the OS rather than queued unbounded.
     private static final int ACCEPT_QUEUE_SIZE = 128;
@@ -84,9 +90,18 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
 
     @Inject
     UIHttpServerImpl(@ListenPort int listenPort, Set<ServletMount> servletMounts, MeterRegistry meterRegistry) {
+        this(listenPort, servletMounts, meterRegistry, IDLE_TIMEOUT);
+    }
+
+    /// Takes the idle timeout so a test can pin the reclaim behaviour without waiting out the production [#IDLE_TIMEOUT].
+    @VisibleForTesting
+    UIHttpServerImpl(int listenPort, Set<ServletMount> servletMounts, MeterRegistry meterRegistry, Duration idleTimeout) {
         this.servletMounts = checkNotNull(servletMounts, "servletMounts");
         this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
+        checkNotNull(idleTimeout, "idleTimeout");
         checkArgument(listenPort >= 0 && listenPort <= 65_535, "listenPort: %s", listenPort);
+        // An internal invariant, not an argument check: the only production caller passes IDLE_TIMEOUT, and no binding or config reaches this.
+        assert idleTimeout.isPositive() : "idleTimeout must be positive: " + idleTimeout;
         threadPool = new QueuedThreadPool(MAX_THREADS, MIN_THREADS);
         threadPool.setName("ui-http");
         server = new Server(threadPool);
@@ -96,6 +111,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         connector = new ServerConnector(server, new HttpConnectionFactory(httpConfig));
         connector.setPort(listenPort);
         connector.setAcceptQueueSize(ACCEPT_QUEUE_SIZE);
+        connector.setIdleTimeout(idleTimeout.toMillis());
         if (listenPort == EPHEMERAL_PORT) {
             // SO_REUSEADDR earns its keep on a configured port, where it allows a restart to re-bind while old connections linger in TIME_WAIT. An
             // ephemeral port has nothing to re-bind, and on BSD the flag lets this wildcard bind coexist with a process already listening on

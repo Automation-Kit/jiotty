@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.ui;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -12,6 +13,7 @@ import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
 import net.yudichev.jiotty.user.ui.UIServerRuntime.DispatchResult;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,13 +24,19 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
+import static java.nio.charset.StandardCharsets.US_ASCII;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
@@ -43,6 +51,14 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class UIHttpServerImplTest {
+    /// Both ends address the same literal: `localhost` resolves to two address families, so on an ephemeral port a request can reach whichever server in the
+    /// JVM holds that port number on the other one.
+    private static final String LOOPBACK = "127.0.0.1";
+    /// Short enough to keep the reclaim tests to a couple of seconds, long enough that ordinary scheduling jitter cannot be mistaken for an idle connection.
+    private static final Duration TEST_IDLE_TIMEOUT = Duration.ofSeconds(1);
+    /// A deadlock safety net for the cross-thread assertions, not a poll interval — the outcomes below arrive within one idle timeout or not at all.
+    private static final Duration ASSERTION_TIMEOUT = Duration.ofSeconds(30);
+
     private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
     @Mock
     private UIRequestAuthoriser requestAuthoriser;
@@ -52,6 +68,7 @@ class UIHttpServerImplTest {
     private StreamInvalidationSubscription streamInvalidationSubscription;
     private UIHttpServerImpl server;
     private HttpClient httpClient;
+    private @Nullable Socket stalledSocket;
 
     @BeforeEach
     void setUp() {
@@ -76,6 +93,7 @@ class UIHttpServerImplTest {
 
     @AfterEach
     void tearDown() {
+        Closeable.closeIfNotNull(stalledSocket);
         if (server != null) {
             server.stop();
         }
@@ -193,12 +211,7 @@ class UIHttpServerImplTest {
 
     @Test
     void multiSegmentContextMount_firstSegmentBecomesAllowedTag() {
-        server.stop();
-
-        var mounts = new LinkedHashSet<>(defaultMounts());
-        mounts.add(textMount("/admin/api/alerts", "/x", "alerts-x"));
-        server = new UIHttpServerImpl(0, mounts, meterRegistry);
-        server.start();
+        restartServerWith(createTextMount("/admin/api/alerts", "/x", "alerts-x"));
 
         sendGet("/admin/api/alerts/x");
 
@@ -223,12 +236,7 @@ class UIHttpServerImplTest {
 
     @Test
     void servletMount_handlesRequestAtMountedPath() {
-        server.stop();
-
-        var mounts = new LinkedHashSet<>(defaultMounts());
-        mounts.add(textMount("/mounted", "/hello", "mounted-response"));
-        server = new UIHttpServerImpl(0, mounts, meterRegistry);
-        server.start();
+        restartServerWith(createTextMount("/mounted", "/hello", "mounted-response"));
 
         HttpResponse<String> response = sendGet("/mounted/hello");
 
@@ -239,13 +247,7 @@ class UIHttpServerImplTest {
 
     @Test
     void multipleServletMounts_eachServesItsOwnContext() {
-        server.stop();
-
-        var mounts = new LinkedHashSet<>(defaultMounts());
-        mounts.add(textMount("/first", "/hello", "first-response"));
-        mounts.add(textMount("/second", "/hello", "second-response"));
-        server = new UIHttpServerImpl(0, mounts, meterRegistry);
-        server.start();
+        restartServerWith(createTextMount("/first", "/hello", "first-response"), createTextMount("/second", "/hello", "second-response"));
 
         HttpResponse<String> firstResponse = sendGet("/first/hello");
         HttpResponse<String> secondResponse = sendGet("/second/hello");
@@ -270,20 +272,73 @@ class UIHttpServerImplTest {
         assertThat(apiResponse.statusCode()).isEqualTo(NOT_FOUND_404);
     }
 
+    @Test
+    void readerThatStopsReading_hasItsResponseAbortedAfterTheIdleTimeout() {
+        var writeOutcome = new CompletableFuture<Throwable>();
+        restartServerWith(TEST_IDLE_TIMEOUT, createStallingMount(writeOutcome));
+
+        // Send the request, then never read a byte of the response: once the socket buffers fill, the server's write blocks with no way to make progress.
+        // This is the shape a client that walks away mid-download presents, holding a request thread — and, on the export route, a recording connection —
+        // until the connector reclaims it.
+        sendAndNeverRead("GET /stall/big HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+
+        assertThat(writeOutcome).as("the stalled response must be aborted rather than left holding the request")
+                                .succeedsWithin(ASSERTION_TIMEOUT)
+                                .isInstanceOf(IOException.class);
+    }
+
     private Set<ServletMount> defaultMounts() {
         return Set.of(new ApiServletMount(requestAuthoriser), new StaticResourceServletMount());
     }
 
-    private static ServletMount textMount(String contextPath, String servletPathSpec, String body) {
+    /// Replaces the fixture's server with one serving `extraMounts` alongside the defaults.
+    private void restartServerWith(ServletMount... extraMounts) {
+        restartServerWith(UIHttpServerImpl.IDLE_TIMEOUT, extraMounts);
+    }
+
+    /// As above, on `idleTimeout`, so a reclaim test need not wait out the production [UIHttpServerImpl#IDLE_TIMEOUT].
+    private void restartServerWith(Duration idleTimeout, ServletMount... extraMounts) {
+        server.stop();
+        var mounts = new LinkedHashSet<>(defaultMounts());
+        Collections.addAll(mounts, extraMounts);
+        server = new UIHttpServerImpl(0, mounts, meterRegistry, idleTimeout);
+        server.start();
+    }
+
+    /// Writes far more than any socket buffer can absorb, so the write blocks unless the reader drains it, and reports how that write ended.
+    private static ServletMount createStallingMount(CompletableFuture<Throwable> writeOutcome) {
+        return createServletMount("/stall", "/big", (_, resp) -> {
+            resp.setStatus(OK_200);
+            resp.setContentType("application/octet-stream");
+            var chunk = new byte[64 * 1024];
+            try {
+                ServletOutputStream out = resp.getOutputStream();
+                for (int bytesWritten = 0; bytesWritten < 256 * 1024 * 1024; bytesWritten += chunk.length) {
+                    out.write(chunk);
+                }
+                writeOutcome.complete(null);
+            } catch (IOException e) {
+                writeOutcome.complete(e);
+            }
+        });
+    }
+
+    private static ServletMount createTextMount(String contextPath, String servletPathSpec, String body) {
+        return createServletMount(contextPath, servletPathSpec, (_, resp) -> {
+            resp.setStatus(OK_200);
+            resp.setContentType("text/plain");
+            resp.getWriter().print(body);
+        });
+    }
+
+    private static ServletMount createServletMount(String contextPath, String servletPathSpec, GetHandler handler) {
         return () -> {
             var contextHandler = new ServletContextHandler();
             contextHandler.setContextPath(contextPath);
             var servlet = new HttpServlet() {
                 @Override
                 protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-                    resp.setStatus(OK_200);
-                    resp.setContentType("text/plain");
-                    resp.getWriter().print(body);
+                    handler.handle(req, resp);
                 }
             };
             contextHandler.addServlet(new ServletHolder(servlet), servletPathSpec);
@@ -291,8 +346,18 @@ class UIHttpServerImplTest {
         };
     }
 
+    /// Opens a connection, writes `request`, and leaves it open without ever reading — the socket is closed by the fixture's teardown.
+    private void sendAndNeverRead(String request) {
+        asUnchecked(() -> {
+            stalledSocket = new Socket();
+            stalledSocket.connect(new InetSocketAddress(LOOPBACK, server.listenPort()));
+            stalledSocket.getOutputStream().write(request.getBytes(US_ASCII));
+            stalledSocket.getOutputStream().flush();
+        });
+    }
+
     private String baseUrl() {
-        return "http://localhost:" + server.listenPort();
+        return "http://" + LOOPBACK + ':' + server.listenPort();
     }
 
     private HttpResponse<String> sendGet(String path) {
@@ -312,5 +377,9 @@ class UIHttpServerImplTest {
             builder.header("Content-Type", "application/x-www-form-urlencoded");
         }
         return getAsUnchecked(() -> httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString()));
+    }
+
+    private interface GetHandler {
+        void handle(HttpServletRequest request, HttpServletResponse response) throws IOException;
     }
 }
