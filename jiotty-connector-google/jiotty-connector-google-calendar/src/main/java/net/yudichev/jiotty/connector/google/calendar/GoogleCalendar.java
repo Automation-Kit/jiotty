@@ -4,6 +4,7 @@ import com.google.api.client.util.DateTime;
 import com.google.api.services.calendar.model.Event;
 import com.google.api.services.calendar.model.EventDateTime;
 import com.google.api.services.calendar.model.Events;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Append;
@@ -18,10 +19,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.Temporal;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.security.LogRedaction.redact;
+import static net.yudichev.jiotty.common.time.calendar.CalendarEventIds.createContentDerivedId;
 
 final class GoogleCalendar implements Calendar, StringFormattable {
     private static final Logger logger = LogManager.getLogger(GoogleCalendar.class);
@@ -71,17 +74,7 @@ final class GoogleCalendar implements Calendar, StringFormattable {
                 List<Event> items = events.getItems();
                 if (items != null) {
                     for (Event event : items) {
-                        Temporal start = toTemporal(event.getStart());
-                        Temporal end = toTemporal(event.getEnd());
-                        if (start != null && end != null) {
-                            resultBuilder.add(CalendarEvent.builder()
-                                                           .setStart(start)
-                                                           .setEnd(end)
-                                                           .setSummary(event.getSummary() == null ? "" : event.getSummary())
-                                                           .setDescription(event.getDescription())
-                                                           .setLocation(event.getLocation())
-                                                           .build());
-                        }
+                        toCalendarEvent(event).ifPresent(resultBuilder::add);
                     }
                 }
                 pageToken = events.getNextPageToken();
@@ -90,6 +83,29 @@ final class GoogleCalendar implements Calendar, StringFormattable {
             logger.debug("Calendar {}: fetched {} events", redactedName, result.size());
             return result;
         });
+    }
+
+    /// Converts one item of a `singleEvents` listing, which is a single occurrence of its entry.
+    ///
+    /// @return empty for an event carrying no usable start or end
+    @VisibleForTesting
+    static Optional<CalendarEvent> toCalendarEvent(Event event) {
+        Temporal start = toTemporal(event.getStart());
+        Temporal end = toTemporal(event.getEnd());
+        if (start == null || end == null) {
+            return Optional.empty();
+        }
+        String summary = event.getSummary() == null ? "" : event.getSummary();
+        return Optional.of(CalendarEvent.builder()
+                                        // A singleEvents listing gives each occurrence of a recurring entry its own id, of the form
+                                        // <recurringEventId>_<originalStartTime>, so this identifies the occurrence and not just the series.
+                                        .setId(event.getId() == null ? createContentDerivedId(summary, event.getLocation()) : event.getId())
+                                        .setStart(start)
+                                        .setEnd(end)
+                                        .setSummary(summary)
+                                        .setDescription(event.getDescription())
+                                        .setLocation(event.getLocation())
+                                        .build());
     }
 
     /// Converts a Google [EventDateTime] to a [Temporal]: an [Instant] for a timed event, or a [LocalDate] for an all-day event. Returns `null` when the value

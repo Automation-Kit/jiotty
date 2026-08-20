@@ -6,6 +6,7 @@ import com.github.caldav4j.model.request.CalendarData;
 import com.github.caldav4j.model.request.CalendarQuery;
 import com.github.caldav4j.model.request.CompFilter;
 import com.github.caldav4j.model.request.TimeRange;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import net.fortuna.ical4j.model.Component;
@@ -22,6 +23,7 @@ import net.yudichev.jiotty.common.time.calendar.CalendarEvent;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 import org.w3c.dom.Document;
 
 import javax.xml.transform.OutputKeys;
@@ -34,10 +36,12 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.security.LogRedaction.redact;
+import static net.yudichev.jiotty.common.time.calendar.CalendarEventIds.createContentDerivedId;
 
 final class IcloudCalendar implements Calendar, StringFormattable {
     private static final Logger logger = LogManager.getLogger(IcloudCalendar.class);
@@ -118,20 +122,39 @@ final class IcloudCalendar implements Calendar, StringFormattable {
             var resultBuilder = ImmutableList.<CalendarEvent>builder();
             for (net.fortuna.ical4j.model.Calendar cal : cals) {
                 for (Component comp : cal.getComponents(Component.VEVENT)) {
-                    VEvent evt = (VEvent) comp;
-                    resultBuilder.add(CalendarEvent.builder()
-                                                   .setStart(evt.getDateTimeStart().getDate())
-                                                   .setEnd(evt.getDateTimeEnd().getDate())
-                                                   .setSummary(evt.getSummary().getValue())
-                                                   .setDescription(evt.getProperty(Property.DESCRIPTION).map(Content::getValue))
-                                                   .setLocation(evt.getProperty(Property.LOCATION).map(Content::getValue))
-                                                   .build());
+                    resultBuilder.add(toCalendarEvent((VEvent) comp));
                 }
             }
             var result = resultBuilder.build();
             logger.info("Calendar {}: fetched {} events", redactedName, result.size());
             return result;
         });
+    }
+
+    @VisibleForTesting
+    static CalendarEvent toCalendarEvent(VEvent event) {
+        String summary = event.getSummary().getValue();
+        Optional<String> location = event.getProperty(Property.LOCATION).map(Content::getValue);
+        return CalendarEvent.builder()
+                            .setId(createId(event, summary, location.orElse(null)))
+                            .setStart(event.getDateTimeStart().getDate())
+                            .setEnd(event.getDateTimeEnd().getDate())
+                            .setSummary(summary)
+                            .setDescription(event.getProperty(Property.DESCRIPTION).map(Content::getValue))
+                            .setLocation(location)
+                            .build();
+    }
+
+    /// Identifies one occurrence: an expanded instance of a recurring entry carries the series' `UID` and its own `RECURRENCE-ID`, so the two together are
+    /// what distinguish it from its siblings.
+    ///
+    /// @param location the entry's location, or `null` where it declares none, which derives the fallback id from the title alone
+    private static String createId(VEvent event, String summary, @Nullable String location) {
+        return event.getUid()
+                    .map(uid -> event.getProperty(Property.RECURRENCE_ID)
+                                     .map(recurrenceId -> uid.getValue() + '/' + recurrenceId.getValue())
+                                     .orElseGet(uid::getValue))
+                    .orElseGet(() -> createContentDerivedId(summary, location));
     }
 
     /// Build a new URL string by replacing the path portion of the given URL.
