@@ -99,16 +99,32 @@ public final class Append {
         }
     }
 
-    public static void to(Appendable to, Object object) {
-        switch (to) {
-            case StringBuilder sb -> sb.append(object);
-            default -> {
-                try {
-                    to.append(String.valueOf(object));
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-            }
+    /// Appends `object` by dispatching on its runtime type, for values whose type is not known at compile time — a generic field, a collection element, a map
+    /// value. A nested [StringFormattable], [Iterable] or [Map] is appended by its own overload, straight into `to`.
+    ///
+    /// @param object the value to append; `null` appends the text `null`
+    public static void to(Appendable to, @Nullable Object object) {
+        switch (object) {
+            case null -> to(to, "null");
+            case StringFormattable formattable -> formattable.formatTo(to);
+            case CharSequence csq -> to(to, csq);
+            case Character c -> to(to, (char) c);
+            case Boolean b -> to(to, (boolean) b);
+            case Integer i -> to(to, (int) i);
+            case Long l -> to(to, (long) l);
+            case Float f -> to(to, (float) f);
+            case Double d -> to(to, (double) d);
+            case Iterable<?> iterable -> to(to, iterable);
+            case Map<?, ?> map -> to(to, map);
+            default -> appendToString(to, object);
+        }
+    }
+
+    private static void appendToString(Appendable to, Object object) {
+        try {
+            to.append(String.valueOf(object));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
 

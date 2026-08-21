@@ -81,6 +81,44 @@ class AppendTest {
         assertThat(appendable.toString()).isEqualTo("{1#=a+, 2#=b+}{}{3=c, 4=d}");
     }
 
+    static Stream<Arguments> objectDispatchesOnRuntimeType() {
+        return Stream.of(
+                arguments("null", null, "null"),
+                arguments("formattable", (StringFormattable) buffer -> Append.to(buffer, "fmt"), "fmt"),
+                arguments("charSequence", new StringBuilder("cs"), "cs"),
+                arguments("string", "str", "str"),
+                arguments("character", 'c', "c"),
+                arguments("boolean", true, "true"),
+                arguments("integer", 42, "42"),
+                arguments("long", 43L, "43"),
+                arguments("float", 1.5f, "1.5"),
+                arguments("double", 2.5, "2.5"),
+                arguments("iterable", List.of(1, 2), "[1, 2]"),
+                arguments("map", ImmutableMap.of(1, "a"), "{1=a}"),
+                // no dedicated overload of its own, so it renders through toString
+                arguments("otherType", (byte) 7, "7"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource
+    void objectDispatchesOnRuntimeType(String runtimeType, Object value, String expected) {
+        var appendable = new StringBuilder();
+
+        Append.to(appendable, value);
+
+        assertThat(appendable.toString()).isEqualTo(expected);
+    }
+
+    @Test
+    void nestedValuesRenderThroughTheirOwnFormatting() {
+        var appendable = new StringBuilder();
+        StringFormattable formattable = buffer -> Append.to(buffer, "fmt");
+
+        Append.to(appendable, ImmutableMap.of("k", List.of(formattable, List.of(1, 2))));
+
+        assertThat(appendable.toString()).isEqualTo("{k=[fmt, [1, 2]]}");
+    }
+
     static Stream<Arguments> appendableFailure_isWrappedInRuntimeException() {
         return Stream.of(
                 arguments("charSequence", (Consumer<Appendable>) appendable -> Append.to(appendable, "x")),
@@ -91,7 +129,8 @@ class AppendTest {
                 arguments("long", (Consumer<Appendable>) appendable -> Append.to(appendable, 1L)),
                 arguments("float", (Consumer<Appendable>) appendable -> Append.to(appendable, 1.5f)),
                 arguments("double", (Consumer<Appendable>) appendable -> Append.to(appendable, 1.5)),
-                arguments("object", (Consumer<Appendable>) appendable -> Append.to(appendable, (Object) "x")),
+                // a type with no dedicated overload, so it reaches the Object overload's own append path
+                arguments("object", (Consumer<Appendable>) appendable -> Append.to(appendable, (Object) (byte) 7)),
                 arguments("formattable", (Consumer<Appendable>) appendable -> Append.to(appendable, buffer -> Append.to(buffer, "x"))));
     }
 

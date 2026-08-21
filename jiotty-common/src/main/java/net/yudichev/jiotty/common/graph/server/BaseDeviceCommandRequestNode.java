@@ -23,6 +23,8 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     /// `-1` means a trigger based retry is due
     private int retryCount;
     private @Nullable String lastFailure;
+    /// The request [#forgetRequest()] asked to abandon, consumed by the next [#doWave()], or `null` when no forget is pending.
+    private @Nullable DeviceRequest<R> pendingRequestToForget;
 
     protected BaseDeviceCommandRequestNode(GraphRunner runner,
                                            String name,
@@ -39,26 +41,32 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     @Override
     @OverridingMethodsMustInvokeSuper
     public boolean doWave() {
+        DeviceRequest<R> requestToForget = pendingRequestToForget;
+        pendingRequestToForget = null;
+
         if (request == null) {
             resetRetryState();
             return false;
         }
 
-        if (shouldForgetRequest(request)) {
+        // identity, not equality: a request created after the forget is a fresh instance the caller still wants, even when its payload is identical
+        if (requestToForget == request || shouldForgetRequest(request)) {
             logger.debug("Asked to forget request {}", request);
-            resetRetryState();
-            request = null;
-            return true;
+            return completeRequest();
         }
 
         if (request.sent()) {
             if (deviceStateIndicatesRequestSuccessful(request.payload())) {
                 logger.info("Successfully executed: {}", request);
-                request = null;
-                resetRetryState();
-                return true;
+                return completeRequest();
             } else {
                 if (retryDue) {
+                    // a retry the device cannot accept yet stays due, so the state change that makes it sendable re-waves this node; consuming it here would
+                    // strand the request, because the schedule that raised it has already fired and nothing else ever raises it again
+                    if (retryCount >= 0 && retryCount < maxRetriesBeforeFatalFailure && !deviceStateValidForRequestToBeSent()) {
+                        logger.debug("Awaiting valid device state before retrying the request");
+                        return false;
+                    }
                     retryDue = false;
                     if (++retryCount == 0) {
                         logger.debug("Trigger-based retry of {}", request);
@@ -87,12 +95,9 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
                                              request);
                             }
                         }
-                    } else if (deviceStateValidForRequestToBeSent()) {
+                    } else {
                         logger.info("Retry {}/{} of {}", retryCount, maxRetriesBeforeFatalFailure, request);
                         doExecuteRequest(retryCount);
-                    } else {
-                        logger.debug("Awaiting valid device state before retrying the request");
-                        return false;
                     }
                     return true;
                 } else {
@@ -101,6 +106,10 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
                 }
             }
         } else if (deviceStateValidForRequestToBeSent()) {
+            if (deviceStateIndicatesRequestSuccessful(request.payload())) {
+                logger.info("Device already in the requested state: {}", request);
+                return completeRequest();
+            }
             logger.info("Executing request {}", request);
             request = request.asSent();
             doExecuteRequest(retryCount);
@@ -122,8 +131,8 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
         if (logger.isDebugEnabled()) {
             var additionalStateKey = additionalLoggingStateKey();
             var additionalStateValue = additionalLoggingStateValue();
-            logger.debug("{}: request={}, pendingRequestRetrySchedule={}, retryDue={}, retryCount={}, lastFailure={}{}{}", when, request,
-                         pendingRequestRetrySchedule, retryDue, retryCount, lastFailure,
+            logger.debug("{}: request={}, retryScheduleArmed={}, retryDue={}, retryCount={}, lastFailure={}, pendingRequestToForget={}{}{}", when, request,
+                         pendingRequestRetrySchedule != null, retryDue, retryCount, lastFailure, pendingRequestToForget,
                          additionalStateKey == null ? "" : additionalStateKey,
                          additionalStateValue == null ? "" : additionalStateValue);
         }
@@ -139,6 +148,13 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     @Override
     public final @Nullable DeviceRequest<R> currentRequest() {
         return request;
+    }
+
+    /// Abandons the request pending at the moment of the call, without sending or retrying it further, taking effect in a new wave. A request created
+    /// before that wave runs supersedes the call.
+    public final void forgetRequest() {
+        pendingRequestToForget = request;
+        triggerInNewWave(name() + " asked to forget request");
     }
 
     /// Called in-wave before anything else - return true to immediately forget the request and reset to an idle state
@@ -161,6 +177,7 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     }
 
     protected final void createRequestIfNotAlreadyInProgress(Supplier<DeviceRequest<R>> requestFactory) {
+        pendingRequestToForget = null; // asking for a request supersedes any forget that has not been waved yet
         var newRequest = requestFactory.get();
         if (request == null) {
             request = newRequest;
@@ -176,9 +193,17 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
 
     protected abstract boolean deviceStateValidForRequestToBeSent();
 
+    /// Whether the device state already satisfies `payload`. Invoked after the command is sent and, while [#deviceStateValidForRequestToBeSent()] holds,
+    /// before sending it - so a request whose target state already holds completes without a command.
     protected abstract boolean deviceStateIndicatesRequestSuccessful(R payload);
 
     protected abstract void sendCommand(int retryNumber, R payload, Consumer<String> failureHandler);
+
+    private boolean completeRequest() {
+        request = null;
+        resetRetryState();
+        return true;
+    }
 
     private void resetRetryState() {
         Closeable.closeIfNotNull(pendingRequestRetrySchedule);
