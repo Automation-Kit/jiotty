@@ -13,6 +13,10 @@
 
     <artifactId>jiotty-connector-tesla</artifactId>
 
+    <properties>
+        <org.postgresql.version>42.7.11</org.postgresql.version>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>net.yudichev.jiotty</groupId>
@@ -94,6 +98,17 @@
             <groupId>net.yudichev.jiotty</groupId>
             <artifactId>jiotty-connector-mqtt</artifactId>
             <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.yudichev.jiotty</groupId>
+            <artifactId>jiotty-process</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${org.postgresql.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

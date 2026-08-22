@@ -11,6 +11,14 @@ public record LatLonRectangle(double minLat, double maxLat, double minLon, doubl
                && another.minLon <= maxLon;
     }
 
+    /// @return whether `point` lies within these bounds, the edges counting as inside
+    public boolean contains(LatLon point) {
+        return point.lat() >= minLat
+               && point.lat() <= maxLat
+               && point.lon() >= minLon
+               && point.lon() <= maxLon;
+    }
+
     public static LatLonRectangle create(LatLon centre, double halfSideMetres) {
         double lat = Math.toRadians(centre.lat());
         double lon = Math.toRadians(centre.lon());

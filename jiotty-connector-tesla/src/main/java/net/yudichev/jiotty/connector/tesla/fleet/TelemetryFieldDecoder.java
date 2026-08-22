@@ -5,6 +5,8 @@ import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TInsideTempValue;
 import org.jspecify.annotations.Nullable;
 
+import java.util.function.DoubleFunction;
+
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TACChargingEnergyIn;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TACChargingEnergyInValue;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TBatteryLevel;
@@ -24,6 +26,8 @@ import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.THvacRigh
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TInsideTemp;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TLocation;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TLocationValue;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TOdometer;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TOdometerValue;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TVehicleSpeed;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TVehicleSpeedValue;
 
@@ -44,6 +48,7 @@ final class TelemetryFieldDecoder {
             case THvacLeftTemperatureRequest.NAME -> decodeHvacLeftTemperatureRequest(jsonData);
             case THvacRightTemperatureRequest.NAME -> decodeHvacRightTemperatureRequest(jsonData);
             case TVehicleSpeed.NAME -> decodeVehicleSpeed(jsonData);
+            case TOdometer.NAME -> decodeOdometer(jsonData);
             case TGear.NAME -> TGear.decode(jsonData);
             case TDriveRail.NAME -> TDriveRail.decode(jsonData);
             case TACChargingEnergyIn.NAME -> decodeAcChargingEnergyIn(jsonData);
@@ -56,12 +61,13 @@ final class TelemetryFieldDecoder {
         return Integer.parseInt(jsonData);
     }
 
-    private static double decodeDouble(String jsonData) {
-        return Double.parseDouble(jsonData);
+    /// Every nullable double-valued field decodes the same way: the dispatcher's literal `null` means the signal is invalid, anything else is a bare double.
+    private static <T> T decodeDoubleField(String jsonData, T invalidValue, DoubleFunction<T> valueFactory) {
+        return "null".equals(jsonData) ? invalidValue : valueFactory.apply(Double.parseDouble(jsonData));
     }
 
     static TBatteryLevel decodeBatteryLevel(String jsonData) {
-        return "null".equals(jsonData) ? TBatteryLevel.INVALID : new TBatteryLevelValue(decodeDouble(jsonData));
+        return decodeDoubleField(jsonData, TBatteryLevel.INVALID, TBatteryLevelValue::new);
     }
 
     public static TLocation decodeLocation(@Nullable TelemetryLocation jsonValue) {
@@ -73,26 +79,30 @@ final class TelemetryFieldDecoder {
     }
 
     static TInsideTemp decodeInsideTemp(String jsonData) {
-        return "null".equals(jsonData) ? TInsideTemp.INVALID : new TInsideTempValue(decodeDouble(jsonData));
+        return decodeDoubleField(jsonData, TInsideTemp.INVALID, TInsideTempValue::new);
     }
 
     static THvacLeftTemperatureRequest decodeHvacLeftTemperatureRequest(String jsonData) {
-        return "null".equals(jsonData) ? THvacLeftTemperatureRequest.INVALID : new THvacLeftTemperatureRequestValue(decodeDouble(jsonData));
+        return decodeDoubleField(jsonData, THvacLeftTemperatureRequest.INVALID, THvacLeftTemperatureRequestValue::new);
     }
 
     static THvacRightTemperatureRequest decodeHvacRightTemperatureRequest(String jsonData) {
-        return "null".equals(jsonData) ? THvacRightTemperatureRequest.INVALID : new THvacRightTemperatureRequestValue(decodeDouble(jsonData));
+        return decodeDoubleField(jsonData, THvacRightTemperatureRequest.INVALID, THvacRightTemperatureRequestValue::new);
     }
 
     static TVehicleSpeed decodeVehicleSpeed(String jsonData) {
-        return "null".equals(jsonData) ? TVehicleSpeed.INVALID : new TVehicleSpeedValue(decodeDouble(jsonData));
+        return decodeDoubleField(jsonData, TVehicleSpeed.INVALID, TVehicleSpeedValue::new);
+    }
+
+    static TOdometer decodeOdometer(String jsonData) {
+        return decodeDoubleField(jsonData, TOdometer.INVALID, TOdometerValue::new);
     }
 
     static TACChargingEnergyIn decodeAcChargingEnergyIn(String jsonData) {
-        return "null".equals(jsonData) ? TACChargingEnergyIn.INVALID : new TACChargingEnergyInValue(decodeDouble(jsonData));
+        return decodeDoubleField(jsonData, TACChargingEnergyIn.INVALID, TACChargingEnergyInValue::new);
     }
 
     static TDCChargingEnergyIn decodeDcChargingEnergyIn(String jsonData) {
-        return "null".equals(jsonData) ? TDCChargingEnergyIn.INVALID : new TDCChargingEnergyInValue(decodeDouble(jsonData));
+        return decodeDoubleField(jsonData, TDCChargingEnergyIn.INVALID, TDCChargingEnergyInValue::new);
     }
 }

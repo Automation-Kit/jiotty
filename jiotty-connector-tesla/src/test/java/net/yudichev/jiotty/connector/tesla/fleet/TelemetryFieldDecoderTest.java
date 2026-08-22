@@ -27,6 +27,8 @@ import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TInsideTe
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TInsideTempValue;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TLocation;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TLocationValue;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TOdometer;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TOdometerValue;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TVehicleSpeed;
 import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.TVehicleSpeedValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,6 +62,8 @@ class TelemetryFieldDecoderTest {
                 arguments(THvacRightTemperatureRequest.NAME, "null", THvacRightTemperatureRequest.INVALID),
                 arguments(TVehicleSpeed.NAME, "10.5", new TVehicleSpeedValue(10.5)),
                 arguments(TVehicleSpeed.NAME, "null", TVehicleSpeed.INVALID),
+                arguments(TOdometer.NAME, "35259.756", new TOdometerValue(35259.756)),
+                arguments(TOdometer.NAME, "null", TOdometer.INVALID),
                 arguments(TGear.NAME, "\"ShiftStateD\"", TGear.D),
                 arguments(TGear.NAME, "null", TGear.UNKNOWN),
                 arguments(TGear.NAME, "\"ShiftStateInvalid\"", TGear.INVALID),

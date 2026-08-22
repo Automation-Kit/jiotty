@@ -28,4 +28,21 @@ class LatLonRectangleTest {
         LatLonRectangle base = new LatLonRectangle(0, 10, 0, 10);
         assertThat(base.intersectsWith(new LatLonRectangle(0, 10, 0, 10))).isTrue();
     }
+
+    @Test
+    void containsPointsInsideAndOnTheEdges() {
+        LatLonRectangle base = new LatLonRectangle(0, 10, 0, 10);
+        assertThat(base.contains(new LatLon(5, 5))).isTrue();
+        assertThat(base.contains(new LatLon(0, 0))).isTrue();
+        assertThat(base.contains(new LatLon(10, 10))).isTrue();
+    }
+
+    @Test
+    void doesNotContainPointsBeyondAnySide() {
+        LatLonRectangle base = new LatLonRectangle(0, 10, 0, 10);
+        assertThat(base.contains(new LatLon(-1, 5))).isFalse();
+        assertThat(base.contains(new LatLon(11, 5))).isFalse();
+        assertThat(base.contains(new LatLon(5, -1))).isFalse();
+        assertThat(base.contains(new LatLon(5, 11))).isFalse();
+    }
 }

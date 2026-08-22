@@ -264,7 +264,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
 
     private void doSubscribe(String topicFilter, int qos, BiConsumer<String, MqttMessage> callback) {
         asUnchecked(() -> client.subscribe(topicFilter, qos, (topic, message) -> {
-            logger.debug("IN topic: {}, msg: {}", topic, message);
+            logger.trace("IN topic: {}, msg: {}", topic, message);
             executor.execute(() -> {
                 // Cache every received message so a later subscriber to the same filter gets the last value via deliverImage. This is the live dispatch
                 // path for every subscription (initial and restored on reconnect), so it sees retained messages the broker redelivers on subscribe.

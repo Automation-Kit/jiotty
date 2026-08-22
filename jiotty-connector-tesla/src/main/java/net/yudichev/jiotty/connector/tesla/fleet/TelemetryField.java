@@ -22,6 +22,7 @@ public sealed interface TelemetryField permits
         TelemetryField.THvacLeftTemperatureRequest,
         TelemetryField.THvacRightTemperatureRequest,
         TelemetryField.TVehicleSpeed,
+        TelemetryField.TOdometer,
         TelemetryField.TGear,
         TelemetryField.TDriveRail,
         TelemetryField.TACChargingEnergyIn,
@@ -182,6 +183,12 @@ public sealed interface TelemetryField permits
         TVehicleSpeed INVALID = new Invalid(NAME);
     }
 
+    /// Lifetime distance travelled, in **miles** — the unit Tesla reports it in.
+    sealed interface TOdometer extends TelemetryField permits TOdometerValue, Invalid {
+        String NAME = "Odometer";
+        TOdometer INVALID = new Invalid(NAME);
+    }
+
     /// Per-charging-session counter, kWh, measured from the AC charger. Tesla docs note: ignore during DC charging. Per-session cumulative — resets when a new
     /// session begins.
     sealed interface TACChargingEnergyIn extends TelemetryField permits TACChargingEnergyInValue, Invalid {
@@ -198,7 +205,7 @@ public sealed interface TelemetryField permits
 
     record Invalid(String fieldName)
             implements TBatteryLevel, TLocation, TChargeLimitSoc, TInsideTemp, THvacLeftTemperatureRequest, THvacRightTemperatureRequest, TVehicleSpeed,
-            TACChargingEnergyIn, TDCChargingEnergyIn, StringFormattable {
+            TOdometer, TACChargingEnergyIn, TDCChargingEnergyIn, StringFormattable {
         @Override
         public String toString() {
             return toString(48);
@@ -284,6 +291,13 @@ public sealed interface TelemetryField permits
     }
 
     record TVehicleSpeedValue(double value) implements TVehicleSpeed {
+        @Override
+        public String fieldName() {
+            return NAME;
+        }
+    }
+
+    record TOdometerValue(double value) implements TOdometer {
         @Override
         public String fieldName() {
             return NAME;
