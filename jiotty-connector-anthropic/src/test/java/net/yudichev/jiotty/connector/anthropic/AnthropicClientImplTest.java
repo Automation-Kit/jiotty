@@ -33,7 +33,8 @@ class AnthropicClientImplTest {
     private static final String BASE_URL = "https://anthropic.test";
     private static final String API_KEY = "test-api-key";
     private static final String SUCCESS_BODY = """
-                                               {"content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn", "usage": {"input_tokens": 3, "output_tokens": 4}}""";
+                                               {"content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn",
+                                                "usage": {"input_tokens": 3, "output_tokens": 4}}""";
 
     private final RecordingUpstreamHealthHandler healthHandler = new RecordingUpstreamHealthHandler();
     private final RecordingRetryableOperationExecutor retryExecutor = new RecordingRetryableOperationExecutor();
@@ -155,7 +156,7 @@ class AnthropicClientImplTest {
         return MessagesRequest.builder()
                               .setModel("test-model")
                               .setMaxTokens(16)
-                              .addMessages(Message.of(Role.USER, "q"))
+                              .addMessages(Messages.createUserText("q"))
                               .build();
     }
 

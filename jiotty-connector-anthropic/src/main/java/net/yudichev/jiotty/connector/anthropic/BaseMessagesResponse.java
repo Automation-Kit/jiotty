@@ -3,6 +3,7 @@ package net.yudichev.jiotty.connector.anthropic;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.google.common.collect.ImmutableList;
 import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import org.immutables.value.Value;
@@ -58,5 +59,26 @@ interface BaseMessagesResponse {
     /// Whether the model completed its turn of its own accord — the only outcome under which the reply is known to be whole.
     default boolean isCompleteTurn() {
         return stopReason().filter("end_turn"::equals).isPresent();
+    }
+
+    /// Whether the model stopped to call tools and is waiting for their results. This too is a whole reply — the model finished what it meant to say — so a
+    /// caller checking only [#isCompleteTurn] would mistake every tool call for a truncation.
+    default boolean isAwaitingToolResults() {
+        return stopReason().filter("tool_use"::equals).isPresent();
+    }
+
+    /// Every `tool_use` block in the reply, in the order the model made them, whatever the stop reason — a reply cut short mid-call still carries the call,
+    /// with arguments only [#isAwaitingToolResults] makes safe to trust.
+    ///
+    /// Every one of these must be answered — with a result or an error — in the turn the caller sends back, and the assistant turn replayed before it must
+    /// carry these same blocks, or Anthropic rejects the next request.
+    default List<ContentBlock> toolUses() {
+        var toolUses = ImmutableList.<ContentBlock>builderWithExpectedSize(content().size());
+        for (ContentBlock block : content()) {
+            if (block.isToolUse()) {
+                toolUses.add(block);
+            }
+        }
+        return toolUses.build();
     }
 }

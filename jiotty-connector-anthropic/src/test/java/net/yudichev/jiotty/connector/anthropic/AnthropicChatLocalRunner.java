@@ -111,7 +111,7 @@ final class AnthropicChatLocalRunner {
         }
 
         private void say(String line) {
-            conversation.add(Message.of(Role.USER, line));
+            conversation.add(Messages.createUserText(line));
             var response = getAsUnchecked(() -> client.sendMessage(MessagesRequest.builder()
                                                                                   .setModel(model)
                                                                                   .setMaxTokens(MAX_TOKENS)
@@ -129,10 +129,9 @@ final class AnthropicChatLocalRunner {
                               usage.outputTokens(),
                               usage.cacheReadInputTokens(),
                               usage.cacheCreationInputTokens());
-            // The reply joins the history as the assistant's turn, which is what lets the next question refer back to it.
-            var replyText = new StringBuilder(response.textLength());
-            response.appendText(replyText);
-            conversation.add(Message.of(Role.ASSISTANT, replyText.toString()));
+            // The reply joins the history as the assistant's turn, which is what lets the next question refer back to it. Its blocks go back exactly as they
+            // arrived, which is also what a tool-using conversation requires.
+            conversation.add(Message.of(Role.ASSISTANT, response.content()));
         }
 
         @BindingAnnotation

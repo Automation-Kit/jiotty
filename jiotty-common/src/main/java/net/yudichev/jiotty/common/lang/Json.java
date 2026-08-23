@@ -63,6 +63,12 @@ public final class Json {
         return getAsUnchecked(() -> mapper.readValue(reader, mapper.getTypeFactory().constructType(type.getType())));
     }
 
+    /// Binds an already-parsed [JsonNode] to `type`. Use when a payload arrives with one arbitrary-shaped island in it — a tool call's arguments, a webhook's
+    /// provider-specific body — that the enclosing type had to keep as a tree because its shape depends on a value elsewhere in the same payload.
+    public static <T> T convert(JsonNode node, Class<T> type) {
+        return getAsUnchecked(() -> mapper.treeToValue(node, type));
+    }
+
     public static ObjectNode object() {
         return mapper.createObjectNode();
     }

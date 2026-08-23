@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.lang;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.reflect.TypeToken;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +12,7 @@ import java.util.List;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JsonTest {
     private static InputStreamReader reader(String json, Charset charset) {
@@ -71,6 +73,24 @@ class JsonTest {
         out.append(" suffix");
 
         assertThat(out).hasToString("prefix {\"x\":1,\"y\":2} suffix");
+    }
+
+    /// Binding a sub-tree must behave exactly as parsing that sub-tree's own text would, since the whole reason to keep an island of a payload as a tree is
+    /// that its type is only known further in.
+    @Test
+    void bindsAlreadyParsedTreeToAType() {
+        JsonNode tree = Json.parse("{\"outer\": {\"x\": 1, \"y\": 2}}");
+
+        assertThat(Json.convert(tree.get("outer"), Point.class)).isEqualTo(new Point(1, 2));
+    }
+
+    /// A tree that does not fit the type must throw rather than yield a half-bound value: callers binding an island of someone else's payload rely on the
+    /// throw to tell them the island was not what they expected.
+    @Test
+    void throwsWhenTheTreeDoesNotFitTheType() {
+        JsonNode tree = Json.parse("{\"outer\": {\"x\": {\"nested\": true}}}");
+
+        assertThatThrownBy(() -> Json.convert(tree.get("outer"), Point.class)).isInstanceOf(RuntimeException.class);
     }
 
     private record Point(int x, int y) {}

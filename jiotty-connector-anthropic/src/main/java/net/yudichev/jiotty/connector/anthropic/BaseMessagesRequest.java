@@ -10,9 +10,10 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_ABSENT;
+import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY;
 import static com.google.common.base.Preconditions.checkState;
 
-/// A `POST /v1/messages` payload. Only the subset of the API this connector needs is modelled: no tools, no streaming, no images.
+/// A `POST /v1/messages` payload. Only the subset of the API this connector needs is modelled: no streaming, no images.
 @Value.Immutable
 @PublicImmutablesStyle
 @JsonSerialize
@@ -30,6 +31,15 @@ interface BaseMessagesRequest {
     List<SystemBlock> systemBlocks();
 
     List<Message> messages();
+
+    /// Tools the model may call. Anthropic places these ahead of the system blocks when it matches a cached prefix, so tools that are the same on every
+    /// request ride the same cache entry as the prompt; tools that vary per request move the breakpoint past everything and cache nothing.
+    @JsonInclude(NON_EMPTY)
+    List<Tool> tools();
+
+    /// How free the model is to answer in prose instead of calling a tool. Absent leaves Anthropic's default, which is `auto`.
+    @JsonProperty("tool_choice")
+    Optional<ToolChoice> toolChoice();
 
     /// Absent leaves the model's default. `0.0` makes sampling as deterministic as the API allows, which is what classification-style calls want.
     Optional<Double> temperature();
