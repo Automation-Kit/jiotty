@@ -81,9 +81,9 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                             .installedBy(this::installLifecycleComponentModule);
 
         adminAlertServiceSpec.bind(AdminAlertService.class)
-                             .annotatedWith(AdminAlert.class)
+                             .annotatedWith(Dependency.class)
                              .installedBy(this::installLifecycleComponentModule);
-        bind(AdminAlertService.class).annotatedWith(SseChannel.Dependency.class).to(Key.get(AdminAlertService.class, AdminAlert.class));
+        bind(AdminAlertService.class).annotatedWith(SseChannel.Dependency.class).to(Key.get(AdminAlertService.class, Dependency.class));
         install(new FactoryModuleBuilder().build(SseChannel.Factory.class));
 
         // Registered ahead of every component that resolves the executor in its doStart(): lifecycle components start in registration order, and
@@ -114,7 +114,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         bind(UIServer.class).to(UIServerImpl.class).in(Singleton.class);
         expose(UIServer.class);
 
-        // Built-in handlers are constructed in THIS module's scope so they see the registries/executor/SseService/PushDeviceStore/@AdminAlert bound above, then
+        // Built-in handlers are constructed in THIS module's scope so they see the registries/executor/SseService/PushDeviceStore/@Dependency bound above, then
         // contributed to the runtime module as bound-to specs alongside the caller's external handler specs.
         UIServerRuntimeModule.Builder runtimeModuleBuilder = UIServerRuntimeModule.builder();
         runtimeModuleBuilder.addApiPathHandler(boundToBuiltInHandler(registerLifecycleComponent(OptionsPostHandler.class)));
@@ -149,7 +149,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
-    @interface AdminAlert {
+    @interface Dependency {
     }
 
     /// Identifies whose UI this server serves.

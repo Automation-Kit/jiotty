@@ -72,7 +72,12 @@ public interface AdminAlertService {
 
     /// Raises a new alert or, if an active alert with the same [AdminAlertData#key()] already exists, appends a new event to it (and bumps the heartbeat).
     ///
+    /// **Never throws**. Callers raise from catch blocks and failure branches that must go on to complete a request, release
+    /// a permit or rethrow the original failure — a throw here would turn a reported failure into a worse one.
+    ///
     /// @return the alert key
+    /// @implSpec An implementation that cannot deliver the alert catches, logs at WARN, and returns the key anyway; the same holds for every default method on
+    /// this interface, which all funnel here.
     String raise(AdminAlertData data);
 
     /// Server-driven resolution. Resolved-by is recorded as `"system"`. This method can only be called if the caller can guarantee that exactly the condition

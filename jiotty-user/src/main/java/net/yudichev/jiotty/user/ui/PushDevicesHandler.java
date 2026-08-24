@@ -29,6 +29,7 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_40
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
+import static net.yudichev.jiotty.user.ui.UIServerModule.Dependency;
 
 /// Handles the `/ui/api/push/devices*` surface:
 /// - `POST /ui/api/push/devices` — register the calling device.
@@ -52,7 +53,7 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
     @Inject
     public PushDevicesHandler(PushDeviceStore pushDeviceStore,
                               CurrentDateTimeProvider currentDateTimeProvider,
-                              @UIServerModule.AdminAlert AdminAlertService alertService,
+                              @Dependency AdminAlertService alertService,
                               @UIExecutor Provider<SchedulingExecutor> executorProvider) {
         this.pushDeviceStore = checkNotNull(pushDeviceStore, "pushDeviceStore");
         this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider, "currentDateTimeProvider");

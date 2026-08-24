@@ -22,8 +22,13 @@ public final class LoggingAdminAlertService implements AdminAlertService {
     @Override
     public String raise(AdminAlertData data) {
         String key = data.key();
-        severityByKey.put(key, data.severity());
-        logger.log(levelOf(data.severity()), "ALERT RAISED {}: {}", data.title(), data.description());
+        try {
+            severityByKey.put(key, data.severity());
+            logger.log(levelOf(data.severity()), "ALERT RAISED {}: {}", data.title(), data.description());
+        } catch (RuntimeException e) {
+            // [AdminAlertService#raise] is total by contract; see its @implSpec.
+            logger.warn("Failed to raise alert with key {}", key, e);
+        }
         return key;
     }
 

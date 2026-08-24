@@ -1,18 +1,13 @@
 package net.yudichev.jiotty.common.async;
 
 import net.yudichev.jiotty.common.lang.Closeable;
-import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
-import static net.yudichev.jiotty.common.lang.Runnables.guarded;
-
 public interface TaskExecutor extends Executor {
-    Logger logger = LogManager.getLogger(TaskExecutor.class);
-
     <T> CompletableFuture<T> submit(Callable<? extends T> task);
 
     default CompletableFuture<Void> submit(Runnable command) {
@@ -25,9 +20,10 @@ public interface TaskExecutor extends Executor {
     }
 
     /// Executes `command` on this executor's thread, tagging it `taskName` so an uncaught failure is reported against a name a reader recognises.
-    default void execute(String taskName, Runnable command) {
-        submit(guarded(logger, taskName, command));
-    }
+    ///
+    /// @implSpec An implementation reports an uncaught throwable from `command` through [TaskFailureReporter], which is where the host application escalates
+    /// task failures from, or lets it propagate to whoever drives this executor.
+    void execute(String taskName, Runnable command);
 
     /// Executes `command` as [#execute(String, Runnable)] does when this executor can take it, and discards it otherwise, reporting which happened. Use this
     /// for work whose caller has established it is safe to drop — canonically a callback from a producer that outlives the caller, which can arrive once this

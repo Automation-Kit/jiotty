@@ -10,6 +10,7 @@ import jakarta.inject.Provider;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -38,9 +39,11 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.ERROR;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.toFutureOfList;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
+import static net.yudichev.jiotty.user.ui.UIServerModule.Dependency;
 import static net.yudichev.jiotty.user.ui.UIServerModule.SubjectId;
 
 /// Streams one user's options and displayables to their open UI clients over the shared [SseChannel] transport.
@@ -52,6 +55,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     private final OptionRegistry optionRegistry;
     private final DisplayableRegistry displayableRegistry;
     private final SseChannel.Factory channelFactory;
+    private final AdminAlertService alertService;
     private final Duration optionsThrottlingPeriod;
     private final String userId;
     private final MeterRegistry meterRegistry;
@@ -71,6 +75,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                           OptionRegistry optionRegistry,
                           DisplayableRegistry displayableRegistry,
                           SseChannel.Factory channelFactory,
+                          @Dependency AdminAlertService alertService,
                           @OptionsThrottlingPeriod Duration optionsThrottlingPeriod,
                           @SubjectId String userId,
                           MeterRegistry meterRegistry) {
@@ -78,6 +83,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
         this.optionRegistry = checkNotNull(optionRegistry, "optionRegistry");
         this.displayableRegistry = checkNotNull(displayableRegistry, "displayableRegistry");
         this.channelFactory = checkNotNull(channelFactory, "channelFactory");
+        this.alertService = checkNotNull(alertService, "alertService");
         this.optionsThrottlingPeriod = checkNotNull(optionsThrottlingPeriod, "optionsThrottlingPeriod");
         this.userId = checkNotNull(userId, "userId");
         this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
@@ -173,8 +179,8 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                                                     .forEach((tabName, tabDtos) -> tabs.add(new OptionsTab(toDomId(tabName), tabName, tabDtos)));
                                     target.send("options-update", new OptionsUpdateFrame(tabs));
                                 } else {
-                                    // this is a bug, so fine to spam
-                                    logger.warn("Failed to generate options DTOs", throwable);
+                                    // A defect in this server, and it leaves the user's options tab stale, so it goes to an operator.
+                                    alertService.raise(ERROR, "Failed to generate options DTOs", logger, throwable);
                                 }
                             }, executor);
     }
@@ -191,7 +197,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     private CompletableFuture<?> sendDisplayableUpdate(Displayable displayable, SseSink target) {
         return displayable.toDto().whenCompleteAsync((displayableDto, throwable) -> {
             if (throwable != null) {
-                logger.warn("Displayable {} failed to generate DTO", displayable.getId(), throwable);
+                alertService.raise(ERROR, "Displayable failed to generate its DTO", logger, displayable.getId(), throwable);
                 return;
             }
             target.send("displayable-update", new DisplayableUpdateFrame(displayable.getId(), displayableDto));

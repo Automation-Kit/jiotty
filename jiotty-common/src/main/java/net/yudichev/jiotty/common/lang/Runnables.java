@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.lang;
 
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.function.BiConsumer;
@@ -7,24 +8,21 @@ import java.util.function.BiConsumer;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 public final class Runnables {
+    /// Carries the last-resort line for an `exceptionHandler` that itself throws.
+    private static final Logger logger = LogManager.getLogger(Runnables.class);
+
     private Runnables() {
     }
 
-    public static Runnable guarded(Logger logger, String taskDescription, Runnable delegate) {
-        return guarded(logger, taskDescription, delegate,
-                       (desc, throwable) -> logger.error("Failed while {}", desc, throwable));
+    /// Wraps `delegate` so an uncaught throwable goes to `exceptionHandler` along with the task description, and the handler decides how to report it. The
+    /// handler runs inside its own guard, so a secondary failure in it is logged and contained.
+    public static Runnable guarded(String taskDescription, Runnable delegate, BiConsumer<String, Throwable> exceptionHandler) {
+        return new GuardedRunnable(taskDescription, delegate, exceptionHandler);
     }
 
-    /// As [#guarded(Logger, String, Runnable)], but routes the task description and uncaught throwable to `exceptionHandler` instead of logging them — the
-    /// handler decides how to report the failure. The handler runs inside its own guard, so if it throws, that secondary failure is logged and does not escape.
-    public static Runnable guarded(Logger logger, String taskDescription, Runnable delegate, BiConsumer<String, Throwable> exceptionHandler) {
-        return new GuardedRunnable(logger, taskDescription, delegate, exceptionHandler);
-    }
-
-    /// Runs `delegate` under the same guard as [#guarded(Logger, String, Runnable, BiConsumer)] but **without allocating a wrapper** — for a caller already on
-    /// the execution thread that only needs the exception routing. An uncaught throwable goes to `exceptionHandler` (itself guarded: a secondary failure is
-    /// logged and does not escape).
-    public static void runGuarded(Logger logger, String taskDescription, Runnable delegate, BiConsumer<String, Throwable> exceptionHandler) {
+    /// Runs `delegate` under the same guard as [#guarded], allocating no wrapper — for a caller already on the execution thread. An uncaught throwable goes
+    /// to `exceptionHandler`, itself guarded as above.
+    public static void runGuarded(String taskDescription, Runnable delegate, BiConsumer<String, Throwable> exceptionHandler) {
         try {
             delegate.run();
         } catch (Throwable e) {
@@ -36,19 +34,18 @@ public final class Runnables {
         }
     }
 
-    private record GuardedRunnable(Logger logger,
-                                   String taskDescription,
+    private record GuardedRunnable(String taskDescription,
                                    Runnable delegate,
                                    BiConsumer<String, Throwable> exceptionHandler) implements Runnable, StringFormattable {
         private GuardedRunnable {
-            checkNotNull(logger);
+            checkNotNull(taskDescription);
             checkNotNull(delegate);
             checkNotNull(exceptionHandler);
         }
 
         @Override
         public void run() {
-            runGuarded(logger, taskDescription, delegate, exceptionHandler);
+            runGuarded(taskDescription, delegate, exceptionHandler);
         }
 
         @Override

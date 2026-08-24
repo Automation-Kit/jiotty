@@ -1,9 +1,11 @@
 package net.yudichev.jiotty.adminalerts.http;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.adminalerts.AdminAlertData;
 import net.yudichev.jiotty.adminalerts.AdminAlertServiceImpl;
 import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -71,7 +73,7 @@ class AdminAlertResolveServletTest {
         executor = new SingleThreadedSchedulingExecutor("admin-alerts-it");
         Provider<SchedulingExecutor> executorProvider = () -> executor;
         dataSourceFactory = postgres.dataSourceFactory();
-        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
+        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider, new ListenerBackedTaskExceptionHandlerRegistry());
         domainService.start();
         alertService = new AdminAlertServiceImpl(dataSourceFactory,
                                                  executorProvider,
@@ -81,7 +83,8 @@ class AdminAlertResolveServletTest {
                                                  DOMAIN_NAME,
                                                  PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                  100,
-                                                 100);
+                                                 100,
+                                                 new SimpleMeterRegistry());
         alertService.start();
 
         var mount = new AdminAlertResolveServletMount(new AdminBearerAuthFilter(VALID_TOKEN), new AdminAlertResolveServlet(alertService));

@@ -2,6 +2,7 @@ package net.yudichev.jiotty.persistence.recording;
 
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainService;
@@ -21,8 +22,9 @@ final class ReadOnlyPostgresqlDestination extends PostgresqlDestinationImpl {
     @Inject
     public ReadOnlyPostgresqlDestination(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,
                                          @Dependency DataSourceFactory dataSourceFactory,
-                                         PersistenceDomainService persistenceDomainService) {
-        super(executorProvider, dataSourceFactory, persistenceDomainService);
+                                         PersistenceDomainService persistenceDomainService,
+                                         @Dependency AdminAlertService alertService) {
+        super(executorProvider, dataSourceFactory, persistenceDomainService, alertService);
     }
 
     @Override

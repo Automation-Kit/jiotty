@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.connector.mqtt;
 
 import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.lang.Closeable;
 import org.eclipse.paho.client.mqttv3.IMqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
@@ -24,12 +25,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /// semantics — retained-message redelivery on subscribe, per-subscription delivery, reconnect resubscription — which is where the subtle subscription-sharing
 /// behaviour actually lives.
 class MqttImplIntegrationTest {
-    private static final Duration AWAIT_TIMEOUT = Duration.ofSeconds(10);
-    private static final long PAHO_OP_TIMEOUT_MILLIS = 10_000;
-
     @RegisterExtension
     static final EmbeddedMqttBrokerExtension broker = new EmbeddedMqttBrokerExtension();
-
+    private static final Duration AWAIT_TIMEOUT = Duration.ofSeconds(10);
+    private static final long PAHO_OP_TIMEOUT_MILLIS = 10_000;
     private static final ExecutorFactoryImpl executorFactory = new ExecutorFactoryImpl();
 
     private final List<MqttImpl> startedClients = new ArrayList<>();
@@ -138,7 +137,8 @@ class MqttImplIntegrationTest {
 
     private MqttImpl newConnectedClient() throws Exception {
         IMqttAsyncClient pahoClient = new MqttAsyncClient(broker.serverUri(), "client-" + UUID.randomUUID(), new MemoryPersistence());
-        MqttImpl client = new MqttImpl(pahoClient, executorFactory, (_, _, _) -> _ -> {}, _ -> {}, System::nanoTime, 0.0);
+        MqttImpl client = new MqttImpl(pahoClient, executorFactory, (_, _, _) -> _ -> {}, _ -> {}, new ListenerBackedTaskExceptionHandlerRegistry(),
+                                       System::nanoTime, 0.0);
         client.start();
         startedClients.add(client);
         var connected = new CompletableFuture<Void>();

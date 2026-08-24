@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
@@ -63,7 +64,7 @@ class TimeSeriesStreamTest {
         executor = new SingleThreadedSchedulingExecutor("time-series-stream-test");
         dataSourceFactory = postgres.dataSourceFactory();
         Provider<SchedulingExecutor> executorProvider = () -> executor;
-        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
+        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider, new ListenerBackedTaskExceptionHandlerRegistry());
         domainService.start();
         cache = newCache();
         cache.start();

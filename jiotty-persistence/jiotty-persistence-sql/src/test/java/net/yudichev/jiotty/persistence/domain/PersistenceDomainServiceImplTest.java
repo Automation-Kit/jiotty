@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.persistence.domain;
 
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
@@ -44,7 +45,7 @@ class PersistenceDomainServiceImplTest {
         var dataSourceFactory = postgres.dataSourceFactory();
         executor = new SingleThreadedSchedulingExecutor("persistence-domain-test");
         Provider<SchedulingExecutor> executorProvider = () -> executor;
-        service = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
+        service = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider, new ListenerBackedTaskExceptionHandlerRegistry());
         service.start();
     }
 

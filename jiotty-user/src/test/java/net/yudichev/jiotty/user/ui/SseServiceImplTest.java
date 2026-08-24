@@ -9,6 +9,7 @@ import jakarta.servlet.AsyncContext;
 import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -87,6 +88,7 @@ class SseServiceImplTest {
                                         optionRegistry,
                                         displayableRegistry,
                                         SseChannels.factory(clock, alertService),
+                                        alertService,
                                         THROTTLING_PERIOD,
                                         USER_ID,
                                         meterRegistry);
@@ -600,6 +602,13 @@ class SseServiceImplTest {
         capture.reset();
         clock.advanceTimeAndTick(Duration.ofSeconds(15));
         assertThat(capture.output()).contains("event: ping");
+        // A displayable that cannot render is a defect in this server, and it leaves the user's screen stale, so an operator hears about it.
+        assertThat(alertService.activeAlertsById().values())
+                .singleElement()
+                .satisfies(alert -> {
+                    assertThat(alert.title()).isEqualTo("Displayable failed to generate its DTO");
+                    assertThat(alert.severity()).isEqualTo(AdminAlertSeverity.ERROR);
+                });
     }
 
     @Test
@@ -742,6 +751,7 @@ class SseServiceImplTest {
                                                           registry,
                                                           displayableRegistry,
                                                           SseChannels.factory(clock, alertService),
+                                                          alertService,
                                                           THROTTLING_PERIOD,
                                                           USER_ID,
                                                           meterRegistry);

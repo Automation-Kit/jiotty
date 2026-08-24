@@ -13,8 +13,10 @@ import jakarta.mail.Session;
 import jakarta.mail.internet.MimeMessage;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Runnables;
 import net.yudichev.jiotty.connector.google.gmail.Bindings.GmailService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -34,7 +36,6 @@ import static com.google.common.io.BaseEncoding.base64;
 import static java.util.concurrent.CompletableFuture.supplyAsync;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
-import static net.yudichev.jiotty.common.lang.Runnables.guarded;
 import static net.yudichev.jiotty.common.lang.throttling.ThresholdExceptionLoggingRunnable.withExceptionLoggedAfterThreshold;
 
 final class GmailClientImpl extends BaseLifecycleComponent implements GmailClient {
@@ -45,16 +46,19 @@ final class GmailClientImpl extends BaseLifecycleComponent implements GmailClien
     private final Gmail gmail;
     private final InternalGmailObjectFactory internalGmailObjectFactory;
     private final ExecutorFactory executorFactory;
+    private final TaskFailureReporter taskFailureReporter;
     private final Set<Subscription> subscriptions = Sets.newConcurrentHashSet();
     private SchedulingExecutor executor;
 
     @Inject
     GmailClientImpl(@GmailService Gmail gmail,
                     InternalGmailObjectFactory internalGmailObjectFactory,
-                    ExecutorFactory executorFactory) {
+                    ExecutorFactory executorFactory,
+                    TaskFailureReporter taskFailureReporter) {
         this.gmail = checkNotNull(gmail);
         this.internalGmailObjectFactory = checkNotNull(internalGmailObjectFactory);
         this.executorFactory = checkNotNull(executorFactory);
+        this.taskFailureReporter = checkNotNull(taskFailureReporter);
     }
 
     @SuppressWarnings("ReturnOfInnerClass") // we are a singleton
@@ -177,7 +181,9 @@ final class GmailClientImpl extends BaseLifecycleComponent implements GmailClien
                 } else {
                     checkState(messageHistoryId.compareTo(runningHistoryId) < 0, "historyId went forward %s -> %s!", runningHistoryId, messageHistoryId);
                 }
-                guarded(logger, "handling gmail message", () -> handler.accept(internalGmailObjectFactory.createMessage(message))).run();
+                Runnables.runGuarded("handling gmail message",
+                                     () -> handler.accept(internalGmailObjectFactory.createMessage(message)),
+                                     taskFailureReporter::onTaskException);
             }
             return runningHistoryId;
         }

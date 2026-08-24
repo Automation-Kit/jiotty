@@ -5,6 +5,8 @@ import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.TypeLiteral;
 import io.micrometer.core.instrument.MeterRegistry;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
+import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
@@ -20,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @ExtendWith(MockitoExtension.class)
 class AuthenticatedHttpServerModuleTest {
+    private static final AdminAlertService alertService = new TestAdminAlertService();
 
     /// Resolving the graph proves the pre-auth admission limits reach [PreAuthAdmissionControl]: its constructor takes each one under its own binding
     /// annotation, so a missing or mis-annotated limit fails injector creation here rather than at first request.
@@ -27,6 +30,7 @@ class AuthenticatedHttpServerModuleTest {
     void bindsItsLifecycleComponentsWithDefaultAdmissionLimits(@Mock UserTokenAuthoriser userTokenAuthoriser) {
         Injector injector = injectorFor(AuthenticatedHttpServerModule.builder()
                                                                      .setUserTokenAuthoriser(literally(userTokenAuthoriser))
+                                                                     .withAdminAlertService(literally(alertService))
                                                                      .build());
 
         assertThat(injector.findBindingsByType(new TypeLiteral<LifecycleComponent>() {})).isNotEmpty();
@@ -40,6 +44,7 @@ class AuthenticatedHttpServerModuleTest {
                                                                   @Mock ServletMount otherServletMount) {
         Injector injector = injectorFor(AuthenticatedHttpServerModule.builder()
                                                                      .setUserTokenAuthoriser(literally(userTokenAuthoriser))
+                                                                     .withAdminAlertService(literally(alertService))
                                                                      .withListenPort(literally(0))
                                                                      .withTrustProxyHeaders(literally(true))
                                                                      .withPreAuthRequestsPerSecond(literally(3.5))

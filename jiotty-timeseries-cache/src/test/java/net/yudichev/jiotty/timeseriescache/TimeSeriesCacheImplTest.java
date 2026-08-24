@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -73,7 +74,7 @@ class TimeSeriesCacheImplTest {
         clock.setTime(T0);
         executor = new SingleThreadedSchedulingExecutor("time-series-cache-test");
         dataSourceFactory = postgres.dataSourceFactory();
-        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, () -> executor);
+        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, () -> executor, new ListenerBackedTaskExceptionHandlerRegistry());
         domainService.start();
         smileCodec = new SmileCodec();
         jsonCodec = new JsonUtf8Codec();

@@ -1,12 +1,16 @@
 package net.yudichev.jiotty.common.misc;
 
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
+
 /// Notified about the health of one upstream a component depends on — an external API, a broker, a database — so a host application can surface intermittent,
 /// non-fatal failures. [#onFailure] fires when calls have been failing long enough to count as a sustained outage; [#onSuccess] fires once they recover.
 ///
 /// A handler belongs to the shared component that issues the calls, so an outage is observed once no matter how many callers the component serves.
 ///
 /// @implSpec Implementations must be safe to call from any thread and must be fast: a connector typically reports from whichever thread completed the call,
-/// and one handler instance serves every caller the component has.
+/// and one handler instance serves every caller the component has. **They must not throw**: nothing observes the outcome of a status notification, so a
+/// throwing handler would report its own failure nowhere. An implementation doing work that can fail hands that work to an executor, whose guard reports the
+/// failure through [TaskFailureReporter].
 /// @implNote Typical implementations raise an operator alert or emit a log line.
 public interface UpstreamHealthHandler {
     /// A handler that ignores every status change, for hosts that do not surface upstream health.

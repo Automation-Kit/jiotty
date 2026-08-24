@@ -34,6 +34,13 @@ final class DeterministicExecutor extends BaseIdempotentCloseable implements Sch
         return resultFuture;
     }
 
+    /// Runs `command` under this clock's control, letting an uncaught throwable propagate to whoever advances the clock, so a test fails on it.
+    @Override
+    public void execute(String taskName, Runnable command) {
+        checkNotClosed();
+        clock.executeImmediate(this, command);
+    }
+
     /// Discards `command` once this executor is closed, matching the live executor so a test drives the same branch production does.
     @Override
     public boolean tryExecute(String taskName, Runnable command) {

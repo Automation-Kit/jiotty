@@ -1,9 +1,11 @@
 package net.yudichev.jiotty.user.persistence;
 
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.common.time.TimeProvider;
@@ -51,6 +53,7 @@ class UserPersistenceImplTest {
     private static final String DROP_USER_TABLE_SQL = "DROP TABLE %DOMAIN_PREFIX%user CASCADE";
     private static final ZoneId UTC = ZoneId.of("UTC");
     private static final ZoneId EUROPE_LONDON = ZoneId.of("Europe/London");
+    private static final TaskFailureReporter taskFailureReporter = new ListenerBackedTaskExceptionHandlerRegistry();
 
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
@@ -72,7 +75,7 @@ class UserPersistenceImplTest {
         executor = new SingleThreadedSchedulingExecutor("user-persistence-test");
         racingExecutor = new SingleThreadedSchedulingExecutor("user-persistence-test-racer");
         executorProvider = () -> executor;
-        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
+        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider, new ListenerBackedTaskExceptionHandlerRegistry());
         domain = new PersistenceDomain(DOMAIN_NAME);
         domainService.start();
     }
@@ -92,7 +95,8 @@ class UserPersistenceImplTest {
                                                          0,
                                                          domain.name(),
                                                          List.of(),
-                                                         PersistenceDomainMigrator.FAIL_ON_MIGRATION))
+                                                         PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                         taskFailureReporter))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -204,7 +208,7 @@ class UserPersistenceImplTest {
         var atRaceWindow = new CountDownLatch(1);
         var competitorCommitted = new CountDownLatch(1);
         var racer = new UserPersistenceImpl(dataSourceFactory, () -> racingExecutor, domainService, new TimeProvider(), 1,
-                                            domain.name(), List.of(), PersistenceDomainMigrator.FAIL_ON_MIGRATION) {
+                                            domain.name(), List.of(), PersistenceDomainMigrator.FAIL_ON_MIGRATION, taskFailureReporter) {
             @Override
             boolean onBeforeInsertingNewUser() {
                 atRaceWindow.countDown();
@@ -605,7 +609,8 @@ class UserPersistenceImplTest {
                                                   1,
                                                   domain.name(),
                                                   initStatements,
-                                                  PersistenceDomainMigrator.FAIL_ON_MIGRATION);
+                                                  PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                  taskFailureReporter);
         userPersistence.start();
     }
 

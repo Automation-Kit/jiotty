@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.energy.octopus;
 
 import net.yudichev.jiotty.common.async.JobSchedulerImpl;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Either;
@@ -48,7 +49,7 @@ class OctopusAgilePriceServiceImplTest {
     void setUp() {
         clock = new ProgrammableClock().withMdc().withGlobalMdc(true);
         clock.setTime(time(1, 14, 0));
-        var jobScheduler = new JobSchedulerImpl(clock, clock, ZoneOffset.UTC);
+        var jobScheduler = new JobSchedulerImpl(clock, clock, ZoneOffset.UTC, new ListenerBackedTaskExceptionHandlerRegistry());
         var executor = clock.createSingleThreadedSchedulingExecutor("thread");
         var cache = new InMemoryTimeSeriesCache();
         service = new OctopusAgilePriceServiceImpl(() -> executor, clock, cache, jobScheduler, regionService, PRODUCT_CODE, TARIFF_CODE);

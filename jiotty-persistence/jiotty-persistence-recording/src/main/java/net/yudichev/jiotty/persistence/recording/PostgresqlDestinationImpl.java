@@ -2,6 +2,7 @@ package net.yudichev.jiotty.persistence.recording;
 
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -35,6 +36,8 @@ import java.util.regex.Pattern;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.stream.Collectors.joining;
+import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.ERROR;
+import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.persistence.recording.RecordingModule.Dependency;
 
@@ -47,16 +50,19 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
     private final Calendar calendar;
     private final DataSourceFactory dataSourceFactory;
     private final PersistenceDomainService persistenceDomainService;
+    private final AdminAlertService alertService;
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
 
     @Inject
     public PostgresqlDestinationImpl(@PsqlExecutor Provider<SchedulingExecutor> executorProvider,
                                      @Dependency DataSourceFactory dataSourceFactory,
-                                     PersistenceDomainService persistenceDomainService) {
+                                     PersistenceDomainService persistenceDomainService,
+                                     @Dependency AdminAlertService alertService) {
         this.executorProvider = checkNotNull(executorProvider);
         this.dataSourceFactory = checkNotNull(dataSourceFactory);
         this.persistenceDomainService = checkNotNull(persistenceDomainService);
+        this.alertService = checkNotNull(alertService);
         calendar = utcCalendar();
     }
 
@@ -171,6 +177,9 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
 
         private boolean disabled;
         private R lastRecorded;
+        /// Key of the alert covering the current run of insert failures, `null` while inserts are working — so a run of them is one alert, and a later
+        /// success resolves it. Confined to the recording executor alongside [#lastRecorded].
+        private @Nullable String insertFailureAlertKey;
 
         public RecorderImpl(PsqlConfig<R> config, @Nullable String userId) {
             super(config, userId);
@@ -198,8 +207,9 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                                         }
                                     })
                                     .exceptionally(e -> {
-                                        logger.warn("Initialisation of record for type {} with config {} failed, recording will be disabled",
-                                                    typeName, config, e);
+                                        logger.debug("Config of the recorder that failed to initialise: {}", config);
+                                        alertService.raise(ERROR, "Recording disabled for " + typeName, logger,
+                                                           "initialisation failed; nothing will be recorded for this type until restart", e);
                                         disabled = true;
                                         return null;
                                     });
@@ -265,8 +275,20 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                                      }
                                  });
                         lastRecorded = recordable;
+                        if (insertFailureAlertKey != null) {
+                            // This insert is proof the condition the alert describes is over, which is what permits an application-driven resolve.
+                            alertService.resolve(insertFailureAlertKey, "recording succeeded")
+                                        .whenComplete(alertService.alertOnFailure(WARNING, "Failed to resolve a recording alert", logger, typeName));
+                            insertFailureAlertKey = null;
+                        }
                     } catch (SQLException e) {
-                        logger.warn("Failed recording {}, sql was {}", recordable, insertSql, e);
+                        // Raised on every failure so a SQLState that changes mid-outage reaches an operator as its own event, with the key captured once so
+                        // the first success resolves the whole run. The description carries the type and the SQLState; a recordable can hold the user's own
+                        // data and the alert store is retained where the log is not, so it and the SQL stay out.
+                        String key = alertService.raise(WARNING, "Failed recording data for " + typeName, logger, "SQLState " + e.getSQLState(), e);
+                        if (insertFailureAlertKey == null) {
+                            insertFailureAlertKey = key;
+                        }
                     }
                 }
             });
@@ -320,7 +342,9 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                                 }
                             });
                 } catch (SQLException e) {
-                    logger.warn("Failed executing query, sql was {}", sql, e);
+                    // As in the insert path, the alert names the type and the SQLState; the resolved SQL goes to the log.
+                    logger.debug("Query that failed: {}", sql);
+                    alertService.raise(WARNING, "Failed reading recorded data for " + typeName, logger, "SQLState " + e.getSQLState(), e);
                 }
             }, queryExecutor);
         }

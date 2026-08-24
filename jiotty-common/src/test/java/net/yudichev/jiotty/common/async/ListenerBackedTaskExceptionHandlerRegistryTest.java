@@ -9,7 +9,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.function.BiConsumer;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -61,5 +63,15 @@ class ListenerBackedTaskExceptionHandlerRegistryTest {
 
         verify(handler).accept("doing the thing", failure);
         verify(otherHandler).accept("doing the thing", failure);
+    }
+
+    /// Reporting sites call this from catch blocks that go on to rethrow the failure being reported, so a handler that throws must not replace it.
+    @Test
+    void aThrowingHandlerDoesNotEscapeToTheReportingSite() {
+        var failure = new RuntimeException("boom");
+        doThrow(new RuntimeException("handler is broken")).when(handler).accept("doing the thing", failure);
+        taskExceptionHandler.addExceptionHandler(handler);
+
+        assertThatCode(() -> taskExceptionHandler.onTaskException("doing the thing", failure)).doesNotThrowAnyException();
     }
 }

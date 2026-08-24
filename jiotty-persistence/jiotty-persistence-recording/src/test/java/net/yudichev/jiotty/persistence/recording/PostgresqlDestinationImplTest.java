@@ -1,10 +1,14 @@
 package net.yudichev.jiotty.persistence.recording;
 
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
+import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MoreThrowables;
+import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
@@ -50,6 +54,7 @@ class PostgresqlDestinationImplTest {
     private static final String SAMPLE_AUX_TABLE_NAME = "recorder_data_sample_init";
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
+    private final TestAdminAlertService alertService = new TestAdminAlertService();
     private DataSource dataSource;
     private SingleThreadedSchedulingExecutor domainExecutor;
     private SingleThreadedSchedulingExecutor recordingExecutor;
@@ -64,7 +69,7 @@ class PostgresqlDestinationImplTest {
         domainExecutor = new SingleThreadedSchedulingExecutor("domain-test");
         recordingExecutor = new SingleThreadedSchedulingExecutor("recording-test");
         Provider<SchedulingExecutor> domainExecutorProvider = () -> domainExecutor;
-        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, domainExecutorProvider);
+        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, domainExecutorProvider, new ListenerBackedTaskExceptionHandlerRegistry());
         domainService.start();
         initDestination();
     }
@@ -289,9 +294,77 @@ class PostgresqlDestinationImplTest {
         assertThat(tableExists(dataSource, SAMPLE_TABLE_NAME)).isFalse();
     }
 
+    /// A recorder whose domain cannot be initialised is disabled for the process's lifetime, so it raises an alert naming the type.
+    @Test
+    void recorderInitialisationFailureDisablesRecordingAndAlerts() throws Exception {
+        // Its own domain, so the failing init statement actually runs: a domain another test already initialised is skipped on the version check.
+        var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
+                                                            "initfailure",
+                                                            1,
+                                                            List.of("THIS IS NOT SQL;"),
+                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                            sampleColumns());
+
+        Recorder<SampleRecord> recorder = destination.createRecorder(config, Optional.empty());
+        flushExecutor(recordingExecutor);
+        flushExecutor(domainExecutor);
+        flushExecutor(recordingExecutor);
+        recorder.record(Instant.EPOCH, new SampleRecord("label", 1));
+        flushExecutor(recordingExecutor);
+
+        assertThat(alertService.activeAlertsById().values())
+                .singleElement()
+                .satisfies(alert -> {
+                    assertThat(alert.title()).isEqualTo("Recording disabled for initfailure");
+                    assertThat(alert.severity()).isEqualTo(AdminAlertSeverity.ERROR);
+                });
+        assertThat(tableExists(dataSource, "recorder_data_initfailure")).isFalse();
+    }
+
+    /// A run of failing inserts is one alert bundle carrying an event per failure — a SQLState that changes mid-outage still reaches an operator — and the
+    /// first insert that succeeds resolves it.
+    @Test
+    void insertFailuresRaiseOneAlertPerFailureAndTheNextSuccessResolvesIt() {
+        var connections = new FailableDataSourceFactory(dataSourceFactory);
+        destination = new PostgresqlDestinationImpl(() -> recordingExecutor, connections, domainService, alertService);
+        destination.initialise();
+        flushExecutor(recordingExecutor);
+
+        var config = new PostgresqlDestination.PsqlConfig<>(SampleRecord.class,
+                                                            "insertfailure",
+                                                            1,
+                                                            List.of(),
+                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                            sampleColumns());
+        Recorder<SampleRecord> recorder = destination.createRecorder(config, Optional.empty());
+        flushExecutor(recordingExecutor);
+        flushExecutor(domainExecutor);
+        flushExecutor(recordingExecutor);
+
+        connections.failing = true;
+        recorder.record(Instant.EPOCH, new SampleRecord("first", 1));
+        recorder.record(Instant.EPOCH.plusSeconds(1), new SampleRecord("second", 2));
+        flushExecutor(recordingExecutor);
+
+        assertThat(alertService.activeAlertsById()).hasSize(1);
+        String alertId = alertService.activeAlertsById().keySet().iterator().next();
+        assertThat(alertService.eventsByAlertId(alertId)).as("one event per failure, so a changing SQLState reaches an operator").hasSize(2);
+        // The recordable and the SQL stay out of the retained alert store (see workspace/GDPR.md §4.3); the SQLState is what an operator acts on.
+        assertThat(alertService.eventsByAlertId(alertId)).allSatisfy(event -> {
+            assertThat(event.description()).contains("08006");
+            assertThat(event.description()).doesNotContain("first", "second", "INSERT");
+        });
+
+        connections.failing = false;
+        recorder.record(Instant.EPOCH.plusSeconds(2), new SampleRecord("third", 3));
+        flushExecutor(recordingExecutor);
+
+        assertThat(alertService.activeAlertsById()).as("the successful insert proves the condition cleared").isEmpty();
+    }
+
     private void initDestination() {
         Provider<SchedulingExecutor> recordingExecutorProvider = () -> recordingExecutor;
-        destination = new PostgresqlDestinationImpl(recordingExecutorProvider, dataSourceFactory, domainService);
+        destination = new PostgresqlDestinationImpl(recordingExecutorProvider, dataSourceFactory, domainService, alertService);
         destination.initialise();
         flushExecutor(recordingExecutor);
     }
@@ -365,6 +438,35 @@ class PostgresqlDestinationImplTest {
 
     private static void flushExecutor(SingleThreadedSchedulingExecutor executor) {
         MoreThrowables.asUnchecked(() -> executor.submit(() -> null).get(5, SECONDS));
+    }
+
+    /// Switches between the real pool and one whose connections fail, so a test can let start-up succeed and then break the inserts.
+    private static final class FailableDataSourceFactory implements DataSourceFactory {
+        private final DataSourceFactory delegate;
+        private boolean failing;
+
+        private FailableDataSourceFactory(DataSourceFactory delegate) {
+            this.delegate = checkNotNull(delegate);
+        }
+
+        @Override
+        public CloseableDataSource create() {
+            CloseableDataSource delegateDataSource = delegate.create();
+            return new CloseableDataSource() {
+                @Override
+                public Connection getConnection() throws SQLException {
+                    if (failing) {
+                        throw new SQLException("pool is down", "08006");
+                    }
+                    return delegateDataSource.getConnection();
+                }
+
+                @Override
+                public void close() {
+                    delegateDataSource.close();
+                }
+            };
+        }
     }
 
     private record SampleRecord(String label, int amount) {

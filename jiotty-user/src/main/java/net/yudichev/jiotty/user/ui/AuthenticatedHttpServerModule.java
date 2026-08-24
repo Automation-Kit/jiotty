@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.ui;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Key;
 import com.google.inject.multibindings.Multibinder;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
@@ -17,6 +18,7 @@ import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 
 public final class AuthenticatedHttpServerModule extends BaseExposedKeyModule<UIHttpServer> {
     private final BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec;
+    private final BindingSpec<AdminAlertService> adminAlertServiceSpec;
     private final BindingSpec<Integer> listenPortSpec;
     private final BindingSpec<Double> preAuthRequestsPerSecondSpec;
     private final BindingSpec<Integer> maxInFlightVerificationsSpec;
@@ -26,6 +28,7 @@ public final class AuthenticatedHttpServerModule extends BaseExposedKeyModule<UI
     private final List<BindingSpec<ServletMount>> servletMountSpecs;
 
     private AuthenticatedHttpServerModule(BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec,
+                                          BindingSpec<AdminAlertService> adminAlertServiceSpec,
                                           BindingSpec<Integer> listenPortSpec,
                                           BindingSpec<Double> preAuthRequestsPerSecondSpec,
                                           BindingSpec<Integer> maxInFlightVerificationsSpec,
@@ -36,6 +39,7 @@ public final class AuthenticatedHttpServerModule extends BaseExposedKeyModule<UI
                                           SpecifiedAnnotation specifiedAnnotation) {
         super(specifiedAnnotation);
         this.userTokenAuthoriserSpec = checkNotNull(userTokenAuthoriserSpec, "userTokenAuthoriserSpec");
+        this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec, "adminAlertServiceSpec");
         this.listenPortSpec = checkNotNull(listenPortSpec, "listenPortSpec");
         this.preAuthRequestsPerSecondSpec = checkNotNull(preAuthRequestsPerSecondSpec, "preAuthRequestsPerSecondSpec");
         this.maxInFlightVerificationsSpec = checkNotNull(maxInFlightVerificationsSpec, "maxInFlightVerificationsSpec");
@@ -54,6 +58,9 @@ public final class AuthenticatedHttpServerModule extends BaseExposedKeyModule<UI
         userTokenAuthoriserSpec.bind(UserTokenAuthoriser.class)
                                .annotatedWith(AuthenticatedUIRequestAuthoriser.Dependency.class)
                                .installedBy(this::installLifecycleComponentModule);
+        adminAlertServiceSpec.bind(AdminAlertService.class)
+                             .annotatedWith(AuthenticatedUIRequestAuthoriser.Dependency.class)
+                             .installedBy(this::installLifecycleComponentModule);
         listenPortSpec.bind(int.class).annotatedWith(UIHttpServerImpl.ListenPort.class).installedBy(this::installLifecycleComponentModule);
         preAuthRequestsPerSecondSpec.bind(Double.class)
                                     .annotatedWith(PreAuthAdmissionControl.RequestsPerSecond.class)
@@ -88,6 +95,7 @@ public final class AuthenticatedHttpServerModule extends BaseExposedKeyModule<UI
     public static final class Builder extends BaseModuleBuilder<UIHttpServer, Builder> {
         private final List<BindingSpec<ServletMount>> servletMountSpecs = new ArrayList<>();
         private BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec;
+        private BindingSpec<AdminAlertService> adminAlertServiceSpec = BindingSpec.boundTo(AdminAlertService.class);
         private BindingSpec<Integer> listenPortSpec = BindingSpec.literally(0);
         private BindingSpec<Double> preAuthRequestsPerSecondSpec = BindingSpec.literally(10.0);
         private BindingSpec<Integer> maxInFlightVerificationsSpec = BindingSpec.literally(20);
@@ -100,6 +108,13 @@ public final class AuthenticatedHttpServerModule extends BaseExposedKeyModule<UI
 
         public Builder setUserTokenAuthoriser(BindingSpec<UserTokenAuthoriser> userTokenAuthoriserSpec) {
             this.userTokenAuthoriserSpec = checkNotNull(userTokenAuthoriserSpec, "userTokenAuthoriserSpec");
+            return this;
+        }
+
+        /// Supplies the [AdminAlertService] a technical authorisation failure — which locks the user out — is escalated through. Defaults to whatever the
+        /// installing injector binds [AdminAlertService] to.
+        public Builder withAdminAlertService(BindingSpec<AdminAlertService> adminAlertServiceSpec) {
+            this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec, "adminAlertServiceSpec");
             return this;
         }
 
@@ -148,6 +163,7 @@ public final class AuthenticatedHttpServerModule extends BaseExposedKeyModule<UI
         @Override
         public ExposedKeyModule<UIHttpServer> build() {
             return new AuthenticatedHttpServerModule(userTokenAuthoriserSpec,
+                                                     adminAlertServiceSpec,
                                                      listenPortSpec,
                                                      preAuthRequestsPerSecondSpec,
                                                      maxInFlightVerificationsSpec,

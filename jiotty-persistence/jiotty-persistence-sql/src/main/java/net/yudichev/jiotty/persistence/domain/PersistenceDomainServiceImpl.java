@@ -3,6 +3,7 @@ package net.yudichev.jiotty.persistence.domain;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
@@ -23,7 +24,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static net.yudichev.jiotty.persistence.domain.PersistenceDomainModule.Dependency;
 
-@SuppressWarnings("JDBCPrepareStatementWithNonConstantString")
+// LoggingSimilarMessage — every SQL-execution helper logs the resolved statement with the same "Executing" debug line by convention
+@SuppressWarnings({"JDBCPrepareStatementWithNonConstantString", "LoggingSimilarMessage"})
 public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent implements PersistenceDomainService {
     private static final Logger logger = LogManager.getLogger(PersistenceDomainServiceImpl.class);
     private static final String META_TABLE = "domain_meta";
@@ -36,15 +38,18 @@ public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent i
 
     private final DataSourceFactory dataSourceFactory;
     private final Provider<SchedulingExecutor> executorProvider;
+    private final TaskFailureReporter taskFailureReporter;
 
     private CloseableDataSource dataSource;
     private SchedulingExecutor executor;
 
     @Inject
     public PersistenceDomainServiceImpl(@Dependency DataSourceFactory dataSourceFactory,
-                                        @Dependency Provider<SchedulingExecutor> executorProvider) {
+                                        @Dependency Provider<SchedulingExecutor> executorProvider,
+                                        TaskFailureReporter taskFailureReporter) {
         this.dataSourceFactory = checkNotNull(dataSourceFactory);
         this.executorProvider = checkNotNull(executorProvider);
+        this.taskFailureReporter = checkNotNull(taskFailureReporter);
     }
 
     @Override
@@ -94,7 +99,9 @@ public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent i
                 try {
                     connection.rollback();
                 } catch (SQLException rollbackException) {
-                    logger.warn("[{}] Rollback failed", domainName, rollbackException);
+                    // The connection goes back to the pool mid-transaction, so this is escalated; the failure that caused the rollback is rethrown below and
+                    // reported in its own right.
+                    taskFailureReporter.onTaskException("rolling back schema migration of domain " + domainName, rollbackException);
                 }
                 throw e;
             } finally {

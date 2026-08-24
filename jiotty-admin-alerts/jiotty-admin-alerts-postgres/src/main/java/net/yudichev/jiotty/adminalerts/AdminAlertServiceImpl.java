@@ -3,6 +3,8 @@ package net.yudichev.jiotty.adminalerts;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -59,6 +61,8 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
     private final Provider<SchedulingExecutor> executorProvider;
     private final PersistenceDomainService persistenceDomainService;
     private final CurrentDateTimeProvider timeProvider;
+    /// Counts raises that failed to reach the store.
+    private final Counter raiseFailures;
     private final int maxBundles;
     private final int maxEventsPerBundle;
     private final PersistenceDomainConfig domainConfig;
@@ -87,7 +91,9 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
                                  @DomainName String domainName,
                                  @Migrator PersistenceDomainMigrator migrator,
                                  @MaxBundles int maxBundles,
-                                 @MaxEventsPerBundle int maxEventsPerBundle) {
+                                 @MaxEventsPerBundle int maxEventsPerBundle,
+                                 MeterRegistry meterRegistry) {
+        raiseFailures = checkNotNull(meterRegistry, "meterRegistry").counter("admin_alert_raise_failures_total");
         this.dataSourceFactory = checkNotNull(dataSourceFactory, "dataSourceFactory");
         this.executorProvider = checkNotNull(executorProvider, "executorProvider");
         this.persistenceDomainService = checkNotNull(persistenceDomainService, "persistenceDomainService");
@@ -153,9 +159,21 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
     @Override
     public String raise(AdminAlertData data) {
         checkNotNull(data, "data");
-        return whenStartedAndNotLifecycling(() -> {
-            AdminAlertData effectiveData = augmentWithFrameworkLabels(data);
-            String key = effectiveData.key();
+        AdminAlertData effectiveData = augmentWithFrameworkLabels(data);
+        String key = effectiveData.key();
+        try {
+            raiseStarted(effectiveData, key);
+        } catch (RuntimeException e) {
+            // [AdminAlertService#raise] is total by contract: callers raise from catch blocks that must go on to complete a request or rethrow, so a throw
+            // here would turn a reported failure into a worse one.
+            raiseFailures.increment();
+            logger.warn("Failed to raise alert with key {}", key, e);
+        }
+        return key;
+    }
+
+    private void raiseStarted(AdminAlertData effectiveData, String key) {
+        whenStartedAndNotLifecycling(() -> {
             // The alert store holds the description, which callers are free to fill with personal data and some deliberately do, so support can act on it.
             logger.info("NEW ALERT {} [{}]", effectiveData.title(), key);
             // Stamped on the calling thread: the write runs on the executor, which under a backlog lands later
@@ -164,13 +182,14 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
             executor.submit(() -> doRaise(effectiveData, raisedAt))
                     .whenComplete((_, error) -> {
                         if (error != null) {
+                            // The lost thing is an alert, so the counter is what an operator is paged on; see workspace/resource-metrics.md.
+                            raiseFailures.increment();
                             // WARN, not INFO, despite the jiotty library log rule: a failed alert raise is an
                             // operationally significant failure (the alert is lost and the admin action will
                             // never happen). Do not demote to INFO.
                             logger.warn("Failed to raise alert with key {}", key, error);
                         }
                     });
-            return key;
         });
     }
 

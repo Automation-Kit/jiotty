@@ -12,6 +12,7 @@ import jakarta.servlet.AsyncListener;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
@@ -27,6 +28,7 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.ERROR;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.CONFLICT_409;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
@@ -45,6 +47,7 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
     private final UserTokenAuthoriser userTokenAuthoriser;
     private final PreAuthAdmissionControl admissionControl;
     private final PerUidRateLimiter perUidRateLimiter;
+    private final AdminAlertService alertService;
     private final MeterRegistry meterRegistry;
     private final Timer missingTokenAuthTimer;
     private final Timer authenticatedAuthTimer;
@@ -54,10 +57,12 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
     AuthenticatedUIRequestAuthoriser(@Dependency UserTokenAuthoriser userTokenAuthoriser,
                                      PreAuthAdmissionControl admissionControl,
                                      PerUidRateLimiter perUidRateLimiter,
+                                     @Dependency AdminAlertService alertService,
                                      MeterRegistry meterRegistry) {
         this.userTokenAuthoriser = checkNotNull(userTokenAuthoriser, "userTokenAuthoriser");
         this.admissionControl = checkNotNull(admissionControl, "admissionControl");
         this.perUidRateLimiter = checkNotNull(perUidRateLimiter, "perUidRateLimiter");
+        this.alertService = checkNotNull(alertService, "alertService");
         this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
         missingTokenAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "missing_token");
         authenticatedAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "authenticated");
@@ -125,7 +130,7 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
             } catch (RuntimeException e) {
                 // Unlike a synchronous service() call, nothing above this body turns a thrown exception into a response: it would hang the request until the
                 // process dies. A client disconnecting mid-verification makes the write throw, so this path is a live one.
-                logger.error("Failed to complete authorisation of a request", e);
+                alertService.raise(ERROR, "Failed to complete authorisation of a request", logger, e);
                 completeExceptionally(asyncContext, response);
             } finally {
                 permit.release();

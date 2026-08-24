@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableList;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
@@ -108,6 +109,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     private final String updateUserSql;
 
     private final Listeners<String> changeListeners = new Listeners<>();
+    private final TaskFailureReporter taskFailureReporter;
 
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
@@ -120,7 +122,9 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                                @SchemaVersion int schemaVersion,
                                @DomainName String domainName,
                                @InitStatements List<String> initStatements,
-                               @Migrator PersistenceDomainMigrator migrator) {
+                               @Migrator PersistenceDomainMigrator migrator,
+                               TaskFailureReporter taskFailureReporter) {
+        this.taskFailureReporter = checkNotNull(taskFailureReporter, "taskFailureReporter");
         this.dataSourceFactory = checkNotNull(dataSourceFactory, "dataSourceFactory");
         this.executorProvider = checkNotNull(executorProvider, "executorProvider");
         this.persistenceDomainService = checkNotNull(persistenceDomainService, "persistenceDomainService");
@@ -805,11 +809,13 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         checkArgument(!userId.isBlank(), "userId must not be blank");
     }
 
-    private static void rollbackQuietly(Connection connection) {
+    /// Rolls back after a failed write. A rollback that itself fails returns the connection to the pool mid-transaction, so it is escalated; the failure that
+    /// caused the rollback is reported by the caller in its own right.
+    private void rollbackQuietly(Connection connection) {
         try {
             connection.rollback();
         } catch (SQLException e) {
-            logger.warn("Rollback failed", e);
+            taskFailureReporter.onTaskException("rolling back a user data write", e);
         }
     }
 

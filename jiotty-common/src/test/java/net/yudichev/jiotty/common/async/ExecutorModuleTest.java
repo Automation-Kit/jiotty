@@ -19,6 +19,8 @@ class ExecutorModuleTest {
         injector.getBinding(module.getExposedKey());
         // Must be a singleton: the executor injects the same registry instance that callers register handlers on, else registered handlers never see failures.
         assertThat(injector.getInstance(TaskExceptionHandlerRegistry.class)).isSameAs(injector.getInstance(TaskExceptionHandlerRegistry.class));
+        // The reporting half must be that same instance, else a component reporting through it reaches none of the registered handlers.
+        assertThat(injector.getInstance(TaskFailureReporter.class)).isSameAs(injector.getInstance(TaskExceptionHandlerRegistry.class));
     }
 
     @Test

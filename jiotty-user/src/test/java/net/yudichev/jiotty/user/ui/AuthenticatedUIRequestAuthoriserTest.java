@@ -8,6 +8,8 @@ import jakarta.servlet.AsyncListener;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
+import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
@@ -66,6 +68,8 @@ class AuthenticatedUIRequestAuthoriserTest {
 
     @Mock
     private UserTokenAuthoriser userTokenAuthoriser;
+    @Mock
+    private AdminAlertService alertService;
     private AuthenticatedUIRequestAuthoriser authoriser;
     @Mock
     private HttpServletRequest request;
@@ -88,7 +92,7 @@ class AuthenticatedUIRequestAuthoriserTest {
         // Generous limits so the existing cases exercise the authenticated path; the admission cases below tighten them.
         perUidRateLimiter = perUidLimiterWith(1000.0);
         var admissionControl = new PreAuthAdmissionControl(clock, 1000.0, 1000, false, meterRegistry);
-        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, admissionControl, perUidRateLimiter, meterRegistry);
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, admissionControl, perUidRateLimiter, alertService, meterRegistry);
     }
 
     /// A source past its rate is refused before the request goes async, so it never reaches token verification.
@@ -130,7 +134,7 @@ class AuthenticatedUIRequestAuthoriserTest {
     void rejectsWithTooManyRequestsWhenTheUserIsPastItsApiRate(@Mock HttpServletRequest laterRequest) throws Exception {
         var perUid = perUidLimiterWith(1.0);
         var control = new PreAuthAdmissionControl(clock, 1000.0, 1, false, meterRegistry);
-        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUid, meterRegistry);
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUid, alertService, meterRegistry);
         perUid.tryAdmit(PROFILE.id());   // spends this user's allowance
         arrangeAdmittedRequestAwaitingVerification(laterRequest);
         prepareAsyncContextStart();
@@ -184,7 +188,7 @@ class AuthenticatedUIRequestAuthoriserTest {
         // Its own registry: a gauge name registered by the fixture's control would otherwise win, and this case asserts on occupancy.
         var ownRegistry = new SimpleMeterRegistry();
         var control = new PreAuthAdmissionControl(clock, 1000.0, 1, false, ownRegistry);
-        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUidRateLimiter, ownRegistry);
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUidRateLimiter, alertService, ownRegistry);
         arrangeAdmittedRequestAwaitingVerification(laterRequest);
 
         authoriser.authorise(request, response, chain);
@@ -230,6 +234,8 @@ class AuthenticatedUIRequestAuthoriserTest {
 
         verify(asyncContext).complete();
         assertThat(control.tryAdmit(laterRequest)).as("the slot returns even though writing the failure blew up").isEqualTo(ADMITTED);
+        // A technical authorisation failure locks the user out, so it reaches an operator.
+        verify(alertService).raise(eq(AdminAlertSeverity.ERROR), eq("Failed to complete authorisation of a request"), any(), any(Throwable.class));
     }
 
     /// An [Error] means the JVM is in no state to serve this request, so it propagates untouched rather than being reported as a failed authorisation — but
@@ -397,7 +403,7 @@ class AuthenticatedUIRequestAuthoriserTest {
     /// Builds a control with the given limits and rewires the authoriser around it, which every admission case needs before it can arrange anything else.
     private PreAuthAdmissionControl admissionControlWith(double requestsPerSecond, int maxInFlightVerifications) {
         var control = new PreAuthAdmissionControl(clock, requestsPerSecond, maxInFlightVerifications, false, meterRegistry);
-        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUidRateLimiter, meterRegistry);
+        authoriser = new AuthenticatedUIRequestAuthoriser(userTokenAuthoriser, control, perUidRateLimiter, alertService, meterRegistry);
         return control;
     }
 

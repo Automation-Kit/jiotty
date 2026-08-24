@@ -261,7 +261,7 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
     /// allocation-free via [Runnables#runGuarded], so an immediate submit wraps `command` in a single object rather than a guard wrapper plus a slot wrapper.
     private void runImmediate(String taskName, Runnable command) {
         pendingImmediateTasks.decrementAndGet();
-        Runnables.runGuarded(logger, taskName, command, taskExceptionHandler);
+        Runnables.runGuarded(taskName, command, taskExceptionHandler);
     }
 
     private static void removeMeters(MeterRegistry meterRegistry, String name, String family) {
@@ -271,7 +271,7 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
     }
 
     private Runnable guard(String task, Runnable command) {
-        return Runnables.guarded(logger, task, command, taskExceptionHandler);
+        return Runnables.guarded(task, command, taskExceptionHandler);
     }
 
     private Closeable register(Future<?> scheduledFuture) {

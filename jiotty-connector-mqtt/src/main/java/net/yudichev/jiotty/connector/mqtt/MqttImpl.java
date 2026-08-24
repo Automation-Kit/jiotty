@@ -7,9 +7,11 @@ import net.yudichev.jiotty.common.async.AsyncOperationRetry;
 import net.yudichev.jiotty.common.async.AsyncOperationRetryImpl;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.lang.Runnables;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.lang.backoff.NanoClock;
@@ -57,7 +59,6 @@ import static net.yudichev.jiotty.common.lang.Closeable.noop;
 import static net.yudichev.jiotty.common.lang.CompositeException.runForAll;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
-import static net.yudichev.jiotty.common.lang.Runnables.guarded;
 
 class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     private static final Logger logger = LogManager.getLogger(MqttImpl.class);
@@ -67,6 +68,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     private final Map<String, Set<Subscription>> subscriptionsByFilter = new HashMap<>();
     private final IMqttAsyncClient client;
     private final ExecutorFactory executorFactory;
+    private final TaskFailureReporter taskFailureReporter;
     private final String name;
     private final double connectBackoffRandomisationFactor;
     private final NanoClock nanoClock;
@@ -78,17 +80,21 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     MqttImpl(IMqttAsyncClient client,
              ExecutorFactory executorFactory,
              @Dependency ThresholdThrottlingConsumerFactory<Throwable> throttledLoggerFactory,
-             @Dependency Consumer<MqttConnectOptions> mqttConnectOptionsCustomiser) {
-        this(client, executorFactory, throttledLoggerFactory, mqttConnectOptionsCustomiser, System::nanoTime, ExponentialBackOff.DEFAULT_RANDOMIZATION_FACTOR);
+             @Dependency Consumer<MqttConnectOptions> mqttConnectOptionsCustomiser,
+             TaskFailureReporter taskFailureReporter) {
+        this(client, executorFactory, throttledLoggerFactory, mqttConnectOptionsCustomiser, taskFailureReporter,
+             System::nanoTime, ExponentialBackOff.DEFAULT_RANDOMIZATION_FACTOR);
     }
 
     MqttImpl(IMqttAsyncClient client,
              ExecutorFactory executorFactory,
              ThresholdThrottlingConsumerFactory<Throwable> throttledLoggerFactory,
              Consumer<MqttConnectOptions> mqttConnectOptionsCustomiser,
+             TaskFailureReporter taskFailureReporter,
              NanoClock nanoClock,
              double connectBackoffRandomisationFactor) {
         this.executorFactory = checkNotNull(executorFactory);
+        this.taskFailureReporter = checkNotNull(taskFailureReporter);
         this.throttledLoggerFactory = checkNotNull(throttledLoggerFactory);
         mqttConnectOptions = new MqttConnectOptions();
         mqttConnectOptionsCustomiser.accept(mqttConnectOptions);
@@ -183,7 +189,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     @Override
     public Closeable subscribe(String topicFilter, int qos, BiConsumer<String, String> dataCallback) {
         checkStarted();
-        BiConsumer<String, MqttMessage> callback = exceptionLogging(new MessageToStringDataCallback(dataCallback));
+        BiConsumer<String, MqttMessage> callback = guardedCallback(new MessageToStringDataCallback(dataCallback));
         var subscription = new Subscription(qos, callback);
         executor.execute(() -> {
             deliverImage(topicFilter, callback);
@@ -202,7 +208,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                 logger.debug("Skip unsubscribing - already stopped");
                 return;
             }
-            executor.execute(guarded(logger, "unsubscribe", () ->
+            executor.execute("unsubscribe", () ->
                     subscriptionsByFilter.computeIfPresent(topicFilter, (_, subscriptions) -> {
                         subscriptions.remove(subscription);
                         if (subscriptions.isEmpty()) {
@@ -220,7 +226,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                             return null;
                         }
                         return subscriptions;
-                    })));
+                    }));
         });
     }
 
@@ -239,14 +245,10 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         return connectionStatusListeners.addListener(executor, () -> Optional.ofNullable(connectionStatus), listener);
     }
 
-    private static <T, U> BiConsumer<T, U> exceptionLogging(BiConsumer<T, U> delegate) {
-        return (t, u) -> {
-            try {
-                delegate.accept(t, u);
-            } catch (RuntimeException e) {
-                logger.error("Error handling message", e);
-            }
-        };
+    /// Wraps a per-subscriber callback so a throwing subscriber is contained: its failure is reported, and the filter's remaining subscribers receive the
+    /// message.
+    private <T, U> BiConsumer<T, U> guardedCallback(BiConsumer<T, U> delegate) {
+        return (t, u) -> Runnables.runGuarded("handling mqtt message", () -> delegate.accept(t, u), taskFailureReporter::onTaskException);
     }
 
     /// Subscribes the broker to `filter` with a single fan-out listener that dispatches each message to every current subscriber of the filter, at the
@@ -274,11 +276,13 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         }));
     }
 
+    /// Delivers the last known message of every topic matching `topicFilter` to a newly-subscribing `callback`, which is already a [#guardedCallback] — so
+    /// each topic's delivery is contained on its own.
     private void deliverImage(String topicFilter, BiConsumer<String, MqttMessage> callback) {
         lastReceivedMessageByTopic.forEach((topic, message) -> {
             if (MqttTopic.isMatched(topicFilter, topic)) {
                 logger.debug("Delivering last known message {} -> {}", topic, message);
-                guarded(logger, "deliver last known message", () -> callback.accept(topic, message)).run();
+                callback.accept(topic, message);
             }
         });
     }

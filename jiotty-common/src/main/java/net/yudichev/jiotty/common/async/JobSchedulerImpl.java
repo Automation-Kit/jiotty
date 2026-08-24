@@ -29,16 +29,19 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
     private final ExecutorFactory executorFactory;
     private final CurrentDateTimeProvider currentDateTimeProvider;
     private final ZoneId zoneId;
+    private final TaskFailureReporter taskFailureReporter;
 
     private SchedulingExecutor sharedScheduler;
 
     @Inject
     public JobSchedulerImpl(ExecutorFactory executorFactory,
                             CurrentDateTimeProvider currentDateTimeProvider,
-                            @Dependency ZoneId zoneId) {
+                            @Dependency ZoneId zoneId,
+                            TaskFailureReporter taskFailureReporter) {
         this.executorFactory = checkNotNull(executorFactory);
         this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider);
         this.zoneId = checkNotNull(zoneId);
+        this.taskFailureReporter = checkNotNull(taskFailureReporter);
     }
 
     @SuppressWarnings("ReturnOfInnerClass") // we are a singleton
@@ -98,7 +101,8 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
         protected ScheduledJob(Scheduler scheduler, String jobName, Runnable task) {
             this.scheduler = checkNotNull(scheduler);
             this.jobName = checkNotNull(jobName);
-            this.task = Runnables.guarded(logger, String.format("executing job %s", jobName), task);
+            // Guarded so a failing run reports its failure and goes on to schedule the next one.
+            this.task = Runnables.guarded("executing job " + jobName, task, taskFailureReporter::onTaskException);
             startTime = currentDateTimeProvider.currentInstant().atZone(zoneId);
         }
 

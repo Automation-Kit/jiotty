@@ -21,6 +21,7 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR
 import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
+import static net.yudichev.jiotty.user.ui.UIServerModule.Dependency;
 
 /// Handles `GET /ui/api/displayables/item?id=...` — returns the named displayable's DTO.
 public final class GetDisplayableItemHandler extends BaseLifecycleComponent implements ApiPathHandler {
@@ -35,7 +36,7 @@ public final class GetDisplayableItemHandler extends BaseLifecycleComponent impl
 
     @Inject
     public GetDisplayableItemHandler(DisplayableRegistry registry,
-                                     @UIServerModule.AdminAlert AdminAlertService alertService,
+                                     @Dependency AdminAlertService alertService,
                                      @UIExecutor Provider<SchedulingExecutor> executorProvider) {
         this.registry = checkNotNull(registry, "registry");
         this.alertService = checkNotNull(alertService, "alertService");

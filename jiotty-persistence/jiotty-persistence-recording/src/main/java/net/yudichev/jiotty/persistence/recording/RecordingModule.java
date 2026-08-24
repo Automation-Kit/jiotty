@@ -3,6 +3,7 @@ package net.yudichev.jiotty.persistence.recording;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.assistedinject.FactoryModuleBuilder;
+import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
@@ -31,13 +32,16 @@ public final class RecordingModule extends BaseExposedKeyModule<RecordingService
     public static final String EXECUTOR_THREAD_NAME = "PSQL";
 
     private final BindingSpec<DataSourceFactory> dataSourceFactorySpec;
+    private final BindingSpec<AdminAlertService> adminAlertServiceSpec;
     private final boolean readOnly;
 
     private RecordingModule(BindingSpec<DataSourceFactory> dataSourceFactorySpec,
+                            BindingSpec<AdminAlertService> adminAlertServiceSpec,
                             SpecifiedAnnotation specifiedAnnotation,
                             boolean readOnly) {
         super(specifiedAnnotation);
         this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
+        this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec);
         this.readOnly = readOnly;
     }
 
@@ -58,6 +62,9 @@ public final class RecordingModule extends BaseExposedKeyModule<RecordingService
         dataSourceFactorySpec.bind(DataSourceFactory.class)
                              .annotatedWith(Dependency.class)
                              .installedBy(this::installLifecycleComponentModule);
+        adminAlertServiceSpec.bind(AdminAlertService.class)
+                             .annotatedWith(Dependency.class)
+                             .installedBy(this::installLifecycleComponentModule);
         install(new FactoryModuleBuilder()
                         .implement(PostgresqlDestination.class, readOnly ? ReadOnlyPostgresqlDestination.class : PostgresqlDestinationImpl.class)
                         .build(PostgresqlDestinationFactory.class));
@@ -73,10 +80,18 @@ public final class RecordingModule extends BaseExposedKeyModule<RecordingService
 
     public static final class Builder extends BaseModuleBuilder<RecordingService, Builder> {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec = boundTo(DataSourceFactory.class);
+        private BindingSpec<AdminAlertService> adminAlertServiceSpec = boundTo(AdminAlertService.class);
         private boolean readOnly;
 
         public Builder withDataSourceFactory(BindingSpec<DataSourceFactory> dataSourceFactorySpec) {
             this.dataSourceFactorySpec = checkNotNull(dataSourceFactorySpec);
+            return this;
+        }
+
+        /// Supplies the [AdminAlertService] the destinations escalate lost recordings through. Defaults to whatever the installing injector binds
+        /// [AdminAlertService] to.
+        public Builder withAdminAlertService(BindingSpec<AdminAlertService> adminAlertServiceSpec) {
+            this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec);
             return this;
         }
 
@@ -87,7 +102,7 @@ public final class RecordingModule extends BaseExposedKeyModule<RecordingService
 
         @Override
         public ExposedKeyModule<RecordingService> build() {
-            return new RecordingModule(dataSourceFactorySpec, specifiedAnnotation(), readOnly);
+            return new RecordingModule(dataSourceFactorySpec, adminAlertServiceSpec, specifiedAnnotation(), readOnly);
         }
     }
 

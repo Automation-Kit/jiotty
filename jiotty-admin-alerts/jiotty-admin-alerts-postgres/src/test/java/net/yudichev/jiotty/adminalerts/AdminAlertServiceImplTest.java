@@ -1,6 +1,9 @@
 package net.yudichev.jiotty.adminalerts;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.inject.Provider;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
@@ -43,6 +46,7 @@ class AdminAlertServiceImplTest {
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
 
+    private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
     private ProgrammableClock clock;
     private SingleThreadedSchedulingExecutor executor;
     private PersistenceDomainServiceImpl domainService;
@@ -66,7 +70,7 @@ class AdminAlertServiceImplTest {
         executor = new SingleThreadedSchedulingExecutor("admin-alerts-test");
         Provider<SchedulingExecutor> executorProvider = () -> executor;
         dataSourceFactory = postgres.dataSourceFactory();
-        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider);
+        domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider, new ListenerBackedTaskExceptionHandlerRegistry());
         domainService.start();
         service = new AdminAlertServiceImpl(dataSourceFactory,
                                             executorProvider,
@@ -76,7 +80,8 @@ class AdminAlertServiceImplTest {
                                             AdminAlertSchema.DEFAULT_DOMAIN_NAME,
                                             PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                             maxBundles,
-                                            maxEventsPerBundle);
+                                            maxEventsPerBundle,
+                                            meterRegistry);
         service.start();
     }
 
@@ -339,7 +344,8 @@ class AdminAlertServiceImplTest {
                                                            AdminAlertSchema.DEFAULT_DOMAIN_NAME,
                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                            100,
-                                                           100))
+                                                           100,
+                                                           meterRegistry))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -353,7 +359,8 @@ class AdminAlertServiceImplTest {
                                                            AdminAlertSchema.DEFAULT_DOMAIN_NAME,
                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                            0,
-                                                           100))
+                                                           100,
+                                                           meterRegistry))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AdminAlertServiceImpl(postgres.dataSourceFactory(),
                                                            () -> executor,
@@ -363,7 +370,8 @@ class AdminAlertServiceImplTest {
                                                            AdminAlertSchema.DEFAULT_DOMAIN_NAME,
                                                            PersistenceDomainMigrator.FAIL_ON_MIGRATION,
                                                            100,
-                                                           0))
+                                                           0,
+                                                           meterRegistry))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -386,6 +394,23 @@ class AdminAlertServiceImplTest {
             throw new RuntimeException(e);
         }
         return rows;
+    }
+
+    /// Callers raise from catch blocks that must go on to complete a request or rethrow, so a stopped service answers with the same key it would have returned
+    /// while running, and counts the loss. See [AdminAlertService#raise]'s `@implSpec`.
+    @Test
+    void raiseOnAStoppedServiceReturnsTheKeyAndCountsTheLoss() {
+        AdminAlertData alertData = data("Gone", "d", AdminAlertSeverity.ERROR, Map.of());
+        String keyWhileStarted = service.raise(alertData);
+        flush();
+
+        // This test owns the stop, so it clears the field tearDown would stop again.
+        AdminAlertServiceImpl stopped = service;
+        service = null;
+        stopped.stop();
+
+        assertThat(stopped.raise(alertData)).isEqualTo(keyWhileStarted);
+        assertThat(meterRegistry.get("admin_alert_raise_failures_total").counter().count()).isEqualTo(1.0);
     }
 
     private static <T> T await(CompletableFuture<T> future) {

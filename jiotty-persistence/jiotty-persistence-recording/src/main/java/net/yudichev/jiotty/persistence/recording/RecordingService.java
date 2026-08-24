@@ -10,9 +10,8 @@ public interface RecordingService {
         return createRecorder(destinationConfig, Optional.empty());
     }
 
-    default <R> Recorder<R> createRecorder(Set<Destination.Config<R>> destinationConfigs, Optional<String> userId) {
-        return new CompositeRecorder<>(destinationConfigs.stream().map(config -> createRecorder(config, userId)).toList());
-    }
+    /// Creates one recorder fanning out to every destination in `destinationConfigs`, so one destination failing does not stop the others.
+    <R> Recorder<R> createRecorder(Set<Destination.Config<R>> destinationConfigs, Optional<String> userId);
 
     default <R> Recorder<R> createRecorder(Set<Destination.Config<R>> destinationConfigs) {
         return createRecorder(destinationConfigs, Optional.empty());
