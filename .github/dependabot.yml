@@ -1,5 +1,5 @@
-# open-pull-requests-limit: 0 disables version updates; Dependabot's security updates read the grouping
-# below. Each security PR is gated by the Build workflow before merge.
+# open-pull-requests-limit: 0 disables version updates for the ecosystem carrying it; Dependabot's security
+# updates are unaffected by it. Each PR is gated by the Build workflow before merge.
 # Security review: car-server M-7 (supply chain), car-ui N7 (residual advisories).
 version: 2
 updates:
@@ -23,10 +23,23 @@ updates:
     commit-message:
       prefix: "deps"
 
+  # Version updates are on here because a SHA pin is immutable: an action release carrying no advisory moves
+  # nothing on its own.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
+    ignore:
+      # Crossing an action major moves the Node runtime the runner must provide, so it is a decision rather
+      # than a bump, and `/refresh-dependencies actions` is where it is taken.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "ci"
