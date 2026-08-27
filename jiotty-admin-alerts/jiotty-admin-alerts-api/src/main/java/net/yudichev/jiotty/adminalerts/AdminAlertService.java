@@ -96,6 +96,14 @@ public interface AdminAlertService {
     /// @return the number of alerts deleted
     CompletableFuture<Integer> deleteResolvedOlderThan(Duration retention);
 
+    /// Deletes every alert whose [AdminAlertData#labels()] map holds `labelName`=`labelValue`, resolved or not, along with the events beneath them. Unlike
+    /// [#deleteResolvedOlderThan] this is bounded by the label rather than by age and resolution, so it reaches an alert no one has resolved.
+    ///
+    /// @param labelName  label key to match; must be non-blank
+    /// @param labelValue value that key must equal in full; must be non-blank, and is kept out of any failure message, so it may carry personal data
+    /// @return the number of alerts deleted
+    CompletableFuture<Integer> deleteByLabel(String labelName, String labelValue);
+
     enum ResolveByIdOutcome {
         /// The alert existed, was active, and has just been resolved.
         RESOLVED,

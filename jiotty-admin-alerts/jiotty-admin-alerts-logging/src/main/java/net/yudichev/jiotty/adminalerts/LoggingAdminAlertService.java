@@ -52,6 +52,11 @@ public final class LoggingAdminAlertService implements AdminAlertService {
         return completedFuture(0);
     }
 
+    @Override
+    public CompletableFuture<Integer> deleteByLabel(String labelName, String labelValue) {
+        return completedFuture(0);
+    }
+
     private static Level levelOf(AdminAlertSeverity severity) {
         return switch (severity) {
             case WARNING -> Level.WARN;

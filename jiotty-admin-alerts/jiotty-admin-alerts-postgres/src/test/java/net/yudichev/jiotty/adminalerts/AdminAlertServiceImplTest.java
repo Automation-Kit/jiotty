@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.sql.Connection;
@@ -321,6 +322,56 @@ class AdminAlertServiceImplTest {
     void deleteResolvedOlderThan_zeroOrNegative_throws() {
         assertThatThrownBy(() -> service.deleteResolvedOlderThan(Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> service.deleteResolvedOlderThan(Duration.ofMinutes(-1))).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void deleteByLabel_deletesEveryAlertCarryingTheValueAndCascadesEvents() {
+        String minesKey = service.raise(data("first", "d", AdminAlertSeverity.ERROR, Map.of("userId", "u-1")));
+        String minesOtherKey = service.raise(data("second", "d", AdminAlertSeverity.WARNING, Map.of("userId", "u-1")));
+        String theirsKey = service.raise(data("third", "d", AdminAlertSeverity.ERROR, Map.of("userId", "u-2")));
+        String unlabelledKey = service.raise(data("fourth", "d", AdminAlertSeverity.ERROR, Map.of()));
+        flush();
+        String minesId = service.findByKey(minesKey).orElseThrow().id();
+
+        Integer deleted = await(service.deleteByLabel("userId", "u-1"));
+
+        assertThat(deleted).isEqualTo(2);
+        assertThat(service.findByKey(minesKey)).isEmpty();
+        assertThat(service.findByKey(minesOtherKey)).isEmpty();
+        assertThat(service.findByKey(theirsKey)).isPresent();
+        assertThat(service.findByKey(unlabelledKey)).isPresent();
+        assertThat(selectEvents(minesId)).isEmpty();
+    }
+
+    /// The retention horizon reaches resolved alerts only, so erasure has to take the unresolved ones too — otherwise an alert nobody resolved outlives the
+    /// account it names.
+    @Test
+    void deleteByLabel_takesUnresolvedAlertsToo() {
+        String activeKey = service.raise(data("active", "d", AdminAlertSeverity.ERROR, Map.of("userId", "u-1")));
+        String resolvedKey = service.raise(data("resolved", "d", AdminAlertSeverity.ERROR, Map.of("userId", "u-1")));
+        flush();
+        await(service.resolve(resolvedKey, "note"));
+
+        assertThat(await(service.deleteByLabel("userId", "u-1"))).isEqualTo(2);
+        assertThat(service.findByKey(activeKey)).isEmpty();
+        assertThat(service.findByKey(resolvedKey)).isEmpty();
+    }
+
+    /// Containment matches key and value whole, so a value that merely starts with the argument, or the right value under a different key, is left alone.
+    @ParameterizedTest
+    @CsvSource({"u-10, userId, u-1", "u-1, category, u-1"})
+    void deleteByLabel_matchesKeyAndValueWhole(String storedUserId, String queryName, String queryValue) {
+        String key = service.raise(data("title", "d", AdminAlertSeverity.ERROR, Map.of("userId", storedUserId)));
+        flush();
+
+        assertThat(await(service.deleteByLabel(queryName, queryValue))).isZero();
+        assertThat(service.findByKey(key)).isPresent();
+    }
+
+    @Test
+    void deleteByLabel_blankArgument_throws() {
+        assertThatThrownBy(() -> service.deleteByLabel("", "u-1")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.deleteByLabel("userId", " ")).isInstanceOf(IllegalArgumentException.class);
     }
 
     @ParameterizedTest

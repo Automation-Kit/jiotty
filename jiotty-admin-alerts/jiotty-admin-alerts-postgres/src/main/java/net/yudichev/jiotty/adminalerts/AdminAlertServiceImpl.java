@@ -74,6 +74,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
     private final String selectAlertByKeySql;
     private final String selectActiveBundleIdByKeySql;
     private final String deleteResolvedOlderThanSql;
+    private final String deleteByLabelSql;
     private final String countBundlesSql;
     private final String countEventsForBundleSql;
     private final String deleteOldestBundlesSql;
@@ -134,6 +135,8 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
                               "resolved_at, resolved_by, resolution_note " +
                               "FROM " + alertTable + " WHERE dedup_key=? ORDER BY first_seen_at DESC LIMIT 1";
         deleteResolvedOlderThanSql = "DELETE FROM " + alertTable + " WHERE resolved_at IS NOT NULL AND resolved_at < ?";
+        // Containment, so the GIN `jsonb_path_ops` index on `labels` serves it; the events go with the bundle on the FK's ON DELETE CASCADE.
+        deleteByLabelSql = "DELETE FROM " + alertTable + " WHERE labels @> ?::jsonb";
         countBundlesSql = "SELECT count(*) FROM " + alertTable;
         countEventsForBundleSql = "SELECT count(*) FROM " + eventTable + " WHERE alert_id=?";
         deleteOldestBundlesSql = "DELETE FROM " + alertTable +
@@ -220,6 +223,15 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         checkNotNull(retention, "retention");
         checkArgument(retention.isPositive(), "retention must be positive, was %s", retention);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doDeleteResolvedOlderThan(retention)));
+    }
+
+    @Override
+    public CompletableFuture<Integer> deleteByLabel(String labelName, String labelValue) {
+        checkNotNull(labelName, "labelName");
+        checkNotNull(labelValue, "labelValue");
+        checkArgument(!labelName.isBlank(), "labelName must not be blank");
+        checkArgument(!labelValue.isBlank(), "labelValue must not be blank");
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doDeleteByLabel(labelName, labelValue)));
     }
 
     @VisibleForTesting
@@ -416,6 +428,19 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
             return stmt.executeUpdate();
         } catch (SQLException e) {
             throw new RuntimeException("Failed to delete resolved alerts older than " + cutoff, e);
+        }
+    }
+
+    private int doDeleteByLabel(String labelName, String labelValue) {
+        String containment = Json.stringify(ImmutableMap.of(labelName, labelValue));
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement stmt = connection.prepareStatement(deleteByLabelSql)) {
+            stmt.setString(1, containment);
+            return stmt.executeUpdate();
+        } catch (SQLException e) {
+            // The message names the label key, which this codebase chooses; the value belongs to the caller and can hold anything, and this message reaches
+            // the log and — through alertOnFailure — other alerts.
+            throw new RuntimeException("Failed to delete alerts labelled " + labelName, e);
         }
     }
 

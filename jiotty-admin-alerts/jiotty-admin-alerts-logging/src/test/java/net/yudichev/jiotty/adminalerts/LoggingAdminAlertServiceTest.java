@@ -61,4 +61,9 @@ class LoggingAdminAlertServiceTest {
     void deleteResolvedOlderThan_returnsZero() {
         assertThat(service.deleteResolvedOlderThan(Duration.ofDays(30))).isCompletedWithValue(0);
     }
+
+    @Test
+    void deleteByLabel_returnsZero() {
+        assertThat(service.deleteByLabel("userId", "user-1")).isCompletedWithValue(0);
+    }
 }

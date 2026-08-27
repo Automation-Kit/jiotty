@@ -157,6 +157,25 @@ public final class TestAdminAlertService implements AdminAlertService {
         return completedFuture(before - alertsById.size());
     }
 
+    @Override
+    public CompletableFuture<Integer> deleteByLabel(String labelName, String labelValue) {
+        // Rejects the same arguments the Postgres implementation rejects, so a test cannot pass against a call production would throw on.
+        checkNotNull(labelName, "labelName");
+        checkNotNull(labelValue, "labelValue");
+        checkArgument(!labelName.isBlank(), "labelName must not be blank");
+        checkArgument(!labelValue.isBlank(), "labelValue must not be blank");
+        int before = alertsById.size();
+        alertsById.entrySet().removeIf(entry -> {
+            if (labelValue.equals(entry.getValue().labels().get(labelName))) {
+                eventsByAlertId.remove(entry.getKey());
+                activeIdByKey.values().removeIf(entry.getKey()::equals);
+                return true;
+            }
+            return false;
+        });
+        return completedFuture(before - alertsById.size());
+    }
+
     private void enforceBundleCap() {
         int toDelete = alertsById.size() - (maxBundles - 1);
         if (toDelete <= 0) {
