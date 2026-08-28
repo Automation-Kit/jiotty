@@ -431,34 +431,6 @@ class SqlVarStoreTest {
         assertThat(varStore.readValue(Instant.class, "since")).contains(Instant.parse("2026-08-27T12:00:00Z"));
     }
 
-    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. Reading a legacy row rewrites it, so the next Art. 15 export reports the intelligible form.
-    @Test
-    void readingALegacyTemporalRowRewritesItInTheCanonicalForm() {
-        startVarStore();
-        seedRawRowAndReload("", "since", "1787832000.000000000");
-
-        varStore.readValue(Instant.class, "since");
-        flushExecutor();
-
-        assertThat(readRawValue("", "since")).isEqualTo("\"2026-08-27T12:00:00Z\"");
-    }
-
-    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. A canonical row is left as it stands; rewriting one would schedule a write on every read of
-    /// every row.
-    @Test
-    void readingAnAlreadyCanonicalRowLeavesItUntouched() {
-        startVarStore();
-        varStore.saveValue("ts_key", Instant.parse("2026-08-27T12:00:00Z"));
-        flushExecutor();
-        Timestamps beforeRead = readTimestamps();
-
-        varStore.stop();
-        startVarStore();
-        varStore.readValue(Instant.class, "ts_key");
-        flushExecutor();
-
-        assertThat(readTimestamps().updateTime()).isEqualTo(beforeRead.updateTime());
-    }
 
     /// What a data subject reads in the Art. 15 archive, which reports the stored form verbatim.
     @Test

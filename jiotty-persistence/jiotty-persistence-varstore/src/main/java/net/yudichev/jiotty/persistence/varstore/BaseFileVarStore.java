@@ -13,10 +13,8 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -42,8 +40,6 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
     private final Path storeFileTmp;
     private final Lock lock = new ReentrantLock();
     private final @Nullable VarStoreEncryption encryption;
-    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. Holds the keys this store has already brought up to date, so each key is compared once.
-    private final Set<String> backfilledKeys = new HashSet<>();
 
     BaseFileVarStore(Path storeFile, @Nullable VarStoreEncryption encryption) {
         this.storeFile = checkNotNull(storeFile, "storeFile");
@@ -118,29 +114,8 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
 
             JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
             return Optional.ofNullable(configNode.get(key))
-                           .map(valueNode -> {
-                               T value = getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(valueNode));
-                               rewriteIfStoredFormIsStale(configNode, key, valueNode, value);
-                               return value;
-                           });
+                           .map(valueNode -> getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(valueNode)));
         }));
-    }
-
-    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill], along with [#backfilledKeys]. Writes the canonical form into `configNode`, which this store has
-    /// already parsed and holds the lock over, so the rewrite costs one file write.
-    private void rewriteIfStoredFormIsStale(ObjectNode configNode, String key, JsonNode valueNode, Object value) {
-        if (!backfilledKeys.add(key) || !LegacyTemporalFormatBackfill.storedFormIsStale(OBJECT_MAPPER, valueNode.toString(), value)) {
-            return;
-        }
-        LegacyTemporalFormatBackfill.logRewrite(key);
-        try {
-            configNode.set(key, OBJECT_MAPPER.valueToTree(value));
-            writeConfigLocked(configNode);
-        } catch (IOException e) {
-            // A read that found its value succeeds whatever the rewrite does; the next read retries it.
-            backfilledKeys.remove(key);
-            LegacyTemporalFormatBackfill.logRewriteFailure(key, e);
-        }
     }
 
     @Override

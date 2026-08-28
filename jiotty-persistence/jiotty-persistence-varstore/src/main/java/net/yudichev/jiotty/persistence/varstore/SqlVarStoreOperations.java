@@ -132,22 +132,10 @@ final class SqlVarStoreOperations {
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return Optional.ofNullable((T) cache.computeIfPresent(key, (_, v) -> {
             if (v instanceof Json(var json)) {
-                Object value = deserialise(type, json);
-                rewriteIfStoredFormIsStale(key, json, value);
-                return value;
+                return deserialise(type, json);
             }
             return v;
         }));
-    }
-
-    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. Confines itself to enqueueing onto the executor, which is what makes it safe inside the cache's
-    /// remapping function, and writes via [#scheduleWrite] because [#persist]'s unchanged-value check would discard it once the cache holds the deserialised
-    /// value.
-    private void rewriteIfStoredFormIsStale(String key, String storedJson, Object value) {
-        if (LegacyTemporalFormatBackfill.storedFormIsStale(OBJECT_MAPPER, storedJson, value)) {
-            LegacyTemporalFormatBackfill.logRewrite(userId, key);
-            scheduleWrite(key, value, Function.identity());
-        }
     }
 
     @SuppressWarnings("unchecked")

@@ -9,16 +9,13 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.stream.Stream;
 
-import static java.nio.file.Files.readString;
 import static java.nio.file.Files.writeString;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
@@ -76,52 +73,6 @@ class FileVarStoreTest {
         VarStore varStore = storeSeededWithLegacyInstant(tempDir);
 
         assertThat(varStore.readValue(Instant.class, "since")).contains(WHEN);
-    }
-
-    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. Reading a legacy value rewrites it, so the next Art. 15 export reports the intelligible form.
-    @Test
-    void readingALegacyTemporalValueRewritesItInTheCanonicalForm(@TempDir Path tempDir) {
-        VarStore varStore = storeSeededWithLegacyInstant(tempDir);
-
-        varStore.readValue(Instant.class, "since");
-
-        assertThat(varStore.exportEntries()).containsExactly(new VarStore.ExportedEntry("since", false, ISO_JSON));
-    }
-
-    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. A canonical value is left as it stands; rewriting one would write the file on every read.
-    @Test
-    void readingAnAlreadyCanonicalValueLeavesTheFileUntouched(@TempDir Path tempDir) {
-        Path storeFile = tempDir.resolve("data.json");
-        VarStore varStore = new FileVarStore(storeFile, true, Optional.empty());
-        varStore.saveValue("since", WHEN);
-        varStore.readValue(Instant.class, "since");
-        String afterFirstRead = getAsUnchecked(() -> readString(storeFile));
-
-        varStore.readValue(Instant.class, "since");
-
-        assertThat(getAsUnchecked(() -> readString(storeFile))).isEqualTo(afterFirstRead);
-    }
-
-    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. Jackson parses a stored `42` to a different node type than `valueToTree` of a `long` builds,
-    /// so a whole-tree comparison would call every numeric value stale and rewrite the file on every read.
-    @ParameterizedTest
-    @MethodSource
-    void readingAnAlreadyCanonicalNumericValueLeavesTheFileUntouched(Object value, Class<?> type, @TempDir Path tempDir) {
-        Path storeFile = tempDir.resolve("data.json");
-        VarStore varStore = new FileVarStore(storeFile, true, Optional.empty());
-        varStore.saveValue("n", value);
-        varStore.readValue(type, "n");
-        String afterFirstRead = getAsUnchecked(() -> readString(storeFile));
-
-        varStore.readValue(type, "n");
-
-        assertThat(getAsUnchecked(() -> readString(storeFile))).isEqualTo(afterFirstRead);
-    }
-
-    static Stream<Arguments> readingAnAlreadyCanonicalNumericValueLeavesTheFileUntouched() {
-        return Stream.of(arguments(42L, Long.class),
-                         arguments(1.5f, Float.class),
-                         arguments(new BigDecimal("1.50"), BigDecimal.class));
     }
 
     /// What a data subject reads in the Art. 15 archive, which reports the stored form verbatim.
