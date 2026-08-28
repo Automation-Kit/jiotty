@@ -2,9 +2,6 @@ package net.yudichev.jiotty.persistence.varstore;
 
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.guava.GuavaModule;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.base.Throwables;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -30,10 +27,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 @SuppressWarnings("JDBCPrepareStatementWithNonConstantString") // all SQL is owned by this class and the table name is validated
 final class SqlVarStoreOperations {
-    static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
-            .registerModule(new Jdk8Module())
-            .registerModule(new JavaTimeModule())
-            .registerModule(new GuavaModule());
+    private static final ObjectMapper OBJECT_MAPPER = VarStoreJson.COMPACT;
     private final Logger logger = LogManager.getLogger(getClass());
     private final CloseableDataSource dataSource;
     private final String userId;
@@ -88,7 +82,7 @@ final class SqlVarStoreOperations {
         if (oldValue == null) {
             logger.debug("[{}] Skip clearing {} as it's absent", userId, key);
         } else {
-            executor.execute(() -> asUnchecked(() -> {
+            executor.execute("clearValue", () -> asUnchecked(() -> {
                 try (var connection = dataSource.getConnection();
                      var statement = connection.prepareStatement(deleteSql)) {
                     statement.setString(1, userId);
@@ -102,7 +96,7 @@ final class SqlVarStoreOperations {
 
     public void clearAll() {
         cache.clear();
-        executor.execute(() -> asUnchecked(() -> {
+        executor.execute("clearAll", () -> asUnchecked(() -> {
             try (var connection = dataSource.getConnection();
                  var statement = connection.prepareStatement(deleteAllSql)) {
                 statement.setString(1, userId);
@@ -138,10 +132,22 @@ final class SqlVarStoreOperations {
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return Optional.ofNullable((T) cache.computeIfPresent(key, (_, v) -> {
             if (v instanceof Json(var json)) {
-                return deserialise(type, json);
+                Object value = deserialise(type, json);
+                rewriteIfStoredFormIsStale(key, json, value);
+                return value;
             }
             return v;
         }));
+    }
+
+    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. Confines itself to enqueueing onto the executor, which is what makes it safe inside the cache's
+    /// remapping function, and writes via [#scheduleWrite] because [#persist]'s unchanged-value check would discard it once the cache holds the deserialised
+    /// value.
+    private void rewriteIfStoredFormIsStale(String key, String storedJson, Object value) {
+        if (LegacyTemporalFormatBackfill.storedFormIsStale(OBJECT_MAPPER, storedJson, value)) {
+            LegacyTemporalFormatBackfill.logRewrite(userId, key);
+            scheduleWrite(key, value, Function.identity());
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -167,7 +173,7 @@ final class SqlVarStoreOperations {
     }
 
     private void scheduleWrite(String key, Object value, Function<String, String> serialisedEncoder) {
-        executor.execute(() -> asUnchecked(() -> {
+        executor.execute("scheduleWrite", () -> asUnchecked(() -> {
             var now = Timestamp.from(Instant.now());
             String storedValue = serialisedEncoder.apply(getAsUnchecked(() -> OBJECT_MAPPER.writeValueAsString(value)));
             try (var connection = dataSource.getConnection();

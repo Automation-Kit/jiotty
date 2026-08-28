@@ -15,7 +15,6 @@ import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 
@@ -28,7 +27,6 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.persistence.varstore.Bindings.SingleUser;
-import static net.yudichev.jiotty.persistence.varstore.Bindings.ThePath;
 
 public final class SqlVarStore extends BaseLifecycleComponent implements VarStore {
     /// Thread-name base of the single-threaded executor this store's persistence work runs on.
@@ -46,7 +44,6 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     private final String deleteSql;
     private final String deleteAllSql;
     private final String selectAllSql;
-    private final Optional<Path> legacyPath;
     private final Optional<VarStoreEncryption> encryption;
 
     private SchedulingExecutor executor;
@@ -54,12 +51,11 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     private SqlVarStoreOperations operations;
 
     @Inject
-    SqlVarStore(@Dependency DataSourceFactory dataSourceFactory,
-                ExecutorFactory executorFactory,
-                @TableName String tableName,
-                @SingleUser boolean singleUser,
-                @ThePath Optional<Path> legacyPath,
-                Optional<VarStoreEncryption> encryption) {
+    public SqlVarStore(@Dependency DataSourceFactory dataSourceFactory,
+                       ExecutorFactory executorFactory,
+                       @TableName String tableName,
+                       @SingleUser boolean singleUser,
+                       Optional<VarStoreEncryption> encryption) {
         this.tableName = checkNotNull(tableName, "tableName");
         // prevent SQL injection
         //noinspection DynamicRegexReplaceableByCompiledPattern
@@ -72,7 +68,6 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         createTableSql = createCreateTableSql(tableName);
         this.executorFactory = checkNotNull(executorFactory);
         this.singleUser = singleUser;
-        this.legacyPath = checkNotNull(legacyPath);
         this.encryption = checkNotNull(encryption);
     }
 
@@ -82,7 +77,6 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         dataSource = dataSourceFactory.create("varstore");
         operations = new SqlVarStoreOperations(dataSource, executor, "", upsertSql, deleteSql, deleteAllSql, selectAllSql, encryption.orElse(null));
         createTableIfNeeded();
-        legacyPath.ifPresent(path -> FileToSqlVarStoreMigrator.migrate(path, this));
         operations.loadAll();
     }
 
@@ -153,16 +147,8 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         });
     }
 
-    CloseableDataSource dataSource() {
-        return dataSource;
-    }
-
     SchedulingExecutor executor() {
         return executor;
-    }
-
-    String tableName() {
-        return tableName;
     }
 
     private static String createCreateTableSql(String tableName) {

@@ -30,12 +30,13 @@ class InitModuleTest {
         }
     };
 
+    /// A path backs the var store with a file; the database backs it otherwise. Both wire the same [VarStore] key.
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void configure(boolean withVarStorePath) {
+    void configure(boolean fileBackedVarStore) {
         InitModule.Builder builder = baseBuilder();
-        if (withVarStorePath) {
-            builder.withVarStorePath(literally(Paths.get(",")));
+        if (fileBackedVarStore) {
+            builder.withVarStorePath(literally(Paths.get(".")));
         }
         Injector injector = Guice.createInjector(builder.build());
         assertThat(injector.findBindingsByType(new TypeLiteral<VarStore>() {})).isNotEmpty();

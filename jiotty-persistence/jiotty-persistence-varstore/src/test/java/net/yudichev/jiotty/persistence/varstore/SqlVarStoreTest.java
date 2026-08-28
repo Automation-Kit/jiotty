@@ -8,13 +8,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
-import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -43,7 +41,6 @@ class SqlVarStoreTest {
     private VarStoreEncryption encryption;
 
     private SqlVarStore varStore;
-    private Optional<Path> legacyPath = Optional.empty();
     private boolean singleUser;
     private Optional<VarStoreEncryption> configuredEncryption = Optional.empty();
 
@@ -273,45 +270,6 @@ class SqlVarStoreTest {
     }
 
     @Test
-    void migrationFromFile(@TempDir Path tempDir) {
-        Path filePath = tempDir.resolve("data.json");
-        legacyPath = Optional.of(filePath);
-        writeViaFileVarStore(filePath, Map.of("key1", "value1", "key2", 42));
-
-        startVarStore();
-
-        assertThat(varStore.readValue(String.class, "key1")).contains("value1");
-        assertThat(varStore.readValue(Integer.class, "key2")).contains(42);
-        assertThat(filePath).doesNotExist();
-        assertThat(tempDir.resolve("data.json.moved-to-database")).exists();
-    }
-
-    @Test
-    void migrationIsIdempotent(@TempDir Path tempDir) {
-        Path filePath = tempDir.resolve("data.json");
-        legacyPath = Optional.of(filePath);
-        writeViaFileVarStore(filePath, Map.of("key1", "value1"));
-
-        startVarStore();
-
-        assertThat(varStore.readValue(String.class, "key1")).contains("value1");
-
-        // second migration should be a no-op (file already renamed)
-        varStore.stop();
-        startVarStore();
-        assertThat(varStore.readValue(String.class, "key1")).contains("value1");
-    }
-
-    @Test
-    void migrationWithNoFile(@TempDir Path tempDir) {
-        Path filePath = tempDir.resolve("nonexistent.json");
-        legacyPath = Optional.of(filePath);
-
-        // should not throw
-        startVarStore();
-    }
-
-    @Test
     void encryptedSaveInvokesEncryptAndStoresResult() {
         configuredEncryption = Optional.of(encryption);
         when(encryption.encrypt(eq(""), eq("token"), any())).thenReturn("ENC1$stubbed-ciphertext");
@@ -464,8 +422,57 @@ class SqlVarStoreTest {
                 new VarStore.ExportedEntry("b", false, "\"two\""));
     }
 
+    /// A row holding the numeric form is on disk in every deployment, so the read path has to load it.
+    @Test
+    void readsARowHoldingATemporalValueInTheLegacyNumericForm() {
+        startVarStore();
+        seedRawRowAndReload("", "since", "1787832000.000000000");
+
+        assertThat(varStore.readValue(Instant.class, "since")).contains(Instant.parse("2026-08-27T12:00:00Z"));
+    }
+
+    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. Reading a legacy row rewrites it, so the next Art. 15 export reports the intelligible form.
+    @Test
+    void readingALegacyTemporalRowRewritesItInTheCanonicalForm() {
+        startVarStore();
+        seedRawRowAndReload("", "since", "1787832000.000000000");
+
+        varStore.readValue(Instant.class, "since");
+        flushExecutor();
+
+        assertThat(readRawValue("", "since")).isEqualTo("\"2026-08-27T12:00:00Z\"");
+    }
+
+    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. A canonical row is left as it stands; rewriting one would schedule a write on every read of
+    /// every row.
+    @Test
+    void readingAnAlreadyCanonicalRowLeavesItUntouched() {
+        startVarStore();
+        varStore.saveValue("ts_key", Instant.parse("2026-08-27T12:00:00Z"));
+        flushExecutor();
+        Timestamps beforeRead = readTimestamps();
+
+        varStore.stop();
+        startVarStore();
+        varStore.readValue(Instant.class, "ts_key");
+        flushExecutor();
+
+        assertThat(readTimestamps().updateTime()).isEqualTo(beforeRead.updateTime());
+    }
+
+    /// What a data subject reads in the Art. 15 archive, which reports the stored form verbatim.
+    @Test
+    void writesATemporalValueAsAnIsoString() {
+        startVarStore();
+
+        varStore.saveValue("since", Instant.parse("2026-08-27T12:00:00Z"));
+        flushExecutor();
+
+        assertThat(readRawValue("", "since")).isEqualTo("\"2026-08-27T12:00:00Z\"");
+    }
+
     private void startVarStore() {
-        varStore = new SqlVarStore(postgres.dataSourceFactory(), new ExecutorFactoryImpl(), "var_store", singleUser, legacyPath, configuredEncryption);
+        varStore = new SqlVarStore(postgres.dataSourceFactory(), new ExecutorFactoryImpl(), "var_store", singleUser, configuredEncryption);
         varStore.start();
     }
 
@@ -479,11 +486,6 @@ class SqlVarStoreTest {
 
     private void flushExecutor() {
         getAsUnchecked(() -> varStore.executor().submit(() -> {}).get(10, SECONDS));
-    }
-
-    private static void writeViaFileVarStore(Path filePath, Map<String, Object> data) {
-        var fileVarStore = new MultiUserFileVarStore(filePath, null);
-        data.forEach(fileVarStore::saveValue);
     }
 
     private static String readRawValue(String userId, String key) {

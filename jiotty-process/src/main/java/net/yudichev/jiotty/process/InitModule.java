@@ -88,16 +88,17 @@ public final class InitModule extends AbstractModule {
         if (varStoreAnnotation != null) {
             varStoreModuleBuilder.withAnnotation(varStoreAnnotation);
         }
-        if (varStorePathSpec != null) {
-            varStoreModuleBuilder.withPath(varStorePathSpec);
-        }
         if (varStoreEncryptionKeyAliasSpec != null) {
             varStoreModuleBuilder
                     .withEncryptionKeyAlias(varStoreEncryptionKeyAliasSpec)
                     .withKeyStoreAccess(boundTo(keyStoreAccessModule.getExposedKey()));
         }
+        if (varStorePathSpec == null) {
+            varStoreModuleBuilder.withDataSourceFactory(boundTo(dataSourceFactoryModule.getExposedKey()));
+        } else {
+            varStoreModuleBuilder.withPath(varStorePathSpec);
+        }
         var varStoreModule = varStoreModuleBuilder
-                .withDataSourceFactory(boundTo(dataSourceFactoryModule.getExposedKey()))
                 .withSingleUser(singeUserSpec)
                 .withTableName(varStoreTableNameSpec)
                 .build();
@@ -150,6 +151,7 @@ public final class InitModule extends AbstractModule {
             return this;
         }
 
+        /// Backs the var store with a file at this path. The table name applies to the database-backed store alone.
         public Builder withVarStorePath(BindingSpec<Path> varStorePathSpec) {
             this.varStorePathSpec = checkNotNull(varStorePathSpec);
             return this;

@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.persistence.varstore;
 
-import com.google.common.reflect.TypeToken;
 import com.google.inject.TypeLiteral;
 import com.google.inject.multibindings.OptionalBinder;
 import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
@@ -13,7 +12,6 @@ import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
-import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -66,12 +64,8 @@ public final class VarStoreModule extends BaseExposedKeyModule<VarStore> {
             encryptionOptionalBinder.setBinding().to(registerLifecycleComponent(VarStoreEncryptionImpl.class));
         }
         if (dataSourceFactorySpec != null) {
+            checkArgument(pathSpec == null, "'path' is for the file-backed store and has no meaning alongside 'dataSourceFactory'");
             dataSourceFactorySpec.bind(new TypeLiteral<>() {}).annotatedWith(SqlVarStore.Dependency.class).installedBy(this::installLifecycleComponentModule);
-            BindingSpec<Optional<Path>> legacyPathSpec = pathSpec == null ? literally(Optional.empty())
-                                                                          : pathSpec.map(new TypeToken<>() {},
-                                                                                         new TypeToken<>() {},
-                                                                                         Optional::of);
-            legacyPathSpec.bind(new TypeLiteral<>() {}).annotatedWith(Bindings.ThePath.class).installedBy(this::installLifecycleComponentModule);
             bind(exposedKey).to(registerLifecycleComponent(SqlVarStore.class));
         } else {
             checkArgument(pathSpec != null, "At least one of 'path', 'dataSourceFactory' is required");

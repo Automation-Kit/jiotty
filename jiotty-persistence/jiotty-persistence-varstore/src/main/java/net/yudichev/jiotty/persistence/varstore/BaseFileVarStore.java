@@ -3,14 +3,9 @@ package net.yudichev.jiotty.persistence.varstore;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
-import com.fasterxml.jackson.datatype.guava.GuavaModule;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.reflect.TypeToken;
-import net.yudichev.jiotty.common.lang.MoreThrowables;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
@@ -18,8 +13,10 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -33,13 +30,11 @@ import static java.nio.file.Files.move;
 import static java.nio.file.Files.readAllBytes;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static net.yudichev.jiotty.common.lang.Locks.inLock;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 abstract class BaseFileVarStore implements PrefixClearableVarStore {
-    static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
-            .registerModule(new Jdk8Module())
-            .registerModule(new JavaTimeModule())
-            .registerModule(new GuavaModule())
-            .enable(SerializationFeature.INDENT_OUTPUT);
+    private static final ObjectMapper OBJECT_MAPPER = VarStoreJson.INDENTED;
 
     protected final Logger logger = LogManager.getLogger(getClass());
 
@@ -47,6 +42,8 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
     private final Path storeFileTmp;
     private final Lock lock = new ReentrantLock();
     private final @Nullable VarStoreEncryption encryption;
+    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill]. Holds the keys this store has already brought up to date, so each key is compared once.
+    private final Set<String> backfilledKeys = new HashSet<>();
 
     BaseFileVarStore(Path storeFile, @Nullable VarStoreEncryption encryption) {
         this.storeFile = checkNotNull(storeFile, "storeFile");
@@ -63,7 +60,7 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
     @Override
     public void saveValueEncrypted(String key, Object value) {
         VarStoreEncryption enc = requireEncryption();
-        String plaintextJson = MoreThrowables.getAsUnchecked(() -> OBJECT_MAPPER.writeValueAsString(value));
+        String plaintextJson = getAsUnchecked(() -> OBJECT_MAPPER.writeValueAsString(value));
         String envelope = enc.encrypt("", key, plaintextJson);
         updateConfig(configNode -> configNode.set(key, TextNode.valueOf(envelope)));
     }
@@ -98,7 +95,7 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
 
     @Override
     public List<ExportedEntry> exportEntriesWithPrefix(String keyPrefix) {
-        return inLock(lock, () -> MoreThrowables.getAsUnchecked(() -> {
+        return inLock(lock, () -> getAsUnchecked(() -> {
             ObjectNode configNode = readConfig();
             var entries = new ArrayList<ExportedEntry>();
             configNode.fieldNames().forEachRemaining(name -> {
@@ -116,19 +113,40 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
 
     @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
-        return inLock(lock, () -> MoreThrowables.getAsUnchecked(() -> {
+        return inLock(lock, () -> getAsUnchecked(() -> {
             ObjectNode configNode = readConfig();
 
             JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
             return Optional.ofNullable(configNode.get(key))
-                           .map(valueNode -> MoreThrowables.getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(valueNode)));
+                           .map(valueNode -> {
+                               T value = getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(valueNode));
+                               rewriteIfStoredFormIsStale(configNode, key, valueNode, value);
+                               return value;
+                           });
         }));
+    }
+
+    /// TEMPORARY — delete with [LegacyTemporalFormatBackfill], along with [#backfilledKeys]. Writes the canonical form into `configNode`, which this store has
+    /// already parsed and holds the lock over, so the rewrite costs one file write.
+    private void rewriteIfStoredFormIsStale(ObjectNode configNode, String key, JsonNode valueNode, Object value) {
+        if (!backfilledKeys.add(key) || !LegacyTemporalFormatBackfill.storedFormIsStale(OBJECT_MAPPER, valueNode.toString(), value)) {
+            return;
+        }
+        LegacyTemporalFormatBackfill.logRewrite(key);
+        try {
+            configNode.set(key, OBJECT_MAPPER.valueToTree(value));
+            writeConfigLocked(configNode);
+        } catch (IOException e) {
+            // A read that found its value succeeds whatever the rewrite does; the next read retries it.
+            backfilledKeys.remove(key);
+            LegacyTemporalFormatBackfill.logRewriteFailure(key, e);
+        }
     }
 
     @Override
     public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
         VarStoreEncryption enc = requireEncryption();
-        JsonNode valueNode = inLock(lock, () -> MoreThrowables.getAsUnchecked(() -> readConfig().get(key)));
+        JsonNode valueNode = inLock(lock, () -> getAsUnchecked(() -> readConfig().get(key)));
         if (valueNode == null) {
             return Optional.empty();
         }
@@ -136,7 +154,7 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
                    "value under '%s' read via readValueEncrypted is not an encryption envelope", key);
         String plaintextJson = enc.decrypt("", key, valueNode.textValue());
         JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
-        return Optional.of(MoreThrowables.getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(plaintextJson)));
+        return Optional.of(getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(plaintextJson)));
     }
 
     private VarStoreEncryption requireEncryption() {
@@ -145,7 +163,7 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
     }
 
     private void updateConfig(Consumer<ObjectNode> updater) {
-        inLock(lock, () -> MoreThrowables.asUnchecked(() -> {
+        inLock(lock, () -> asUnchecked(() -> {
             ObjectNode configNode = readConfig();
 
             updater.accept(configNode);

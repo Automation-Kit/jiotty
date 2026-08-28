@@ -107,6 +107,27 @@
         </dependencies>
     </dependencyManagement>
     <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <executions>
+                        <!-- log4j2 prefers log4j2-test.* over log4j2.*, so a test-jar shipping one becomes the logging configuration of every process that
+                             puts the jar on its classpath — which car-server-local does, at compile scope, for InMemoryMqtt. Configuration only: naming a
+                             <goal> here would bind a test-jar execution onto every module, since jar packaging declares this plugin implicitly. -->
+                        <execution>
+                            <id>default</id>
+                            <configuration>
+                                <excludes>
+                                    <exclude>log4j2-test.yaml</exclude>
+                                </excludes>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
