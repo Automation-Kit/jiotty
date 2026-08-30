@@ -14,6 +14,7 @@ class HttpStatusesTest {
             // boundaries of the 2xx class
             "199, false",
             "200, true",
+            "201, true",
             "204, true",
             "299, true",
             "300, false",

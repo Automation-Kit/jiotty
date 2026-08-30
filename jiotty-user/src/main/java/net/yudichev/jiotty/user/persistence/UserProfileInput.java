@@ -11,16 +11,16 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 /// User profile values.
 ///
-/// @param email       optional email
+/// @param email       the address the account is reached at; required and never blank
 /// @param displayName optional user-visible name
 /// @param timezone    user's preferred time zone
 /// @implNote renders with [#email()] and [#displayName()] redacted, matching [UserProfile].
-public record UserProfileInput(Optional<String> email,
+public record UserProfileInput(String email,
                                Optional<String> displayName,
                                ZoneId timezone) implements StringFormattable {
     public UserProfileInput {
         checkNotNull(email, "email");
-        email.ifPresent(value -> checkArgument(!value.isBlank(), "email must not be blank"));
+        checkArgument(!email.isBlank(), "email must not be blank");
         checkNotNull(displayName, "displayName");
         displayName.ifPresent(value -> checkArgument(!value.isBlank(), "displayName must not be blank"));
         checkNotNull(timezone, "timezone");

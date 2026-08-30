@@ -49,7 +49,7 @@ public final class FakeUserPersistence implements UserPersistence {
             // soft-deleted rows, so a soft-deleted user holding this identity blocks creation and is not an email conflict.
             switch (resolveByIdentityLocked(identity)) {
                 case IdentityResolution.Active(UserProfile existingProfile) -> {
-                    return completedFuture(new UserCreationResult.Resolved(existingProfile));
+                    return completedFuture(new UserCreationResult.Resolved(existingProfile, false));
                 }
                 case IdentityResolution.SoftDeleted _ ->
                         throw new IllegalStateException("Identity " + identity + " belongs to a soft-deleted user; resolve it before creating");
@@ -57,7 +57,7 @@ public final class FakeUserPersistence implements UserPersistence {
                 }
             }
             // A taken address is an outcome the caller branches on, not a failure — the real store's unique-violation path returns the same value.
-            if (isEmailTaken(profile.email().orElse(null), null)) {
+            if (isEmailTaken(profile.email(), null)) {
                 return completedFuture(UserCreationResult.EmailAlreadyInUse.INSTANCE);
             }
             Instant timestamp = currentInstant();
@@ -68,7 +68,7 @@ public final class FakeUserPersistence implements UserPersistence {
             usersById.put(userId, storedUser);
             activeUserIdsByIdentity.put(identity, userId);
             changeListeners.notify(userId);
-            return completedFuture(new UserCreationResult.Resolved(createdProfile));
+            return completedFuture(new UserCreationResult.Resolved(createdProfile, true));
         }
     }
 
@@ -123,6 +123,14 @@ public final class FakeUserPersistence implements UserPersistence {
     }
 
     @Override
+    public CompletableFuture<Optional<UserProfile>> getByIdIgnoringDeletion(String userId) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            return completedFuture(Optional.ofNullable(usersById.get(userId)).map(StoredUser::profile));
+        }
+    }
+
+    @Override
     public CompletableFuture<List<UserProfile>> listAllProfiles() {
         synchronized (lock) {
             var profiles = ImmutableList.<UserProfile>builder();
@@ -157,7 +165,7 @@ public final class FakeUserPersistence implements UserPersistence {
         synchronized (lock) {
             checkNotNull(profile, "profile");
             StoredUser storedUser = getActiveUser(userId);
-            ensureEmailAvailable(profile.email().orElse(null), userId);
+            ensureEmailAvailable(profile.email(), userId);
             Instant timestamp = currentInstant();
             var updatedProfile = new UserProfile(userId,
                                                  profile.email(),
@@ -282,20 +290,16 @@ public final class FakeUserPersistence implements UserPersistence {
     /// Whether `email` already belongs to a user other than `ignoredUserId`. Soft-deleted users count: the real store holds one email per user until the row is
     /// hard-deleted, so exempting them here would let the fake create a second user for an address the real store rejects — and hide exactly that regression.
     ///
-    /// @param email         null when the profile carries no address, which can never conflict
     /// @param ignoredUserId the user permitted to already hold the address; null exempts nobody
-    private boolean isEmailTaken(@Nullable String email, @Nullable String ignoredUserId) {
-        return email != null
-               && usersById.values().stream()
-                           .anyMatch(user -> user.profile().email().filter(email::equals).isPresent()
-                                             && !user.profile().id().equals(ignoredUserId));
+    private boolean isEmailTaken(String email, @Nullable String ignoredUserId) {
+        return usersById.values().stream()
+                        .anyMatch(user -> user.profile().email().equals(email) && !user.profile().id().equals(ignoredUserId));
     }
 
     /// Rejects a profile whose email already belongs to another user, mirroring the real store's unique-email constraint.
     ///
-    /// @param email         null when the profile carries no address, which can never conflict
     /// @param ignoredUserId the user permitted to already hold the address; null exempts nobody
-    private void ensureEmailAvailable(@Nullable String email, @Nullable String ignoredUserId) {
+    private void ensureEmailAvailable(String email, @Nullable String ignoredUserId) {
         if (isEmailTaken(email, ignoredUserId)) {
             throw new IllegalStateException("Email is already linked to another user: " + email);
         }

@@ -57,7 +57,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
             """
             CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%user (
                 id text PRIMARY KEY,
-                email text UNIQUE,
+                email text NOT NULL UNIQUE,
                 display_name text,
                 timezone text NOT NULL,
                 created_at timestamptz NOT NULL,
@@ -86,6 +86,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     private final String selectUserByIdentitySql;
     private final String resolveUserByIdentitySql;
     private final String selectUserByIdSql;
+    private final String selectUserByIdIgnoringDeletionSql;
     private final String selectAllUsersSql;
     private final String selectAllUsersIgnoringDeletionSql;
     private final String userExistsSql;
@@ -148,6 +149,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                                    "WHERE i.provider=? AND i.provider_user_id=?";
         selectUserByIdSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable +
                             " WHERE id=? AND deleted_at IS NULL";
+        selectUserByIdIgnoringDeletionSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable + " WHERE id=?";
         selectAllUsersSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable +
                             " WHERE deleted_at IS NULL";
         selectAllUsersIgnoringDeletionSql = "SELECT id, email, display_name, timezone, created_at, updated_at, deleted_at FROM " + userTable;
@@ -218,6 +220,16 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     public CompletableFuture<Optional<UserProfile>> getById(String userId) {
         validateUserId(userId);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> Optional.ofNullable(doGetById(userId))));
+    }
+
+    /// Never completes once this component has stopped, rather than throwing at the caller: a long-running caller still reading through here while the process
+    /// drains would otherwise see a clean shutdown as its own failure.
+    @Override
+    public CompletableFuture<Optional<UserProfile>> getByIdIgnoringDeletion(String userId) {
+        validateUserId(userId);
+        return whenNotLifecycling(() -> isStartedPlain()
+                                        ? executor.submit(() -> Optional.ofNullable(doGetByIdIgnoringDeletion(userId)))
+                                        : new CompletableFuture<>());
     }
 
     @Override
@@ -306,7 +318,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                     UserProfile existing = selectUserByIdentity(connection, identity);
                     if (existing != null) {
                         connection.commit();
-                        return new UserCreationResult.Resolved(existing);
+                        return new UserCreationResult.Resolved(existing, false);
                     }
                     // The window a competing transaction has to claim this identity. `assert` so production, which runs
                     // without -ea, never even calls it; surefire enables assertions, so the race test can block here.
@@ -317,7 +329,8 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                     insertIdentity(connection, userId, identity, now);
                     connection.commit();
                     notifyChanged(userId);
-                    return new UserCreationResult.Resolved(new UserProfile(userId, profile.email(), profile.displayName(), profile.timezone(), now, now));
+                    return new UserCreationResult.Resolved(new UserProfile(userId, profile.email(), profile.displayName(), profile.timezone(), now, now),
+                                                           true);
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     if (!isUniqueViolation(e)) {
@@ -336,7 +349,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         // this identity would otherwise look like an absent identity and be misreported as an email conflict.
         return switch (doResolveByIdentity(identity)) {
             // A concurrent call created the very user we wanted between our select and our insert, so both callers get it.
-            case IdentityResolution.Active(UserProfile concurrentlyCreated) -> new UserCreationResult.Resolved(concurrentlyCreated);
+            case IdentityResolution.Active(UserProfile concurrentlyCreated) -> new UserCreationResult.Resolved(concurrentlyCreated, false);
             // The identity itself is taken by a user that is soft-deleted, so it is unavailable and no email conflict
             // arose. Callers distinguish this state up front with resolveByIdentity; reaching it here means that step was
             // skipped, which no correct caller does.
@@ -388,6 +401,17 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         }
     }
 
+    /// @return `null` when no row exists for `userId`, whether or not it was ever soft-deleted
+    private @Nullable UserProfile doGetByIdIgnoringDeletion(String userId) {
+        try {
+            try (Connection connection = dataSource.getConnection()) {
+                return selectUserByIdIgnoringDeletion(connection, userId);
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to read user ignoring deletion " + userId, e);
+        }
+    }
+
     private List<UserProfile> doListAllProfiles() {
         return queryList(selectAllUsersSql, _ -> {}, UserPersistenceImpl::mapUserProfile, "Failed to list user profiles");
     }
@@ -414,7 +438,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                 try {
                     Instant now = persistenceNow();
                     doUpdate(connection, updateUserSql, stmt -> {
-                        stmt.setString(1, profile.email().orElse(null));
+                        stmt.setString(1, profile.email());
                         stmt.setString(2, profile.displayName().orElse(null));
                         stmt.setString(3, profile.timezone().getId());
                         stmt.setTimestamp(4, Timestamp.from(now));
@@ -638,7 +662,19 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     }
 
     private @Nullable UserProfile selectUserById(Connection connection, String userId) throws SQLException {
-        try (PreparedStatement stmt = connection.prepareStatement(selectUserByIdSql)) {
+        return selectUserByIdUsing(connection, selectUserByIdSql, userId);
+    }
+
+    /// @return `null` when no row exists for `userId`, whether or not it was ever soft-deleted
+    private @Nullable UserProfile selectUserByIdIgnoringDeletion(Connection connection, String userId) throws SQLException {
+        return selectUserByIdUsing(connection, selectUserByIdIgnoringDeletionSql, userId);
+    }
+
+    /// Shared body of the by-id reads, which differ only in whether their SQL filters out soft-deleted rows.
+    ///
+    /// @return `null` when `sql` matches no row
+    private static @Nullable UserProfile selectUserByIdUsing(Connection connection, String sql, String userId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
             stmt.setString(1, userId);
             try (ResultSet rs = stmt.executeQuery()) {
                 return rs.next() ? mapUserProfile(rs) : null;
@@ -734,7 +770,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                  insertUserSql,
                  stmt -> {
                      stmt.setString(1, userId);
-                     stmt.setString(2, profile.email().orElse(null));
+                     stmt.setString(2, profile.email());
                      stmt.setString(3, profile.displayName().orElse(null));
                      stmt.setString(4, profile.timezone().getId());
                      stmt.setTimestamp(5, Timestamp.from(now));
@@ -762,7 +798,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         ZoneId timezone = ZoneId.of(timezoneId);
         Instant createdAt = rs.getTimestamp("created_at").toInstant();
         Instant updatedAt = rs.getTimestamp("updated_at").toInstant();
-        return new UserProfile(id, Optional.ofNullable(email), Optional.ofNullable(displayName), timezone, createdAt, updatedAt);
+        return new UserProfile(id, email, Optional.ofNullable(displayName), timezone, createdAt, updatedAt);
     }
 
     private static UserProfileWithDeletion mapUserProfileWithDeletion(ResultSet rs) throws SQLException {

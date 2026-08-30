@@ -94,7 +94,7 @@ final class AwsIotMqttConnectionImpl extends BaseLifecycleComponent implements A
                         result.complete(idempotent(() -> {
                             try {
                                 whenNotLifecycling(() -> {
-                                    if (isStarted()) {
+                                    if (isStartedPlain()) {
                                         asUnchecked(() -> client.unsubscribe(topic, timeout.toMillis()));
                                     } else {
                                         logger.warn("Ignored attempt to close a subscription to topic {} via client {} when the component is not running",

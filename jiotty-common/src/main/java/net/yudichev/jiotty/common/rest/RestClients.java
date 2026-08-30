@@ -72,17 +72,38 @@ public final class RestClients {
     }
 
     public static <T> CompletableFuture<T> call(Call theCall, TypeToken<? extends T> responseType, int retryCount, boolean attemptParsingUnsuccessfulResponse) {
+        return call(theCall, responseType, retryCount, attemptParsingUnsuccessfulResponse, ResponseBodyLogging.FULL);
+    }
+
+    /// [#call(Call, Class, int)] for an endpoint whose responses can carry personal data: the body is kept out of the log line, the parse-failure message and
+    /// [HttpResponseException], while the status and the body's length still travel.
+    ///
+    /// Use it wherever the upstream quotes the submitted value back — a transactional email API naming the recipient it rejected, say.
+    public static <T> CompletableFuture<T> callSuppressingResponseBody(Call theCall, Class<? extends T> responseType, int retryCount) {
+        return call(theCall, TypeToken.of(responseType), retryCount, false, ResponseBodyLogging.SUPPRESSED);
+    }
+
+    private static <T> CompletableFuture<T> call(Call theCall,
+                                                 TypeToken<? extends T> responseType,
+                                                 int retryCount,
+                                                 boolean attemptParsingUnsuccessfulResponse,
+                                                 ResponseBodyLogging responseBodyLogging) {
         int requestId = requestIdGenerator.incrementAndGet();
         CompletableFuture<T> future = new CompletableFuture<>();
         logger.debug("[{}] Sending {} {}", requestId, theCall.request().method(), theCall.request().url());
         theCall.enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                logger.debug("[{}] Call failed: {}, retries left: {}", requestId, call, retryCount, e);
+                // Method and URL, never the Request itself: its toString renders the headers, and OkHttp redacts only the well-known credential ones
+                // (Authorization, Cookie, Proxy-Authorization, Set-Cookie). An API passing its key in a header of its own choosing — `api-key`, `X-Api-Key` —
+                // would otherwise put that key in this message, which reaches WARN logs and operator alerts.
+                logger.debug("[{}] Call failed: {} {}, retries left: {}", requestId, call.request().method(), call.request().url(), retryCount, e);
                 if (retryCount == 0) {
-                    future.completeExceptionally(new RuntimeException("call failed: " + call.request(), e));
+                    future.completeExceptionally(new RuntimeException("call failed: " + call.request().method() + ' ' + call.request().url(), e));
                 } else {
-                    call(call.clone(), responseType, retryCount - 1)
+                    // Both flags are carried into the retry. Dropping them here would silently restore body logging (and unsuccessful-response parsing) for
+                    // every attempt after the first, which is precisely when a flaky endpoint is being retried.
+                    call(call.clone(), responseType, retryCount - 1, attemptParsingUnsuccessfulResponse, responseBodyLogging)
                             .whenComplete((result, exception) -> {
                                 if (exception == null) {
                                     future.complete(result);
@@ -108,16 +129,21 @@ public final class RestClients {
                                 }
                             } else {
                                 String responseString = requireNonNull(responseBody).string();
-                                logger.debug("[{}] Response code {}: {}", requestId, response.code(), responseString);
+                                logResponse(requestId, response.code(), responseString);
                                 parseAndCompleteFuture(responseString);
                             }
                         } else {
                             String responseString = safelyToString(responseBody);
-                            logger.debug("[{}] Response code {}: {}", requestId, response.code(), responseString);
+                            logResponse(requestId, response.code(), responseString);
                             if (attemptParsingUnsuccessfulResponse) {
                                 parseAndCompleteFuture(responseString);
                             } else {
-                                future.completeExceptionally(new HttpResponseException(response.code(), responseString));
+                                // The status is kept — SharedUpstreamOutage classifies retryability from it — while the body, which is what an upstream uses
+                                // to quote the offending value back, is withheld on a suppressed endpoint.
+                                future.completeExceptionally(new HttpResponseException(response.code(), switch (responseBodyLogging) {
+                                    case FULL -> responseString;
+                                    case SUPPRESSED -> "<withheld: may carry personal data>";
+                                }));
                             }
                         }
                     } catch (RuntimeException | IOException e) {
@@ -126,20 +152,37 @@ public final class RestClients {
                 }
             }
 
+            private void logResponse(int id, int statusCode, String responseString) {
+                if (!logger.isDebugEnabled()) {
+                    return;
+                }
+                // An expression switch, so a third logging mode is a compile error here rather than a body silently logged verbatim.
+                Object body = switch (responseBodyLogging) {
+                    case FULL -> responseString;
+                    case SUPPRESSED -> responseString.length() + " chars, body withheld: may carry personal data";
+                };
+                logger.debug("[{}] Response code {}: {}", id, statusCode, body);
+            }
+
             private void parseAndCompleteFuture(String responseString) {
                 T responseData;
                 try {
                     responseData = Json.parse(responseString, responseType);
                     future.complete(responseData);
                 } catch (RuntimeException e) {
-                    future.completeExceptionally(new RuntimeException("Failed parsing response " + responseString, e));
+                    // The unparseable body is the whole diagnosis, so it is normally in the message — but on a suppressed endpoint it is the one thing that
+                    // must not be, and this message travels into an exception that is logged at ERROR rather than DEBUG.
+                    future.completeExceptionally(switch (responseBodyLogging) {
+                        case FULL -> new RuntimeException("Failed parsing response " + responseString, e);
+                        case SUPPRESSED -> new RuntimeException("Failed parsing response of " + responseString.length() + " chars", e);
+                    });
                 }
             }
 
             private static String safelyToString(ResponseBody responseBody) {
                 try {
                     return responseBody.string();
-                } catch (Exception e) {
+                } catch (IOException | RuntimeException e) {
                     return "<failed to read body: " + humanReadableMessage(e) + ">";
                 }
             }
@@ -221,5 +264,14 @@ public final class RestClients {
         } catch (RuntimeException e) {
             logger.warn("Failed to gracefully shut down client {} in {}", client, timeout, e);
         }
+    }
+
+    /// Whether a response body may be reproduced in log lines and failure messages.
+    private enum ResponseBodyLogging {
+        /// The body is logged verbatim at DEBUG and carried in [HttpResponseException#body()], which is what makes a failed call diagnosable.
+        FULL,
+        /// The body is replaced by its length wherever it would otherwise be reproduced. For upstreams that quote a submitted value back — the recipient a
+        /// transactional email API rejected, say — where a raised log level would otherwise be enough to spill personal data into the log file.
+        SUPPRESSED
     }
 }

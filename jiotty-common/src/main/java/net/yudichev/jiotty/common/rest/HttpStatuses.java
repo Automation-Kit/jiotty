@@ -4,6 +4,7 @@ package net.yudichev.jiotty.common.rest;
 /// needed.
 public final class HttpStatuses {
     public static final int OK_200 = 200;
+    public static final int CREATED_201 = 201;
     public static final int NO_CONTENT_204 = 204;
     public static final int BAD_REQUEST_400 = 400;
     public static final int UNAUTHORIZED_401 = 401;

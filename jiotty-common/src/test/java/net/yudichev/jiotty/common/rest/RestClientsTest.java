@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
+import net.yudichev.jiotty.common.misc.SharedUpstreamOutage;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
@@ -217,6 +218,62 @@ class RestClientsTest {
                     // Message format preserved verbatim from the previous untyped form so any string-matching callers keep working.
                     assertThat(http).hasMessageContaining("Response code 403").hasMessageContaining("forbidden");
                 });
+    }
+
+    /// The whole point of the suppressed variant: an upstream that quotes the submitted value back must not have that value reproduced in the exception, which
+    /// a caller turns into an operator alert. The status has to survive, because [SharedUpstreamOutage] classifies retryability from it.
+    @Test
+    void callSuppressingResponseBody_nonSuccessResponse_keepsTheStatusAndWithholdsTheBody() {
+        urlToBody.put(BASE + "/rejected", "{\"message\":\"someone@example.com is not valid\"}");
+        urlToHttpStatus.put(BASE + "/rejected", FORBIDDEN_403);
+
+        CompletableFuture<Page> future = RestClients.callSuppressingResponseBody(callFactory.apply(BASE + "/rejected"), Page.class, 0);
+
+        assertThatThrownBy(future::join)
+                .cause()
+                .isInstanceOfSatisfying(HttpResponseException.class, http -> {
+                    assertThat(http.statusCode()).isEqualTo(FORBIDDEN_403);
+                    assertThat(http.body()).doesNotContain("someone@example.com");
+                    assertThat(http).hasMessageContaining("Response code 403").hasMessageNotContaining("someone@example.com");
+                });
+    }
+
+    /// Suppression is about what is *reproduced*, not about what is parsed: a successful response is still deserialised normally.
+    @Test
+    void callSuppressingResponseBody_successfulResponse_stillParsesTheBody() {
+        urlToBody.put(BASE + "/ok", """
+                                    {"results": [{"name": "alpha"}], "next": null}
+                                    """);
+
+        assertThat(RestClients.callSuppressingResponseBody(callFactory.apply(BASE + "/ok"), Page.class, 0).join().results())
+                .extracting(Item::name)
+                .containsExactly("alpha");
+    }
+
+    /// Suppression must survive a retry. It is carried in the recursive call, because an attempt after the first is exactly when a flaky endpoint is being
+    /// hit — and the flag silently reverting there would spill the body on precisely the calls most likely to fail.
+    @Test
+    void callSuppressingResponseBody_survivesARetry() {
+        urlToFailure.put(BASE + "/flaky", new IOException("transport boom"));
+
+        assertThatThrownBy(() -> RestClients.callSuppressingResponseBody(callFactory.apply(BASE + "/flaky"), Page.class, 2).join())
+                .hasRootCauseMessage("transport boom");
+        // One initial attempt plus the two retries, each of which had to carry the suppression with it.
+        assertThat(urlHitCount).containsEntry(BASE + "/flaky", 3);
+    }
+
+    /// A body that fails to parse is normally quoted in the failure message, which is the one place a suppressed endpoint's payload must still not appear —
+    /// this message travels in an exception logged at ERROR, not at DEBUG.
+    @Test
+    void callSuppressingResponseBody_unparseableBody_withholdsItFromTheFailureMessage() {
+        urlToBody.put(BASE + "/garbage", "not json: someone@example.com");
+
+        CompletableFuture<Page> future = RestClients.callSuppressingResponseBody(callFactory.apply(BASE + "/garbage"), Page.class, 0);
+
+        assertThatThrownBy(future::join)
+                .cause()
+                .hasMessageNotContaining("someone@example.com")
+                .hasMessageContaining("chars");
     }
 
     @Test

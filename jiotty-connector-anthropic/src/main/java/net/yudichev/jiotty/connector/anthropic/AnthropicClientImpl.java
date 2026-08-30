@@ -93,7 +93,7 @@ public class AnthropicClientImpl extends BaseLifecycleComponent implements Anthr
     /// client serves, instead of once per user question.
     private CompletableFuture<MessagesResponse> callApi(Request httpRequest) {
         return whenNotLifecycling(() -> {
-            if (!isStarted()) {
+            if (!isStartedPlain()) {
                 // Reported through the future by never completing it: a caller draining onto a stopped component has no fault to report, and throwing here
                 // would surface on its thread instead.
                 return new CompletableFuture<>();

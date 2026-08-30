@@ -158,7 +158,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     /// `action` reads immediately after this service, so holding the lock across the read is what makes that verdict hold for the whole of it.
     private void ifStartedAndNotLifecycling(Runnable action) {
         whenNotLifecycling(() -> {
-            if (isStartedOpaque()) {
+            if (isStartedPlain()) {
                 action.run();
             }
         });

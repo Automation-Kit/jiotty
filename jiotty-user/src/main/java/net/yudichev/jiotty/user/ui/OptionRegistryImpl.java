@@ -53,7 +53,7 @@ public final class OptionRegistryImpl extends BaseLifecycleComponent implements 
             // nothing once stopped. Notifying the snapshot listeners then reaches subscribers whose executor has already terminated, and this registry's own
             // state is unreachable by that point.
             return idempotent(() -> whenNotLifecycling(() -> {
-                if (isStarted() && optionsByKey.remove(option.meta().key(), option)) {
+                if (isStartedPlain() && optionsByKey.remove(option.meta().key(), option)) {
                     Closeable.closeIfNotNull(persistenceRegistration);
                     optionsPersistenceRegistrations.remove(persistenceRegistration);
                     logger.info("Unregistered option {}", option.meta().key());

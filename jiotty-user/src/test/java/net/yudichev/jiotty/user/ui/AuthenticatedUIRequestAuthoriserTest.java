@@ -60,7 +60,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class AuthenticatedUIRequestAuthoriserTest {
     private static final UserProfile PROFILE = new UserProfile("user-1",
-                                                               Optional.of("user@example.com"),
+                                                               "user@example.com",
                                                                Optional.of("Alex"),
                                                                ZoneId.of("Europe/London"),
                                                                Instant.parse("2026-03-13T12:00:00Z"),

@@ -45,6 +45,12 @@ public interface UserPersistence {
     /// @return empty if the user does not exist or is deleted
     CompletableFuture<Optional<UserProfile>> getById(String userId);
 
+    /// Returns the user profile by id regardless of soft-delete state — unlike [#getById], which excludes soft-deleted users.
+    ///
+    /// @param userId internal user id
+    /// @return empty once the user is hard-deleted
+    CompletableFuture<Optional<UserProfile>> getByIdIgnoringDeletion(String userId);
+
     /// Lists active user profiles (deleted users are excluded).
     CompletableFuture<List<UserProfile>> listAllProfiles();
 
@@ -109,7 +115,12 @@ public interface UserPersistence {
     /// The outcome of [#getOrCreateByIdentity].
     sealed interface UserCreationResult permits UserCreationResult.Resolved, UserCreationResult.EmailAlreadyInUse {
         /// The identity resolved to an existing user, or a new user was created for it.
-        record Resolved(UserProfile profile) implements UserCreationResult {
+        ///
+        /// @param profile the resolved user, whether this call created it or found it already there
+        /// @param created `true` only when this call performed the insert. Two concurrent calls for the same brand-new identity both resolve, and exactly one
+        ///                of them created — so anything that must happen once per account, rather than once per resolution, keys off this rather than off
+        ///                having reached this variant.
+        record Resolved(UserProfile profile, boolean created) implements UserCreationResult {
             public Resolved {
                 checkNotNull(profile, "profile");
             }

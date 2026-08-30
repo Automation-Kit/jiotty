@@ -286,7 +286,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         // response is dropped instead of being rejected by the dead executor.
         future.whenComplete((responseEither, throwable) ->
                                     whenNotLifecycling(() -> {
-                                        if (isStarted()) {
+                                        if (isStartedPlain()) {
                                             executor.execute(() -> handleTokenResponse(requestTime, formBody, fallbackRefreshToken, responseEither, throwable));
                                         }
                                     }));

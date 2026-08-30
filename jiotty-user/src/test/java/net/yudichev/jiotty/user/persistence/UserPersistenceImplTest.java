@@ -226,8 +226,9 @@ class UserPersistenceImplTest {
         var winner = createUser(identity, createProfileInput("winner@example.com", "Winner", UTC));
         competitorCommitted.countDown();
 
-        // The racer loses the insert and adopts the winner's user rather than failing or creating a second one.
-        assertThat(racerCreation).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(new UserCreationResult.Resolved(winner));
+        // The racer loses the insert and adopts the winner's user rather than failing or creating a second one — and reports created=false, which is what lets
+        // a caller do something once per account rather than once per resolution.
+        assertThat(racerCreation).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(new UserCreationResult.Resolved(winner, false));
         // Its own half-written user row was rolled back, so the race leaves no orphan behind.
         assertThat(userPersistence.listAllProfiles()).succeedsWithin(Duration.ofSeconds(5)).asInstanceOf(list(UserProfile.class)).containsExactly(winner);
         Closeable.closeIfNotNull(racer::stop);
@@ -479,6 +480,46 @@ class UserPersistenceImplTest {
         assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isEmpty();
     }
 
+    /// `created` separates "this call inserted the row" from "the row was already there", which a caller doing something once per account — sending a welcome
+    /// email, raising a registration alert — needs and the variant alone does not give it.
+    @Test
+    void reportsWhetherTheCallActuallyCreatedTheUser() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
+
+        assertThat(userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS))
+                .isInstanceOfSatisfying(UserCreationResult.Resolved.class, resolved -> assertThat(resolved.created()).isTrue());
+        assertThat(userPersistence.getOrCreateByIdentity(identity, profileInput).get(5, SECONDS))
+                .isInstanceOfSatisfying(UserCreationResult.Resolved.class, resolved -> assertThat(resolved.created()).isFalse());
+    }
+
+    /// The soft-deleted window is the whole reason this read exists: an account scheduled for deletion is soft-deleted at once, and anything that still has to
+    /// reach its owner before erasure — the deletion-scheduled and account-erased emails — can no longer find them through getById.
+    @Test
+    void getByIdIgnoringDeletionSeesASoftDeletedUserThatGetByIdDoesNot() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
+
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+
+        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.getByIdIgnoringDeletion(created.id()).get(5, SECONDS))
+                .hasValueSatisfying(profile -> assertThat(profile.email()).contains("user@example.com"));
+    }
+
+    @Test
+    void getByIdIgnoringDeletionIsEmptyOnceHardDeleted() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
+
+        userPersistence.hardDelete(created.id()).get(5, SECONDS);
+
+        assertThat(userPersistence.getByIdIgnoringDeletion(created.id()).get(5, SECONDS)).isEmpty();
+    }
+
     @Test
     void restoreRevivesOnlyIdentitiesSoftDeletedWithTheAccount() throws Exception {
         var clock = new ProgrammableClock();
@@ -592,7 +633,7 @@ class UserPersistenceImplTest {
     private UserProfile createUser(UserIdentity identity, UserProfileInput profile) throws Exception {
         var creation = userPersistence.getOrCreateByIdentity(identity, profile).get(5, SECONDS);
         return switch (creation) {
-            case UserCreationResult.Resolved(var profileResult) -> profileResult;
+            case UserCreationResult.Resolved(var profileResult, _) -> profileResult;
             case UserCreationResult.EmailAlreadyInUse ignored -> throw new AssertionError("expected Resolved, got EmailAlreadyInUse");
         };
     }
@@ -615,7 +656,7 @@ class UserPersistenceImplTest {
     }
 
     private static UserProfileInput createProfileInput(String email, String displayName, ZoneId timezone) {
-        return new UserProfileInput(of(email), of(displayName), timezone);
+        return new UserProfileInput(email, of(displayName), timezone);
     }
 
     private static void dropIdentityTable(DataSource dataSource, PersistenceDomain domain) throws SQLException {

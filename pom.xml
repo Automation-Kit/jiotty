@@ -275,6 +275,7 @@
         <module>jiotty-common</module>
         <module>jiotty-connector-anthropic</module>
         <module>jiotty-connector-aws</module>
+        <module>jiotty-connector-brevo</module>
         <module>jiotty-connector-expo-push</module>
         <module>jiotty-connector-firebase</module>
         <module>jiotty-connector-icloud</module>
