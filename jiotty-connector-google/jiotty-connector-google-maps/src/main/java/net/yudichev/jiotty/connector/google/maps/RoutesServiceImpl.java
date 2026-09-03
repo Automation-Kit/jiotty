@@ -82,7 +82,6 @@ public final class RoutesServiceImpl extends BaseLifecycleComponent implements R
                                               .setTravelMode(RouteTravelMode.DRIVE)
                                               .setRoutingPreference(RoutingPreference.TRAFFIC_AWARE);
             parameters.departureTime().ifPresent(departure -> builder.setDepartureTime(toProto(departure)));
-            parameters.arrivalTime().ifPresent(arrival -> builder.setArrivalTime(toProto(arrival)));
             ComputeRoutesRequest request = builder.build();
             int requestId = requestIdGen.incrementAndGet();
             logger.debug("[{}] Sending request: {}", requestId, request);

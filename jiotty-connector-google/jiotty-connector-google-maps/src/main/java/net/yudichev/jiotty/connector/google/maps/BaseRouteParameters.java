@@ -18,7 +18,6 @@ interface BaseRouteParameters {
     @Redacted
     Either<String, LatLon> destinationLocation();
 
+    /// When the drive starts; the time the route is computed at when absent, and an instant in the past is rejected.
     Optional<Instant> departureTime();
-
-    Optional<Instant> arrivalTime();
 }
