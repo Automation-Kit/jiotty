@@ -47,7 +47,7 @@ public final class Prices implements StringFormattable {
     public Instant startOfProfileIndex(int index) {
         checkArgument(index >= 0 && index <= profile.pricePerInterval().size()); // NB allow idx == size
         return index == 0 ? profileStart :
-               index == profile.pricePerInterval().size() ? profileEnd
+               index == profile.pricePerInterval().size() ? profileEnd()
                                                           : profileStart.plusSeconds(index * (long) profile.intervalLengthSec());
     }
 

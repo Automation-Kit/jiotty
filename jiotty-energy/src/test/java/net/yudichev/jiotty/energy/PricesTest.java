@@ -31,4 +31,15 @@ class PricesTest {
         assertThat(limitedPrices.profile().intervalLengthSec()).isEqualTo(60);
         assertThat(limitedPrices.profile().pricePerInterval()).isEmpty();
     }
+
+    /// The index one past the last slot answers the profile's end, and does so on a freshly built profile — the end is memoised, so a caller that asks for it
+    /// before anything else has must still get it.
+    @Test
+    void startOfProfileIndexAcceptsTheIndexPastTheLastSlotAndReturnsTheEnd() {
+        var prices = new Prices(Instant.EPOCH, new PriceProfile(60, 0, List.of(0.1, 0.2, 0.3)));
+
+        assertThat(prices.startOfProfileIndex(3)).isEqualTo(Instant.EPOCH.plus(Duration.ofMinutes(3)));
+        assertThat(prices.startOfProfileIndex(0)).isEqualTo(Instant.EPOCH);
+        assertThat(prices.startOfProfileIndex(2)).isEqualTo(Instant.EPOCH.plus(Duration.ofMinutes(2)));
+    }
 }

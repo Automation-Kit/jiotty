@@ -75,6 +75,41 @@ class JsonTest {
         assertThat(out).hasToString("prefix {\"x\":1,\"y\":2} suffix");
     }
 
+    /// The pre-built writer must produce byte-for-byte what the untyped overload does, since the only reason to reach for it is speed.
+    @Test
+    void writesThroughAPreBuiltWriterExactlyAsTheUntypedOverloadDoes() {
+        var throughWriterOutput = new StringBuilder();
+        var untypedOutput = new StringBuilder();
+
+        Json.writeTo(throughWriterOutput, Json.createWriterFor(new TypeToken<Point>() {}), new Point(1, 2));
+        Json.writeTo(untypedOutput, new Point(1, 2));
+
+        assertThat(throughWriterOutput).hasToString(untypedOutput.toString());
+    }
+
+    /// The [Class] overload exists so the common non-generic case needs no [TypeToken], so it must produce the same writer.
+    @Test
+    void buildsTheSameWriterFromAClassAsFromATypeToken() {
+        var fromClassOutput = new StringBuilder();
+        var fromTypeTokenOutput = new StringBuilder();
+
+        Json.writeTo(fromClassOutput, Json.createWriterFor(Point.class), new Point(1, 2));
+        Json.writeTo(fromTypeTokenOutput, Json.createWriterFor(new TypeToken<Point>() {}), new Point(1, 2));
+
+        assertThat(fromClassOutput).hasToString(fromTypeTokenOutput.toString());
+    }
+
+    /// Same buffer contract as the untyped overload: append, and leave the caller's builder usable after Jackson has closed the sink it was handed.
+    @Test
+    void appendsThroughAPreBuiltWriterIntoABufferTheCallerKeepsWriting() {
+        var out = new StringBuilder("prefix ");
+
+        Json.writeTo(out, Json.createWriterFor(new TypeToken<Point>() {}), new Point(1, 2));
+        out.append(" suffix");
+
+        assertThat(out).hasToString("prefix {\"x\":1,\"y\":2} suffix");
+    }
+
     /// Binding a sub-tree must behave exactly as parsing that sub-tree's own text would, since the whole reason to keep an island of a payload as a tree is
     /// that its type is only known further in.
     @Test

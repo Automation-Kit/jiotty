@@ -91,6 +91,14 @@ public final class Json {
         asUnchecked(() -> mapper.writeValue(CharStreams.asWriter(output), value));
     }
 
+    /// Streams `value` into `output` through a writer built once by [#createWriterFor], skipping the per-value reflective type lookup the untyped
+    /// [#writeTo(Appendable, Object)] performs on every call. Use this wherever the value's type is known up front, which is most places.
+    ///
+    /// @param writer a writer for `value`'s type, held in a `static final` field by the caller
+    public static void writeTo(Appendable output, ObjectWriter writer, Object value) {
+        asUnchecked(() -> writer.writeValue(CharStreams.asWriter(output), value));
+    }
+
     /// Returns an [ObjectWriter] pre-configured for the given Java type. The writer caches Jackson's serialiser graph for `type` once; subsequent
     /// `writer.writeValue(...)` calls skip the per-value reflective type lookup that [#stringify] / [#writeTo] perform every time they're invoked.
     ///
@@ -102,5 +110,14 @@ public final class Json {
     /// @return a thread-safe writer for `type`
     public static ObjectWriter createWriterFor(TypeToken<?> type) {
         return getAsUnchecked(() -> mapper.writerFor(mapper.constructType(type.getType())));
+    }
+
+    /// The same for a type with no generic parameters, which is most of them — `createWriterFor(Resp.class)` rather than
+    /// `createWriterFor(new TypeToken<Resp>() {})`.
+    ///
+    /// @param type the value's compile-time type
+    /// @return a thread-safe writer for `type`
+    public static ObjectWriter createWriterFor(Class<?> type) {
+        return getAsUnchecked(() -> mapper.writerFor(type));
     }
 }
