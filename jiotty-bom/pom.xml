@@ -470,11 +470,6 @@
                 <version>${version.org.apache.logging.log4j}</version>
             </dependency>
             <dependency>
-                <groupId>org.apache.logging.log4j</groupId>
-                <artifactId>log4j-jakarta-smtp</artifactId>
-                <version>${version.org.apache.logging.log4j}</version>
-            </dependency>
-            <dependency>
                 <groupId>org.mnode.ical4j</groupId>
                 <artifactId>ical4j</artifactId>
                 <version>4.2.5</version>
