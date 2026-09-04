@@ -175,6 +175,30 @@ class OctopusEnergyProviderServiceTest {
         assertThat(forecastRegionB.subscribers).describedAs("new forecast subscription opened").hasSize(1);
     }
 
+    /// The forecast fills slots past the real prices but never makes the real ones reach further, so the Agile delegate's expectation is the account's.
+    @Test
+    void agileDelegateRefreshTime_isForwardedToSubscribers() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        service.start();
+        clock.tick();
+
+        List<Instant> received = new ArrayList<>();
+        service.subscribeToNextRefreshTime(received::add);
+        clock.tick();
+        assertThat(received).describedAs("nothing until the delegate has said").isEmpty();
+
+        agileRegionA.publishRefreshTime(Instant.parse("2024-01-02T16:00:00Z"));
+        clock.tick();
+        assertThat(received).containsExactly(Instant.parse("2024-01-02T16:00:00Z"));
+
+        // rerouting to another tariff picks up that delegate's expectation instead
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_B)));
+        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
+        agileRegionB.publishRefreshTime(Instant.parse("2024-01-03T16:00:00Z"));
+        clock.tick();
+        assertThat(received).containsExactly(Instant.parse("2024-01-02T16:00:00Z"), Instant.parse("2024-01-03T16:00:00Z"));
+    }
+
     @Test
     void accountFetchFailure_emitsPriceRetrievalError() {
         // With RetryableOperationExecutor.noRetries() in setUp, a failed account fetch falls straight through to the whenComplete failure branch, which
@@ -509,6 +533,7 @@ class OctopusEnergyProviderServiceTest {
     /// Hand-rolled fake of [EnergyPriceService] that lets tests observe the subscriber list and publish results synchronously.
     private static final class FakeAgilePriceService implements EnergyPriceService {
         private final List<Consumer<Either<Prices, Failure>>> subscribers = new ArrayList<>();
+        private final List<Consumer<Instant>> refreshTimeSubscribers = new ArrayList<>();
 
         @Override
         public Optional<Either<Prices, Failure>> getPrices() {
@@ -521,9 +546,21 @@ class OctopusEnergyProviderServiceTest {
             return () -> subscribers.remove(consumer);
         }
 
+        @Override
+        public Closeable subscribeToNextRefreshTime(Consumer<Instant> consumer) {
+            refreshTimeSubscribers.add(consumer);
+            return () -> refreshTimeSubscribers.remove(consumer);
+        }
+
         void publish(Either<Prices, Failure> result) {
             for (var s : new ArrayList<>(subscribers)) {
                 s.accept(result);
+            }
+        }
+
+        void publishRefreshTime(Instant value) {
+            for (var s : new ArrayList<>(refreshTimeSubscribers)) {
+                s.accept(value);
             }
         }
     }

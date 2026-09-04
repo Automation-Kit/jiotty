@@ -142,6 +142,28 @@ class JobSchedulerImplTest {
         assertThat(execCount).isEqualTo(2);
     }
 
+    /// A job given its own zone runs on that zone's wall clock, not the scheduler's — so a 16:00 London job fires at 15:00Z under BST even though the
+    /// scheduler itself is on UTC.
+    @Test
+    void daily_jobZoneOverridesSchedulerZone() {
+        startScheduler();
+        var executor = clock.createSingleThreadedSchedulingExecutor("test");
+        clock.setTime(Instant.parse("2025-07-01T11:00:00Z"));
+
+        scheduler.daily(executor, "dailyJob", LocalTime.of(16, 0), ZoneId.of("Europe/London"), task);
+        clock.tick();
+        assertThat(execCount).isEqualTo(0);
+
+        clock.setTimeAndTick(Instant.parse("2025-07-01T14:59:59Z"));
+        assertThat(execCount).isEqualTo(0);
+
+        clock.setTimeAndTick(Instant.parse("2025-07-01T15:00:00Z"));
+        assertThat(execCount).isEqualTo(1);
+
+        clock.setTimeAndTick(Instant.parse("2025-07-02T15:00:00Z"));
+        assertThat(execCount).isEqualTo(2);
+    }
+
     /// A job that throws reports the failure and goes on to schedule its next run.
     @Test
     void failingJobIsReportedAndKeepsRunning() {

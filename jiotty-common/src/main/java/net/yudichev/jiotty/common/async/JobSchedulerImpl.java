@@ -64,7 +64,12 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
 
     @Override
     public Closeable daily(Scheduler scheduler, String jobName, LocalTime time, Runnable task) {
-        var job = new DailyJob(scheduler, jobName, time, task);
+        return daily(scheduler, jobName, time, zoneId, task);
+    }
+
+    @Override
+    public Closeable daily(Scheduler scheduler, String jobName, LocalTime time, ZoneId zoneId, Runnable task) {
+        var job = new DailyJob(scheduler, jobName, time, zoneId, task);
         job.scheduleNext();
         return job;
     }
@@ -93,17 +98,19 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
         private final Scheduler scheduler;
         private final String jobName;
         private final Runnable task;
+        private final ZoneId jobZoneId;
         private final ZonedDateTime startTime;
 
         private int runNumber;
         private Closeable scheduleHandle;
 
-        protected ScheduledJob(Scheduler scheduler, String jobName, Runnable task) {
+        protected ScheduledJob(Scheduler scheduler, String jobName, ZoneId jobZoneId, Runnable task) {
             this.scheduler = checkNotNull(scheduler);
             this.jobName = checkNotNull(jobName);
+            this.jobZoneId = checkNotNull(jobZoneId);
             // Guarded so a failing run reports its failure and goes on to schedule the next one.
             this.task = Runnables.guarded("executing job " + jobName, task, taskFailureReporter::onTaskException);
-            startTime = currentDateTimeProvider.currentInstant().atZone(zoneId);
+            startTime = currentDateTimeProvider.currentInstant().atZone(jobZoneId);
         }
 
         @Override
@@ -112,7 +119,7 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
         }
 
         public final void scheduleNext() {
-            ZonedDateTime currentDateTime = currentDateTimeProvider.currentInstant().atZone(zoneId);
+            ZonedDateTime currentDateTime = currentDateTimeProvider.currentInstant().atZone(jobZoneId);
             ZonedDateTime nextDateTime;
             while ((nextDateTime = calculateNextTime(startTime, runNumber++)).isBefore(currentDateTime)) {
                 if (runNumber > 1) {
@@ -144,7 +151,7 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
         private final int dayOfMonth;
 
         MonthlyJob(Scheduler scheduler, String jobName, int dayOfMonth, Runnable task) {
-            super(scheduler, jobName, task);
+            super(scheduler, jobName, zoneId, task);
             this.dayOfMonth = dayOfMonth;
         }
 
@@ -157,8 +164,8 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
     private class DailyJob extends ScheduledJob {
         private final LocalTime time;
 
-        DailyJob(Scheduler scheduler, String jobName, LocalTime time, Runnable task) {
-            super(scheduler, jobName, task);
+        DailyJob(Scheduler scheduler, String jobName, LocalTime time, ZoneId jobZoneId, Runnable task) {
+            super(scheduler, jobName, jobZoneId, task);
             this.time = checkNotNull(time);
         }
 

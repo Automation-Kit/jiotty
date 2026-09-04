@@ -20,7 +20,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 /// [OctopusRegionService] for the tariff's region (or reuses an already-opened one), constructs the per-tariff impl via the injected
 /// [OctopusAgilePriceService.Factory], starts it, and caches the result. Repeat calls return the same impl instance.
 ///
-/// Two users on the same Octopus tariff therefore share the same daily 16:05 fetch and the same `octopus.rates:<productCode>:<tariffCode>` rows. Two users on
+/// Two users on the same Octopus tariff therefore share the same daily fetch and the same `octopus.rates:<productCode>:<tariffCode>` rows. Two users on
 /// different AGILE products in the same region get separate impls so each user's tariff resolves to its own rate stream.
 ///
 /// Closing the registry closes every created impl and every opened region service.

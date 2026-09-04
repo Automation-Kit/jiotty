@@ -83,6 +83,9 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     private final TimeSeriesCache cache;
     /// The latest price-or-failure result, empty until the first one is produced. New price subscribers receive the present value immediately.
     private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult = ObservableValue.concurrent(Optional.empty());
+    /// Mirrors the Agile delegate's expectation: the forecast fills slots beyond the real prices but never makes the real ones reach further. Confined to
+    /// [#executor], as is every touch of it including subscription.
+    private final ObservableValue<@Nullable Instant> nextRefreshTime = ObservableValue.simple(null);
     /// The latest account-fetch outcome, empty until the first one is produced. New account-details subscribers receive the present value immediately.
     private final ObservableValue<Optional<AccountFetchResult>> accountResult = ObservableValue.concurrent(Optional.empty());
 
@@ -90,6 +93,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     private OctopusAccountService accountService;
     private @Nullable Closeable pollSchedule;
     private @Nullable Closeable octopusSubscription;
+    private @Nullable Closeable octopusRefreshTimeSubscription;
     private @Nullable Closeable forecastSubscription;
     /// The [HumanReadableExceptionMessage#humanReadableMessage(Throwable)] of the last published fetch failure, cleared on a successful fetch. Consecutive
     /// failures with the same message are suppressed so a single outage produces one notification on each view. Accessed only on the poll executor.
@@ -129,7 +133,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
 
     @Override
     protected void doStop() {
-        closeSafelyIfNotNull(logger, pollSchedule, octopusSubscription, forecastSubscription, accountService);
+        closeSafelyIfNotNull(logger, pollSchedule, octopusSubscription, octopusRefreshTimeSubscription, forecastSubscription, accountService);
     }
 
     @Override
@@ -140,6 +144,15 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     @Override
     public Closeable subscribeToPrices(Consumer<Either<Prices, Failure>> consumer) {
         return whenStartedAndNotLifecycling(() -> priceResult.subscribe(result -> result.ifPresent(consumer)));
+    }
+
+    @Override
+    public Closeable subscribeToNextRefreshTime(Consumer<Instant> consumer) {
+        return whenStartedAndNotLifecycling(() -> nextRefreshTime.subscribe(executor, value -> {
+            if (value != null) {
+                consumer.accept(value);
+            }
+        }));
     }
 
     @Override
@@ -268,12 +281,15 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
 
         if (!Objects.equals(tariffCode, currentTariffCode)) {
             logger.info("Tariff changed: {} → {}; rerouting Octopus delegate", currentTariffCode, tariffCode);
-            closeSafelyIfNotNull(logger, octopusSubscription);
+            closeSafelyIfNotNull(logger, octopusSubscription, octopusRefreshTimeSubscription);
             octopusSubscription = null;
+            octopusRefreshTimeSubscription = null;
             currentOctopusResult = null;
             EnergyPriceService octopusDelegate = octopusRegistry.forTariff(productCode, tariffCode);
             octopusSubscription = octopusDelegate.subscribeToPrices(
                     result -> executor.tryExecute("onOctopusResult", () -> ifNotStopped(() -> onOctopusResult(result))));
+            octopusRefreshTimeSubscription = octopusDelegate.subscribeToNextRefreshTime(
+                    value -> executor.tryExecute("onOctopusRefreshTime", () -> ifNotStopped(() -> nextRefreshTime.accept(value))));
             currentTariffCode = tariffCode;
         }
 
@@ -295,8 +311,9 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
             return;
         }
         logger.info("User moved to non-Agile tariff {}; closing delegates and emitting IncompatibleTariff", tariffCode);
-        closeSafelyIfNotNull(logger, octopusSubscription, forecastSubscription);
+        closeSafelyIfNotNull(logger, octopusSubscription, octopusRefreshTimeSubscription, forecastSubscription);
         octopusSubscription = null;
+        octopusRefreshTimeSubscription = null;
         forecastSubscription = null;
         currentOctopusResult = null;
         currentForecastPrices = null;
