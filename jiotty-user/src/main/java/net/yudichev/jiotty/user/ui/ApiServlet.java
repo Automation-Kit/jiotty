@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.user.ui;
 
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -13,7 +12,7 @@ import static net.yudichev.jiotty.user.ui.RequestContextFilter.requestContext;
 /// Single servlet handling every `/ui/api/*` request. Body delegates to [UIServerRuntime#dispatchApiPath] and renders its outcome: a miss writes 404, a
 /// stopped/mid-lifecycle runtime writes a retryable 503. All built-in and user-registered endpoints live behind [ApiPathHandler]s; this servlet does not switch
 /// on method or path.
-final class ApiServlet extends HttpServlet {
+final class ApiServlet extends BaseHttpServlet {
 
     @Override
     protected void service(HttpServletRequest request, HttpServletResponse response) {

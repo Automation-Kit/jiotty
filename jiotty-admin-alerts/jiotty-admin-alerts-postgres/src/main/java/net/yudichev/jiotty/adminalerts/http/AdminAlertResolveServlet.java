@@ -3,20 +3,17 @@ package net.yudichev.jiotty.adminalerts.http;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import jakarta.servlet.AsyncContext;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.adminalerts.AdminAlertService.ResolveByIdOutcome;
 import net.yudichev.jiotty.common.lang.Json;
+import net.yudichev.jiotty.user.ui.BaseHttpServlet;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
-import java.io.NotSerializableException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.io.Serial;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -37,7 +34,7 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413
 /// the request attribute the filter set.
 ///
 /// Implemented as an async servlet ([HttpServletRequest#startAsync()]) so the Jetty request thread is released while the alert service does its database work.
-public final class AdminAlertResolveServlet extends HttpServlet {
+public final class AdminAlertResolveServlet extends BaseHttpServlet {
     @Serial
     private static final long serialVersionUID = 1L;
 
@@ -54,18 +51,6 @@ public final class AdminAlertResolveServlet extends HttpServlet {
     @Inject
     public AdminAlertResolveServlet(@Dependency AdminAlertService alertService) {
         this.alertService = checkNotNull(alertService, "alertService");
-    }
-
-    /// HttpServlet inherits Serializable from the Servlet API; this servlet is wired by Guice and is never persisted across JVM boundaries. Reject any attempt
-    /// to deserialize so an attacker cannot reconstruct one with a substituted [AdminAlertService].
-    @Serial
-    private void readObject(ObjectInputStream in) throws NotSerializableException {
-        throw new NotSerializableException(getClass().getName());
-    }
-
-    @Serial
-    private void writeObject(ObjectOutputStream out) throws NotSerializableException {
-        throw new NotSerializableException(getClass().getName());
     }
 
     @Override

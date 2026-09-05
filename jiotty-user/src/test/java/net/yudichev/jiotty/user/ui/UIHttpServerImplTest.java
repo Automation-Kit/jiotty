@@ -164,7 +164,7 @@ class UIHttpServerImplTest {
         asUnchecked(() -> when(runtime.dispatchApiPath(any(), any())).thenAnswer(invocation -> {
             HttpServletRequest req = invocation.getArgument(0);
             HttpServletResponse resp = invocation.getArgument(1);
-            req.setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/api/analytics");
+            req.setAttribute(UIHttpServer.ROUTE_NAME_ATTRIBUTE, "/api/analytics");
             resp.setStatus(OK_200);
             resp.setContentType("text/plain");
             resp.getWriter().print("ok");

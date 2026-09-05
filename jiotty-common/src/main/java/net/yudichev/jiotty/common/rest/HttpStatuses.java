@@ -6,6 +6,7 @@ public final class HttpStatuses {
     public static final int OK_200 = 200;
     public static final int CREATED_201 = 201;
     public static final int NO_CONTENT_204 = 204;
+    public static final int NOT_MODIFIED_304 = 304;
     public static final int BAD_REQUEST_400 = 400;
     public static final int UNAUTHORIZED_401 = 401;
     public static final int FORBIDDEN_403 = 403;

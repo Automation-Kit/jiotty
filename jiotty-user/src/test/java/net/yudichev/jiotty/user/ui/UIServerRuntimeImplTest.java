@@ -98,7 +98,7 @@ class UIServerRuntimeImplTest {
         assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.HANDLED);
 
         var inOrder = inOrder(request, handler);
-        inOrder.verify(request).setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/ui/api/analytics");
+        inOrder.verify(request).setAttribute(UIHttpServer.ROUTE_NAME_ATTRIBUTE, "/ui/api/analytics");
         inOrder.verify(handler).handle(request, response);
     }
 
@@ -109,7 +109,7 @@ class UIServerRuntimeImplTest {
         when(request.getPathInfo()).thenReturn("/other");
 
         assertThat(runtime.dispatchApiPath(request, response)).isEqualTo(DispatchResult.NOT_FOUND);
-        verify(request, never()).setAttribute(UIHttpServerImpl.ROUTE_NAME_ATTRIBUTE, "/ui/api/something");
+        verify(request, never()).setAttribute(UIHttpServer.ROUTE_NAME_ATTRIBUTE, "/ui/api/something");
     }
 
     @Test

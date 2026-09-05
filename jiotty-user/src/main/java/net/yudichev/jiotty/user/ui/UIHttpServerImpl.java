@@ -53,15 +53,11 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 ///   - `http_request_seconds` — recorded when Jetty fires `onComplete` at full request completion. For non-streaming endpoints it mirrors
 ///     `http_response_begin_seconds`; for SSE it measures session length, which is informational rather than a TTFB signal.
 ///
-/// The `path` tag is derived from the request attribute named [#ROUTE_NAME_ATTRIBUTE] when present (set by [UIServerRuntime#dispatchApiPath] to the matched
-/// [ApiPathHandler#pathPrefix]). When the attribute is absent, the tag falls back to the first URL path segment of the request **if** that segment is one of
-/// the [ServletMount] context paths registered with the server; any other path (browser auto-requests like `/favicon.ico`, probes, typos) collapses into a
-/// single `"unmatched"` bucket, and the root `/` stays as `/`. Tag values are drawn from this bounded identifier set only.
+/// The `path` tag is derived from the request attribute named [UIHttpServer#ROUTE_NAME_ATTRIBUTE] when present (set by [UIServerRuntime#dispatchApiPath]
+/// to the matched handler's full URL path). When the attribute is absent, the tag falls back to the first URL path segment of the request **if** that
+/// segment is one of the [ServletMount] context paths registered with the server; any other path (browser auto-requests like `/favicon.ico`, probes, typos)
+/// collapses into a single `"unmatched"` bucket, and the root `/` stays as `/`. Tag values are drawn from this bounded identifier set only.
 final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
-    /// Request-attribute key set by [UIServerRuntime#dispatchApiPath] (and any other dispatcher that wants per-route metrics) to override the default
-    /// `path` tag derived by this server's request-timing hook from the URL. The value, if present, must be a [String]; the bounded set of legal values
-    /// is the union of registered [ApiPathHandler#pathPrefix] values.
-    static final String ROUTE_NAME_ATTRIBUTE = "metrics.routeName";
     /// Bounded request-handling thread pool. SSE streams run async — their writes are marshalled onto the
     /// UI executor, never held on a Jetty thread — so they do not occupy this pool per-stream; the max is
     /// sized for concurrent short requests across the user base, not for stream count.
@@ -151,8 +147,8 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     }
 
     /// Normalises each registered [ContextHandler]'s context path to its first URL segment (e.g. `/ui/api` → `/ui`, `/admin/api` → `/admin`, `/ui` → `/ui`).
-    /// The resulting set is the bounded universe of legal `path` tag values for requests that do not carry a [#ROUTE_NAME_ATTRIBUTE] override; everything
-    /// outside it collapses to `"unmatched"` in [TimingEventsHandler#resolvePath].
+    /// The resulting set is the bounded universe of legal `path` tag values for requests that do not carry a [UIHttpServer#ROUTE_NAME_ATTRIBUTE] override;
+    /// everything outside it collapses to `"unmatched"` in [TimingEventsHandler#resolvePath].
     private static ImmutableSet<String> collectAllowedFirstSegments(ContextHandlerCollection contexts) {
         var prefixes = ImmutableSet.<String>builder();
         for (Handler child : contexts.getHandlers()) {
@@ -214,7 +210,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         }
 
         /// Derives a bounded `path` tag. Preference order:
-        ///   1. the [#ROUTE_NAME_ATTRIBUTE] attribute, set by the dispatching app code (e.g. [UIServerImpl] for [ApiPathHandler] routes);
+        ///   1. the [UIHttpServer#ROUTE_NAME_ATTRIBUTE] attribute, set by the dispatching app code (e.g. [UIServerImpl] for [ApiPathHandler] routes);
         ///   2. the first URL path segment of the request when that segment is one of the registered top-level segments (the first segment of each
         ///      [ServletMount] context path — e.g. a mount at `/ui/api` contributes `/ui`). [EventsHandler#onResponseBegin] fires before the wrapped chain
         ///      attaches the matched servlet context to the [Request], so the URL segment is the identifier available at this stage.
