@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.rest.RestClients;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
@@ -27,9 +28,11 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -152,6 +155,20 @@ class TeslaFleetImplTest {
         respondWith(UNAUTHORIZED_401, TOKEN_EXPIRED_BODY);
 
         verify(tokenManager, never()).invalidate(any(), any());
+    }
+
+    /// A completion callback discards whatever escapes it, so an invalidation that throws is caught and logged here. The caller still sees the rejection that
+    /// prompted it.
+    @Test
+    void invalidationThrowing_leavesTheCallerTheRejection() {
+        doThrow(new IllegalStateException("token manager is stopped")).when(tokenManager).invalidate(any(), any());
+
+        CompletableFuture<?> result = teslaFleet.listVehicles();
+        respondWith(UNAUTHORIZED_401, TOKEN_EXPIRED_BODY);
+
+        assertThat(result).isCompletedExceptionally();
+        assertThatThrownBy(result::join).hasRootCauseInstanceOf(HttpResponseException.class);
+        verify(tokenManager).invalidate(eq(ACCESS_TOKEN), contains("rejected the credential"));
     }
 
     /// With no usable token there is nothing to reject, so the call fails without reaching the network and without a rejection to report.

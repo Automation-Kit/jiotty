@@ -151,13 +151,13 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
                 CompletableFuture<T> callFuture = code.apply(accessToken);
                 callFuture.whenComplete((_, throwable) -> {
                     if (throwable != null && indicatesRejectedCredential(throwable)) {
-                        // A response arriving during teardown finds this component stopped, and invalidate() would then throw.
-                        ifNotStopped(() -> tokenManager.invalidate(accessToken, "Tesla Fleet API rejected the credential"));
-                    }
-                }).whenComplete((_, hookFailure) -> {
-                    // Nothing consumes the hook's own stage, so an exception raised inside it would otherwise go nowhere.
-                    if (hookFailure != null) {
-                        logger.info("Failed to invalidate the rejected credential", hookFailure);
+                        try {
+                            // A response arriving during teardown finds this component stopped, and invalidate() would then throw.
+                            ifNotStopped(() -> tokenManager.invalidate(accessToken, "Tesla Fleet API rejected the credential"));
+                        } catch (RuntimeException e) {
+                            // Nothing consumes this hook's stage, so an exception raised here would otherwise go nowhere.
+                            logger.info("Failed to invalidate the rejected credential", e);
+                        }
                     }
                 });
                 yield callFuture.copy();
