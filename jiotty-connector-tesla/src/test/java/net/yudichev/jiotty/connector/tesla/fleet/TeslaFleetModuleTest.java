@@ -4,8 +4,11 @@ import com.google.common.collect.ImmutableSet;
 import com.google.inject.AbstractModule;
 import com.google.inject.Guice;
 import com.google.inject.Key;
+import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
+import net.yudichev.jiotty.common.inject.LifecycleComponent;
+import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
@@ -14,6 +17,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.lang.annotation.Annotation;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
@@ -48,6 +53,33 @@ class TeslaFleetModuleTest {
 
         assertThat(module.getExposedKey()).isEqualTo(Key.get(TeslaFleet.class, annotation));
         assertThat(injector.getInstance(module.getExposedKey())).isInstanceOf(TeslaFleetImpl.class);
+    }
+
+    /// A start with no stored token means one of two very different things, and `withLoginPending` is what tells them apart. With a login in flight the state
+    /// must stay transient, because an owner that sees a permanent failure treats the just-entered credentials as rejected and tears the login down before the
+    /// auth code can be exchanged.
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void loginPendingDecidesWhetherANoTokenStartIsPermanent(boolean loginPending) {
+        ExposedKeyModule<TeslaFleet> module = TeslaFleetModule.builder()
+                                                              .setClientId(literally("test-client-id"))
+                                                              .setClientSecret(literally("test-client-secret"))
+                                                              .withVarStore(literally(new InMemoryVarStore()))
+                                                              .withLoginPending(literally(loginPending))
+                                                              .withAnnotation(forAnnotation(uniqueAnnotation()))
+                                                              .build();
+        var injector = Guice.createInjector(TimeModule.builder().build(), ExecutorModule.builder().build(), module);
+        List<LifecycleComponent> components = injector.findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
+                                                      .stream().map(binding -> injector.getInstance(binding.getKey())).toList();
+        components.forEach(LifecycleComponent::start);
+        try {
+            var states = new CopyOnWriteArrayList<AuthState>();
+            try (var _ = injector.getInstance(module.getExposedKey()).subscribeToTokenState(states::add)) {
+                assertThat(states).last().isInstanceOf(loginPending ? AuthState.TransientFailure.class : AuthState.PermanentFailure.class);
+            }
+        } finally {
+            components.reversed().forEach(LifecycleComponent::stop);
+        }
     }
 
     /// Omitting the var store falls back to whatever [VarStore] the surrounding graph binds, so the connector works in an application that already has one.

@@ -31,6 +31,7 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
     private final BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec;
     private final BindingSpec<Set<String>> oauthScopesSpec;
     private final BindingSpec<String> logSubjectIdSpec;
+    private final BindingSpec<Boolean> loginPendingSpec;
     private final @Nullable BindingSpec<VarStore> varStoreSpec;
     private final boolean localLogin;
 
@@ -40,6 +41,7 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
                              BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec,
                              BindingSpec<Set<String>> oauthScopesSpec,
                              BindingSpec<String> logSubjectIdSpec,
+                             BindingSpec<Boolean> loginPendingSpec,
                              @Nullable BindingSpec<VarStore> varStoreSpec,
                              boolean localLogin,
                              SpecifiedAnnotation specifiedAnnotation) {
@@ -50,6 +52,7 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
         this.sslCustomisationSpec = checkNotNull(sslCustomisationSpec);
         this.oauthScopesSpec = checkNotNull(oauthScopesSpec);
         this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
+        this.loginPendingSpec = checkNotNull(loginPendingSpec);
         this.varStoreSpec = varStoreSpec;
         this.localLogin = localLogin;
     }
@@ -72,6 +75,7 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
                 .withLogSubjectId(logSubjectIdSpec)
                 .setTokenUrl(literally("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"))
                 .setScope(oauthScopesSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, TeslaFleetModule::scope))
+                .withLoginPending(loginPendingSpec)
                 .withAnnotation(forAnnotation(TeslaFleetImpl.Dependency.class));
         if (varStoreSpec != null) {
             tokenManagerModuleBuilder.withVarStore(varStoreSpec);
@@ -98,6 +102,7 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
         private BindingSpec<Optional<SslCustomisation>> sslCustomisationSpec = literally(Optional.empty());
         private BindingSpec<Set<String>> oauthScopesSpec = literally(ImmutableSet.of(OFFLINE_ACCESS_SCOPE));
         private BindingSpec<String> logSubjectIdSpec = literally("");
+        private BindingSpec<Boolean> loginPendingSpec = literally(false);
         private BindingSpec<VarStore> varStoreSpec;
         private boolean localLogin;
 
@@ -138,6 +143,13 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
             return this;
         }
 
+        /// Whether the owner holds an auth code it will hand to [TeslaFleet#onNewAuthCode] as part of its own startup. See
+        /// [OAuth2TokenManagerModule.Builder#withLoginPending].
+        public Builder withLoginPending(BindingSpec<Boolean> loginPendingSpec) {
+            this.loginPendingSpec = checkNotNull(loginPendingSpec);
+            return this;
+        }
+
         /// installs a local login redirect server that listens on `http://localhost:<port>/callback`
         public Builder withLocalLogin(boolean localLogin) {
             this.localLogin = localLogin;
@@ -152,6 +164,7 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
                                         sslCustomisationSpec,
                                         oauthScopesSpec,
                                         logSubjectIdSpec,
+                                        loginPendingSpec,
                                         varStoreSpec,
                                         localLogin,
                                         specifiedAnnotation());
