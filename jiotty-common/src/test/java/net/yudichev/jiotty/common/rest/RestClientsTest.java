@@ -27,6 +27,7 @@ import java.util.function.Function;
 
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -218,6 +219,35 @@ class RestClientsTest {
                     // Message format preserved verbatim from the previous untyped form so any string-matching callers keep working.
                     assertThat(http).hasMessageContaining("Response code 403").hasMessageContaining("forbidden");
                 });
+    }
+
+    /// Some upstreams report domain refusals in an error envelope the caller wants parsed, which is what the parsing overload is for. A rejected credential is
+    /// never one of those: it has to reach the caller as a status, or nothing can tell it apart from a refusal the credential could survive.
+    @Test
+    void call_parsingUnsuccessfulResponses_stillThrowsOnARejectedCredential() {
+        urlToBody.put(BASE + "/unauthorised", "{\"error\":\"token expired\"}");
+        urlToHttpStatus.put(BASE + "/unauthorised", UNAUTHORIZED_401);
+
+        CompletableFuture<Page> future = RestClients.call(callFactory.apply(BASE + "/unauthorised"), new TypeToken<>() {}, 0, true);
+
+        assertThatThrownBy(future::join)
+                .cause()
+                .isInstanceOfSatisfying(HttpResponseException.class, http -> {
+                    assertThat(http.statusCode()).isEqualTo(UNAUTHORIZED_401);
+                    assertThat(http.body()).isEqualTo("{\"error\":\"token expired\"}");
+                });
+    }
+
+    /// Every other unsuccessful status keeps the parsing behaviour the flag asks for.
+    @Test
+    void call_parsingUnsuccessfulResponses_stillParsesANonAuthError() {
+        urlToBody.put(BASE + "/refused", """
+                                         {"results": [{"name": "refused"}], "next": null}""");
+        urlToHttpStatus.put(BASE + "/refused", FORBIDDEN_403);
+
+        CompletableFuture<Page> future = RestClients.call(callFactory.apply(BASE + "/refused"), new TypeToken<>() {}, 0, true);
+
+        assertThat(future.join().results()).singleElement().satisfies(item -> assertThat(item.name()).isEqualTo("refused"));
     }
 
     /// The whole point of the suppressed variant: an upstream that quotes the submitted value back must not have that value reproduced in the exception, which

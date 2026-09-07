@@ -28,6 +28,7 @@ import static java.util.Objects.requireNonNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 
 public final class RestClients {
     private static final Logger logger = LogManager.getLogger(RestClients.class);
@@ -135,7 +136,10 @@ public final class RestClients {
                         } else {
                             String responseString = safelyToString(responseBody);
                             logResponse(requestId, response.code(), responseString);
-                            if (attemptParsingUnsuccessfulResponse) {
+                            // A rejected credential is never a domain response, whatever the endpoint's error envelope looks like, so it is reported as the
+                            // status rather than parsed — otherwise it reaches the caller as an ordinary value and nothing can tell it apart from a refusal
+                            // the credential could survive.
+                            if (attemptParsingUnsuccessfulResponse && response.code() != UNAUTHORIZED_401) {
                                 parseAndCompleteFuture(responseString);
                             } else {
                                 // The status is kept — SharedUpstreamOutage classifies retryability from it — while the body, which is what an upstream uses

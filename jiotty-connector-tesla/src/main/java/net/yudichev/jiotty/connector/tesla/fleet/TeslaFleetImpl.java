@@ -1,14 +1,15 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.net.SslCustomisation;
+import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import okhttp3.Call;
@@ -29,6 +30,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.StringJoiner;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -40,15 +42,15 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.stream.Collectors.joining;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
-import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
+import static net.yudichev.jiotty.common.misc.RejectedCredential.indicatesRejectedCredential;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 
-public final class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet {
+public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet {
     public static final AuthState.Success SUCCESS = new AuthState.Success("SUCCESS");
     private static final Logger logger = LogManager.getLogger(TeslaFleetImpl.class);
     private static final TypeToken<ResponseWrapper<List<TeslaVehicleData>>> LIST_VEHICLES_RESPONSE_TYPE = new TypeToken<>() {};
@@ -76,17 +78,23 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
 
     @Override
     protected void doStart() {
-        httpClient = newClient(builder -> {
-            if (sslCustomisation != null) {
-                builder.sslSocketFactory(sslCustomisation.socketFactory(), sslCustomisation.trustManager());
-            }
-        });
+        httpClient = createHttpClient();
         tokenSubscription = tokenManager.subscribeToAccessTokenState(accessTokenObservable);
     }
 
     @Override
     protected void doStop() {
         closeSafelyIfNotNull(logger, tokenSubscription, () -> shutdown(httpClient));
+    }
+
+    /// Creates the client every Fleet call goes through. Overridden in tests to inject a deterministic fake.
+    @VisibleForTesting
+    OkHttpClient createHttpClient() {
+        return newClient(builder -> {
+            if (sslCustomisation != null) {
+                builder.sslSocketFactory(sslCustomisation.socketFactory(), sslCustomisation.trustManager());
+            }
+        });
     }
 
     @Override
@@ -134,10 +142,27 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
         return new TeslaVehicleImpl(vin);
     }
 
+    /// Runs `code` with the current access token, and invalidates that token if the API answers that it will not accept it. The hook rides the call's own
+    /// future while the caller is handed a copy: a retrying caller cancels what it was given, and a cancelled stage never sees the rejection arriving after.
     private <T> CompletableFuture<T> withValidTokenOrFail(Function<String, CompletableFuture<T>> code) {
         return whenStartedAndNotLifecycling(() -> switch (accessTokenObservable.get()) {
-            case AuthState.Success success -> code.apply(success.authInfo());
-            case AuthState.Failure failure -> CompletableFutures.failure(failure.description());
+            case AuthState.Success success -> {
+                String accessToken = success.authInfo();
+                CompletableFuture<T> callFuture = code.apply(accessToken);
+                callFuture.whenComplete((_, throwable) -> {
+                    if (throwable != null && indicatesRejectedCredential(throwable)) {
+                        // A response arriving during teardown finds this component stopped, and invalidate() would then throw.
+                        ifNotStopped(() -> tokenManager.invalidate(accessToken, "Tesla Fleet API rejected the credential"));
+                    }
+                }).whenComplete((_, hookFailure) -> {
+                    // Nothing consumes the hook's own stage, so an exception raised inside it would otherwise go nowhere.
+                    if (hookFailure != null) {
+                        logger.info("Failed to invalidate the rejected credential", hookFailure);
+                    }
+                });
+                yield callFuture.copy();
+            }
+            case AuthState.Failure failure -> failure(failure.description());
         });
     }
 
@@ -190,20 +215,13 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
                         } else if (response.code() == RESPONSE_CODE_OFFLINE) {
                             future.complete(Optional.empty());
                         } else {
-                            future.completeExceptionally(new RuntimeException(
-                                    "Response code " + response.code() + ", body: " + safelyToString(responseBody)));
+                            // Carries the status so callers can classify it — a 401 here says the credential was rejected. The body was read above; re-reading
+                            // it would fail, because okhttp closes the source on the first read.
+                            future.completeExceptionally(new HttpResponseException(response.code(), responseString));
                         }
                     } catch (RuntimeException | IOException e) {
                         future.completeExceptionally(new RuntimeException("failed to process response body", e));
                     }
-                }
-            }
-
-            private static String safelyToString(ResponseBody responseBody) {
-                try {
-                    return responseBody.string();
-                } catch (@SuppressWarnings("OverlyBroadCatchBlock") Exception e) {
-                    return "<failed to read body: " + humanReadableMessage(e) + ">";
                 }
             }
         });
@@ -293,7 +311,11 @@ public final class TeslaFleetImpl extends BaseLifecycleComponent implements Tesl
               'vehicle_data_combo'. The 'location_data' and 'location_state' endpoints require 'vehicle_location' scope
              */
             // GET vehicle_data
-            String url = getDataUrl + "?endpoints=" + URLEncoder.encode(endpoints.stream().map(Endpoint::id).collect(joining(";")), UTF_8);
+            var endpointIds = new StringJoiner(";");
+            for (Endpoint endpoint : endpoints) {
+                endpointIds.add(endpoint.id());
+            }
+            String url = getDataUrl + "?endpoints=" + URLEncoder.encode(endpointIds.toString(), UTF_8);
             return executeGetForData(url, GET_VEHICLE_DATA_RESPONSE_TYPE);
         }
 

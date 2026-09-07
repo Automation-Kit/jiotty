@@ -14,7 +14,6 @@ import java.util.Optional;
 import java.util.function.Predicate;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Throwables.getCausalChain;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
@@ -34,23 +33,18 @@ final class BackingOffExceptionHandlerImpl implements BackingOffExceptionHandler
 
     @Override
     public Optional<Long> handle(String operationName, Throwable exception) {
-        return getCausalChain(exception).stream()
-                                        .filter(retryableExceptionPredicate)
-                                        .findFirst()
-                                        .map(throwable -> {
-                                            long backOffMs = backOff.nextBackOffMillis();
-                                            logger.debug("Operation '{}': backoff: {}", operationName, backOff);
-                                            if (backOffMs == BackOff.STOP) {
-                                                //noinspection StringConcatenationMissingWhitespace
-                                                throw new IllegalStateException(
-                                                        "Operation " + operationName + " is being retried for too long (" + backOff.getMaxElapsedTimeMillis()
-                                                        + "ms) - giving up, last error included", throwable);
-                                            }
-                                            logger.debug("Retryable exception performing operation '{}', backing off for {}ms",
-                                                         operationName, backOffMs, throwable);
-                                            return Optional.of(backOffMs);
-                                        })
-                                        .orElse(Optional.empty());
+        if (!retryableExceptionPredicate.test(exception)) {
+            return Optional.empty();
+        }
+        long backOffMs = backOff.nextBackOffMillis();
+        logger.debug("Operation '{}': backoff: {}", operationName, backOff);
+        if (backOffMs == BackOff.STOP) {
+            //noinspection StringConcatenationMissingWhitespace
+            throw new IllegalStateException("Operation " + operationName + " is being retried for too long ("
+                                            + backOff.getMaxElapsedTimeMillis() + "ms) - giving up, last error included", exception);
+        }
+        logger.debug("Retryable exception performing operation '{}', backing off for {}ms", operationName, backOffMs, exception);
+        return Optional.of(backOffMs);
     }
 
     @Override

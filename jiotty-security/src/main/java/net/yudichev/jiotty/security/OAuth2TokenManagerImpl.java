@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.security;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableSet;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -53,6 +54,14 @@ import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
 public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OAuth2TokenManager {
+    /// Token-endpoint error codes saying the grant itself is gone, so no refresh can ever succeed and the user has to authorise again: `invalid_grant`
+    /// (RFC 6749 §5.2 — an expired, revoked or already-consumed grant, which is what a password change produces) and the OpenID Connect §3.1.2.6 codes
+    /// meaning the end user must interact. Codes naming a client or deployment fault — `invalid_client`, `unauthorized_client`, `invalid_scope`,
+    /// `unsupported_grant_type`, `invalid_request` — are deliberately absent: the stored credential may be perfectly good, and dropping it would make every
+    /// user of a misconfigured client re-authenticate.
+    @VisibleForTesting
+    static final ImmutableSet<String> CREDENTIAL_DEAD_ERRORS =
+            ImmutableSet.of("invalid_grant", "login_required", "consent_required", "interaction_required", "account_selection_required");
     // Backoff schedule for retrying a failed token request before escalating to PermanentFailure.
     @VisibleForTesting
     static final Duration TOKEN_RETRY_INITIAL_INTERVAL = Duration.ofSeconds(5);
@@ -358,17 +367,17 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                       "%s: unsupported token type '%s', only 'Bearer' is supported", apiName, tokenType);
     }
 
-    /// Handles an OAuth error response on [#executor]: `invalid_grant` means the credential itself is dead (revoked/expired refresh token, consumed auth code),
-    /// so it is dropped immediately; every other error (e.g. `temporarily_unavailable`) is treated like a transport failure — retried with backoff and, once
-    /// the retry budget is exhausted, escalated to [AuthState.PermanentFailure] — so a token-endpoint error can never leave the manager dormant with no token,
-    /// no pending request and no user-visible state.
+    /// Handles an OAuth error response on [#executor]: a [#CREDENTIAL_DEAD_ERRORS] code means the credential itself is dead, so it is dropped immediately;
+    /// every other error (e.g. `temporarily_unavailable`, or a client misconfiguration such as `invalid_client`) is treated like a transport failure —
+    /// retried with backoff and, once the retry budget is exhausted, escalated to [AuthState.PermanentFailure] — so a token-endpoint error can never leave
+    /// the manager dormant with no token, no pending request and no user-visible state.
     ///
     /// @param fallbackRefreshToken the refresh token re-sent on each retry, or `null` when the failed request was an initial authorization-code exchange
     /// (which carries no prior refresh token)
     private void handleErrorResponse(RequestBody formBody, @Nullable String fallbackRefreshToken, OauthErrorResponse errorResponse) {
         String description = errorResponse.errorDescription().orElse(errorResponse.error());
         logger.info("[{}] token request failed: {} ({})", apiName, errorResponse.error(), description);
-        if ("invalid_grant".equals(errorResponse.error())) {
+        if (CREDENTIAL_DEAD_ERRORS.contains(errorResponse.error())) {
             invalidateCredential(description);
         } else {
             retryTokenRequestOrGiveUp(formBody, fallbackRefreshToken, description);

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.async.backoff;
 
+import com.google.common.base.Throwables;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
@@ -8,6 +9,8 @@ import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.Predicate;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -46,6 +49,9 @@ public final class BackingOffExceptionHandlerModule extends BaseExposedKeyModule
         private BindingSpec<Predicate<? super Throwable>> retryableExceptionPredicateSpec;
         private BindingSpec<BackOffConfig> configSpec = literally(BackOffConfig.builder().build());
 
+        /// Sets the predicate deciding whether a failed attempt may be retried. It is applied once to the failure as thrown, so a predicate that cares about
+        /// a wrapped cause walks [Throwables#getCausalChain] itself — the failure a [CompletableFuture] hands back is wrapped in a [CompletionException], and
+        /// a predicate testing only the outermost throwable would miss what it is looking for.
         public Builder setRetryableExceptionPredicate(BindingSpec<Predicate<? super Throwable>> retryableExceptionPredicateSpec) {
             this.retryableExceptionPredicateSpec = checkNotNull(retryableExceptionPredicateSpec);
             return this;

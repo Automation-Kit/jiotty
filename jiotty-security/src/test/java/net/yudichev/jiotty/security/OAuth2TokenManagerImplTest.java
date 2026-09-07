@@ -37,6 +37,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.CREDENTIAL_DEAD_ERRORS;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_INITIAL_INTERVAL;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_MAX_ELAPSED_TIME;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -285,10 +286,13 @@ class OAuth2TokenManagerImplTest {
         assertThat(lastAuthState()).isInstanceOf(AuthState.TransientFailure.class);
     }
 
-    @Test
-    void errorResponse_invalidGrant_notifiesLoginRequired() {
+    /// Every code saying the grant is gone drops the credential on the first response, with no retry: no refresh can satisfy any of them, so retrying only
+    /// delays the re-authentication the user has to do.
+    @ParameterizedTest
+    @MethodSource
+    void errorResponse_credentialIsDead_notifiesLoginRequired(String error) {
         respondWith(BAD_REQUEST_400, """
-                                     {"error": "invalid_grant", "error_description": "Token has been revoked"}""");
+                                     {"error": "%s", "error_description": "Token has been revoked"}""".formatted(error));
         startTokenManager();
 
         tokenManager.onNewAuthCode("code", "http://r");
@@ -297,8 +301,14 @@ class OAuth2TokenManagerImplTest {
         assertThat(lastAuthState()).isInstanceOfSatisfying(
                 AuthState.PermanentFailure.class,
                 permanentFailure -> assertThat(permanentFailure.description()).isEqualTo("Token has been revoked"));
+        assertThat(requestLog).as("a dead grant is not retried").hasSize(1);
     }
 
+    private static Stream<Arguments> errorResponse_credentialIsDead_notifiesLoginRequired() {
+        return CREDENTIAL_DEAD_ERRORS.stream().map(Arguments::arguments);
+    }
+
+    /// A client or deployment fault, not a dead credential: the stored token may be perfectly good, so it is retried rather than dropped.
     @Test
     void errorResponse_otherError_notifiesTransientError() {
         respondWith(BAD_REQUEST_400, """
@@ -359,8 +369,9 @@ class OAuth2TokenManagerImplTest {
         return Stream.of(
                 arguments(named("token too short-lived to use", createTokenResponse("at-fail", "rt", 10))),
                 arguments(named("non-invalid_grant error response",
-                                new FakeResponse(SERVICE_UNAVAILABLE_503, """
-                                                                          {"error": "temporarily_unavailable", "error_description": "Service is temporarily unavailable"}"""))));
+                                new FakeResponse(SERVICE_UNAVAILABLE_503,
+                                                 """
+                                                 {"error": "temporarily_unavailable", "error_description": "Service is temporarily unavailable"}"""))));
     }
 
     @Test
