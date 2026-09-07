@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.user.push;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
@@ -75,13 +76,20 @@ public final class PushDeviceStoreImpl extends BaseLifecycleComponent implements
 
     @Override
     public CompletableFuture<List<PushDeviceRecord>> list() {
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> ImmutableList.copyOf(loadMutable().values())));
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> listStored(varStore)));
+    }
+
+    /// Backs [PushDeviceStore#listStored(VarStore)].
+    static List<PushDeviceRecord> listStored(VarStore varStore) {
+        return ImmutableList.copyOf(load(varStore).values());
     }
 
     private Map<String, PushDeviceRecord> loadMutable() {
-        return varStore.readValueEncrypted(STORE_TYPE, STORE_KEY)
-                       .<Map<String, PushDeviceRecord>>map(LinkedHashMap::new)
-                       .orElseGet(LinkedHashMap::new);
+        return new LinkedHashMap<>(load(varStore));
+    }
+
+    private static Map<String, PushDeviceRecord> load(VarStore varStore) {
+        return varStore.readValueEncrypted(STORE_TYPE, STORE_KEY).orElse(ImmutableMap.of());
     }
 
     private void save(Map<String, PushDeviceRecord> records) {

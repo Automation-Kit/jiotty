@@ -29,7 +29,7 @@ class PushDeviceStoreImplTest {
         clock = new ProgrammableClock().withMdc();
         clock.setTimeAndTick(START);
         varStore = new InMemoryVarStore();
-        executor = clock.createSingleThreadedSchedulingExecutor("push-device-store");
+        executor = clock.createSingleThreadedSchedulingExecutor(PushDeviceModule.EXECUTOR_THREAD_NAME);
         store = new PushDeviceStoreImpl(() -> executor, varStore);
         store.start();
     }
@@ -129,6 +129,21 @@ class PushDeviceStoreImplTest {
     @Test
     void list_emptyStore_returnsEmptyList() {
         assertThat(listNow()).isEmpty();
+    }
+
+    /// Code with no running store reads the backing store alone, so what it reads must be what the store would list.
+    @Test
+    void listStored_readsTheBackingStoreWithoutTheComponent() {
+        PushDeviceRecord record = recordFor("device-1", TOKEN_A);
+        store.upsert(record);
+        clock.tick();
+
+        assertThat(PushDeviceStore.listStored(varStore)).containsExactly(record);
+    }
+
+    @Test
+    void listStored_emptyStore_returnsEmptyList() {
+        assertThat(PushDeviceStore.listStored(varStore)).isEmpty();
     }
 
     @Test

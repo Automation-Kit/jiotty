@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.push;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -17,6 +18,10 @@ import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class PushDeviceModule extends BaseExposedKeyModule<PushDeviceStore> {
+    /// Thread name of the store's own executor when the builder is given none.
+    @VisibleForTesting
+    public static final String EXECUTOR_THREAD_NAME = "push-device-store";
+
     private final BindingSpec<VarStore> varStoreSpec;
     private final BindingSpec<SchedulingExecutor> executorSpec;
 
@@ -48,7 +53,7 @@ public final class PushDeviceModule extends BaseExposedKeyModule<PushDeviceStore
     public static final class Builder extends BaseModuleBuilder<PushDeviceStore, Builder> {
         private BindingSpec<VarStore> varStoreSpec = boundTo(VarStore.class);
         private BindingSpec<SchedulingExecutor> executorSpec = exposedBy(ExecutorProviderModule.builder()
-                                                                                               .setThreadName(literally("push-device-store"))
+                                                                                               .setThreadName(literally(EXECUTOR_THREAD_NAME))
                                                                                                .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                                                                .build());
 
