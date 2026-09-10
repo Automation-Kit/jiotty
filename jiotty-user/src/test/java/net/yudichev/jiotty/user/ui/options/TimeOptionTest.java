@@ -11,7 +11,6 @@ import java.time.Duration;
 import java.time.LocalTime;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,7 +36,7 @@ class TimeOptionTest {
         CompletableFuture<?> result = option.onFormSubmit(Optional.of("07:30"));
         clock.tick();
 
-        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo("07:30");
+        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(FormSubmitResult.accepted("07:30"));
         assertThat(option.getValue()).contains(LocalTime.of(7, 30));
     }
 
@@ -55,28 +54,19 @@ class TimeOptionTest {
     @ParameterizedTest
     @ValueSource(strings = {"25:00", "half past seven", "07:30:99", ""})
     void namesTheCaseRatherThanRepeatingTheParser(String input) {
-        CompletableFuture<?> result = option.onFormSubmit(Optional.of(input));
+        CompletableFuture<FormSubmitResult> result = option.onFormSubmit(Optional.of(input));
         clock.tick();
 
-        assertThat(result)
-                .failsWithin(Duration.ZERO)
-                .withThrowableOfType(ExecutionException.class)
-                .havingCause()
-                .isInstanceOfSatisfying(OptionValueRejectedException.class,
-                                        rejection -> assertThat(rejection.reason()).isEqualTo(OptionRejectionReasons.INVALID_TIME));
+        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(FormSubmitResult.rejected(OptionRejectionReasons.INVALID_TIME));
     }
 
-    /// The parser quotes the text it was handed, and that text is whatever the user typed, so it stays a cause for the log rather than the reason.
+    /// The parser quotes the text it was handed, and that text is whatever the user typed, so none of it survives into the answer.
     @Test
     void rejectionDoesNotRepeatWhatWasTyped() {
-        CompletableFuture<?> result = option.onFormSubmit(Optional.of("half past seven"));
+        CompletableFuture<FormSubmitResult> result = option.onFormSubmit(Optional.of("half past seven"));
         clock.tick();
 
-        assertThat(result)
-                .failsWithin(Duration.ZERO)
-                .withThrowableOfType(ExecutionException.class)
-                .havingCause()
-                .satisfies(rejection -> assertThat(rejection.getMessage()).doesNotContain("half past seven"));
+        assertThat(result).succeedsWithin(Duration.ZERO).asString().doesNotContain("half past seven");
     }
 
     @Test

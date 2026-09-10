@@ -19,8 +19,8 @@ public final class FriendlyDurationFormat {
     private FriendlyDurationFormat() {
     }
 
-    /// Parse a human-friendly duration string. Accepted formats include: - HH:MM or HH:MM:SS (e.g., 02:30 or 12:05:10) - Nd HH:MM[:SS] (e.g., 1d 02:30 or 2d
-    /// 00:00:15) - Unit tokens: "2h 30m", "90m", "3600s", "1d 2h", etc. - ISO-8601 like PT2H30M (case-insensitive)
+    /// Parse a human-friendly duration string. Accepted formats include: - `HH:MM` or `HH:MM:SS` (e.g., `02:30` or `12:05:10`) - `Nd HH:MM[:SS]`
+    /// (e.g., `1d 02:30` or `2d 00:00:15`) - Unit tokens: `2h 30m`, `90m`, `3600s`, `1d 2h`, etc. - ISO-8601 like `PT2H30M` (case-insensitive)
     ///
     /// @throws NullPointerException     if `raw` is null
     /// @throws IllegalArgumentException for invalid input (including blank input)

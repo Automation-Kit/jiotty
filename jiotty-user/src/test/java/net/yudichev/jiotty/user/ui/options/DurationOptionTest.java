@@ -11,7 +11,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -53,30 +52,22 @@ class DurationOptionTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"two hours", "1x 30y", "PTnonsense"})
+    // The last names a length past what a Duration holds: it parses, then overflows.
+    @ValueSource(strings = {"two hours", "1x 30y", "PTnonsense", "999999999999999999d"})
     void namesTheCaseRatherThanRepeatingTheParser(String input) {
-        CompletableFuture<?> result = option.onFormSubmit(Optional.of(input));
+        CompletableFuture<FormSubmitResult> result = option.onFormSubmit(Optional.of(input));
         clock.tick();
 
-        assertThat(result)
-                .failsWithin(Duration.ZERO)
-                .withThrowableOfType(ExecutionException.class)
-                .havingCause()
-                .isInstanceOfSatisfying(OptionValueRejectedException.class,
-                                        rejection -> assertThat(rejection.reason()).isEqualTo(OptionRejectionReasons.INVALID_DURATION));
+        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(FormSubmitResult.rejected(OptionRejectionReasons.INVALID_DURATION));
     }
 
-    /// The parser quotes the text it was handed, and that text is whatever the user typed, so it stays a cause for the log rather than the reason.
+    /// The parser quotes the text it was handed, and that text is whatever the user typed, so none of it survives into the answer.
     @Test
     void rejectionDoesNotRepeatWhatWasTyped() {
-        CompletableFuture<?> result = option.onFormSubmit(Optional.of("two hours"));
+        CompletableFuture<FormSubmitResult> result = option.onFormSubmit(Optional.of("two hours"));
         clock.tick();
 
-        assertThat(result)
-                .failsWithin(Duration.ZERO)
-                .withThrowableOfType(ExecutionException.class)
-                .havingCause()
-                .satisfies(rejection -> assertThat(rejection.getMessage()).doesNotContain("two hours"));
+        assertThat(result).succeedsWithin(Duration.ZERO).asString().doesNotContain("two hours");
     }
 
     @Test

@@ -12,19 +12,17 @@ import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.ThrowingConsumer;
+import net.yudichev.jiotty.user.ui.options.FormSubmitResult;
 import net.yudichev.jiotty.user.ui.options.Option;
+import net.yudichev.jiotty.user.ui.options.OptionRejection;
 import net.yudichev.jiotty.user.ui.options.OptionRejectionReasons;
-import net.yudichev.jiotty.user.ui.options.OptionValueRejectedException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Throwables.getCausalChain;
 import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_JSON;
@@ -37,13 +35,16 @@ import static net.yudichev.jiotty.user.ui.UIServerModule.SubjectId;
 
 /// Handles `POST /ui/api/options` — option form submission. Responds with 405 on any other HTTP method.
 ///
-/// A rejected value comes back as a JSON body naming the case — see [OptionValueRejectedException] — never as exception text, because an option value carries
-/// whatever the user typed into the form, up to a third-party account password.
+/// A rejected value comes back as a JSON body naming the case — see [OptionRejection] — never as exception text, because an option value carries whatever the
+/// user typed into the form, up to a third-party account password.
 public final class OptionsPostHandler extends BaseLifecycleComponent implements ApiPathHandler {
     static final String PATH = "/options";
     private static final Logger logger = LogManager.getLogger(OptionsPostHandler.class);
 
-    private static final ObjectWriter REJECTION_WRITER = UIJson.createWriterFor(Rejection.class);
+    private static final ObjectWriter REJECTION_WRITER = UIJson.createWriterFor(OptionRejection.class);
+    /// The two refusals this handler makes before any option is reached. Neither carries anything of the request, so one instance of each serves every one.
+    private static final OptionRejection MISSING_OPTION_NAME = OptionRejection.of(OptionRejectionReasons.MISSING_OPTION_NAME);
+    private static final OptionRejection UNKNOWN_OPTION = OptionRejection.of(OptionRejectionReasons.UNKNOWN_OPTION);
 
     private final OptionRegistry registry;
     private final AdminAlertService alertService;
@@ -85,33 +86,39 @@ public final class OptionsPostHandler extends BaseLifecycleComponent implements 
                 try {
                     var optionKey = request.getParameter("name");
                     if (optionKey == null) {
-                        throw OptionValueRejectedException.of(OptionRejectionReasons.MISSING_OPTION_NAME);
+                        answer(asyncContext, response, resp -> writeRejection(resp, MISSING_OPTION_NAME));
+                        return;
                     }
                     String value = request.getParameter("value");
                     if (logger.isDebugEnabled()) {
                         // The value is whatever the form held, which for an integration is a JSON blob carrying that provider's credentials; log its length.
                         logger.debug("[{}] Option {} submitted, valueLength={}", userId, optionKey, value == null ? -1 : value.length());
                     }
-                    Option<?> option = registry.find(optionKey)
-                                               .orElseThrow(() -> {
-                                                   logger.info("[{}] Rejecting submission of unknown option {}", userId, optionKey);
-                                                   return OptionValueRejectedException.of(OptionRejectionReasons.UNKNOWN_OPTION);
-                                               });
+                    Option<?> option = registry.find(optionKey).orElse(null);
+                    if (option == null) {
+                        logger.info("[{}] Rejecting submission of unknown option {}", userId, optionKey);
+                        answer(asyncContext, response, resp -> writeRejection(resp, UNKNOWN_OPTION));
+                        return;
+                    }
                     option.onFormSubmit(Optional.ofNullable(value))
-                          .whenCompleteAsync((responseData, throwable) -> answer(asyncContext, response, resp -> {
+                          .whenCompleteAsync((result, throwable) -> answer(asyncContext, response, resp -> {
                               if (throwable != null) {
-                                  writeOptionFormPostFailure(resp, throwable);
+                                  writeServerFault(resp, throwable);
                               } else {
-                                  resp.setCharacterEncoding("utf-8");
-                                  resp.setContentType(CONTENT_TYPE_JSON);
-                                  UIJson.WRITER.writeValue(resp.getOutputStream(), responseData);
+                                  switch (result) {
+                                      case FormSubmitResult.Accepted(Object responseData) -> {
+                                          resp.setCharacterEncoding("utf-8");
+                                          resp.setContentType(CONTENT_TYPE_JSON);
+                                          UIJson.WRITER.writeValue(resp.getOutputStream(), responseData);
+                                      }
+                                      case FormSubmitResult.Rejected(OptionRejection rejection) -> writeRejection(resp, rejection);
+                                  }
                               }
                           }), executor);
-                } catch (
-                    // Any synchronous failure on the submit pipeline (validation, the registered Option's own
-                    // onFormSubmit throwing, the registry lookup, …) must still complete the AsyncContext and answer; the broad catch is deliberate
-                        @SuppressWarnings("OverlyBroadCatchBlock") RuntimeException e) {
-                    answer(asyncContext, response, resp -> writeOptionFormPostFailure(resp, e));
+                } catch (RuntimeException e) {
+                    // Any synchronous failure on the submit pipeline (the registered Option's own onFormSubmit throwing, the registry lookup, …) must still
+                    // complete the AsyncContext and answer.
+                    answer(asyncContext, response, resp -> writeServerFault(resp, e));
                 }
             });
         }));
@@ -131,16 +138,9 @@ public final class OptionsPostHandler extends BaseLifecycleComponent implements 
         }
     }
 
-    /// Answers a failed submission. A value the option refused is the user's to correct, so it comes back 400 naming the case; anything else is a fault on
-    /// our side, and answering that 400 too would tell the user to fix a value that was never the problem while no one is told the server broke.
-    private void writeOptionFormPostFailure(HttpServletResponse response, Throwable throwable) throws IOException {
-        Rejection rejection = rejectionOf(throwable);
-        if (rejection == null) {
-            alertService.raise(WARNING, "Option form submission failed", logger, throwable);
-            ErrorResponse.write(response, INTERNAL_SERVER_ERROR_500, ErrorResponse.INTERNAL_ERROR);
-            return;
-        }
-        // Expected, and named by the response — the stack would say nothing the reason does not.
+    /// Answers a value the option refused: 400 naming the case, with its bounds as data for the client to word around.
+    private void writeRejection(HttpServletResponse response, OptionRejection rejection) throws IOException {
+        // Expected, and named by the response — a stack would say nothing the reason does not.
         logger.info("[{}] Option submission rejected: {}", userId, rejection.reason());
         response.setCharacterEncoding("utf-8");
         response.setContentType(CONTENT_TYPE_JSON);
@@ -148,16 +148,9 @@ public final class OptionsPostHandler extends BaseLifecycleComponent implements 
         REJECTION_WRITER.writeValue(response.getOutputStream(), rejection);
     }
 
-    /// The rejection a client is told about, or `null` where the failure was not one — no exception message reaches the client either way.
-    private static @Nullable Rejection rejectionOf(Throwable throwable) {
-        // The completion stages wrap what they carry, so the rejection arrives nested rather than as itself.
-        for (Throwable cause : getCausalChain(throwable)) {
-            if (cause instanceof OptionValueRejectedException rejection) {
-                return new Rejection(rejection.reason(), rejection.params());
-            }
-        }
-        return null;
+    /// Answers a failure that is ours. Answering it 400 would tell the user to fix a value that was never the problem, while nobody is told the server broke.
+    private void writeServerFault(HttpServletResponse response, Throwable throwable) {
+        alertService.raise(WARNING, "Option form submission failed", logger, throwable);
+        ErrorResponse.write(response, INTERNAL_SERVER_ERROR_500, ErrorResponse.INTERNAL_ERROR);
     }
-
-    private record Rejection(String reason, Map<String, Object> params) {}
 }

@@ -12,7 +12,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,7 +37,7 @@ class LocationOptionTest {
         CompletableFuture<?> result = option.onFormSubmit(Optional.of("{\"lat\":51.5,\"lon\":-0.12}"));
         clock.tick();
 
-        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(new LatLon(51.5, -0.12));
+        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(FormSubmitResult.accepted(new LatLon(51.5, -0.12)));
         assertThat(option.getValue()).contains(new LatLon(51.5, -0.12));
     }
 
@@ -86,29 +85,21 @@ class LocationOptionTest {
             "{\"lat\":51.5,\"lon\":null}",
             "{\"lat\":null,\"lon\":null}",
             "{}"})
-    void onFormSubmitFailsOnInvalidInput(String input) {
-        CompletableFuture<?> result = option.onFormSubmit(Optional.of(input));
+    void onFormSubmitRefusesInvalidInput(String input) {
+        CompletableFuture<FormSubmitResult> result = option.onFormSubmit(Optional.of(input));
         clock.tick();
 
-        assertThat(result)
-                .failsWithin(Duration.ZERO)
-                .withThrowableOfType(ExecutionException.class)
-                .havingCause()
-                .isInstanceOfSatisfying(OptionValueRejectedException.class,
-                                        rejection -> assertThat(rejection.reason()).isEqualTo(OptionRejectionReasons.INVALID_LOCATION));
+        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(FormSubmitResult.rejected(OptionRejectionReasons.INVALID_LOCATION));
+        assertThat(option.getValue()).as("a refused location leaves the option holding what it held").isEmpty();
     }
 
     /// A rejection travels to a response body and to the server log, so it must not carry the coordinate that caused it.
     @Test
     void outOfRangeRejectionNamesNoCoordinate() {
-        CompletableFuture<?> result = option.onFormSubmit(Optional.of(Json.stringify(new LatLon(91.5074, -0.1278))));
+        CompletableFuture<FormSubmitResult> result = option.onFormSubmit(Optional.of(Json.stringify(new LatLon(91.5074, -0.1278))));
         clock.tick();
 
-        assertThat(result)
-                .failsWithin(Duration.ZERO)
-                .withThrowableOfType(ExecutionException.class)
-                .havingCause()
-                .satisfies(rejection -> assertThat(rejection.getMessage()).doesNotContain("91.5074", "-0.1278"));
+        assertThat(result).succeedsWithin(Duration.ZERO).asString().doesNotContain("91.5074", "-0.1278");
     }
 
     @Test

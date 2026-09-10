@@ -36,8 +36,9 @@ public interface Option<T> {
 
     CompletableFuture<T> setValue(T value);
 
-    /// @return the response to be sent to the UI. If completed successfully, the object will be serialised to JSON and written to the response stream
-    CompletableFuture<?> onFormSubmit(Optional<String> value);
+    /// Applies a value submitted from a form. A value this option refuses comes back as [FormSubmitResult.Rejected] — the submitter's to correct — so a failed
+    /// future here means the server broke, never that the value was bad.
+    CompletableFuture<FormSubmitResult> onFormSubmit(Optional<String> value);
 
     void applyDefault();
 

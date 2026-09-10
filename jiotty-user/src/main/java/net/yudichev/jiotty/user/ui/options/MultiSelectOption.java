@@ -30,10 +30,10 @@ public abstract class MultiSelectOption extends BaseOption<Set<String>> {
     }
 
     @Override
-    public final CompletableFuture<?> onFormSubmit(Optional<String> value) {
-        return setValue(value.filter(s -> !s.isEmpty())
-                             .map(selectedOptionsStr -> ImmutableSet.copyOf(selectedOptionsStr.split(",")))
-                             .orElse(ImmutableSet.of()));
+    public final CompletableFuture<FormSubmitResult> onFormSubmit(Optional<String> value) {
+        return submit(value.filter(s -> !s.isEmpty())
+                           .map(selectedOptionsStr -> ImmutableSet.copyOf(selectedOptionsStr.split(",")))
+                           .orElse(ImmutableSet.of()));
     }
 
     @Override

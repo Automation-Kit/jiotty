@@ -9,6 +9,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.Charset;
 import java.util.List;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -128,7 +129,39 @@ class JsonTest {
         assertThatThrownBy(() -> Json.convert(tree.get("outer"), Point.class)).isInstanceOf(RuntimeException.class);
     }
 
+    @Test
+    void tryParseBindsAWellFormedBody() {
+        assertThat(Json.tryParse("{\"x\": 1, \"y\": 2}", Point.class)).contains(new Point(1, 2));
+    }
+
+    /// The point of it: untrusted input that does not fit answers empty, where [Json#parse(String, Class)] throws and leaves the caller inspecting a cause to
+    /// tell a malformed body from a genuine fault.
+    @Test
+    void tryParseIsEmptyForABodyThatDoesNotFit() {
+        assertThat(Json.tryParse("not json at all", Point.class)).isEmpty();
+        assertThat(Json.tryParse("{\"x\": {\"nested\": true}}", Point.class)).isEmpty();
+    }
+
+    /// `null` parses, and binds to no value: the one refusal Jackson reports by returning rather than throwing.
+    @Test
+    void tryParseIsEmptyForANullBody() {
+        assertThat(Json.tryParse("null", Point.class)).isEmpty();
+    }
+
+    /// A value object that refuses its own arguments fails the bind rather than escaping as an unchecked exception, so a body the type rejects is answered
+    /// the same way as one the parser rejects.
+    @Test
+    void tryParseIsEmptyWhenTheTypeRefusesTheValue() {
+        assertThat(Json.tryParse("{\"value\": \"\"}", NonBlank.class)).isEmpty();
+    }
+
     private record Point(int x, int y) {}
 
     private record Named(String value) {}
+
+    private record NonBlank(String value) {
+        private NonBlank {
+            checkArgument(!value.isEmpty(), "must not be blank");
+        }
+    }
 }

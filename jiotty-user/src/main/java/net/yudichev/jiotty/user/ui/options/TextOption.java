@@ -11,8 +11,8 @@ public abstract class TextOption extends BaseOption<String> {
     }
 
     @Override
-    public CompletableFuture<?> onFormSubmit(Optional<String> value) {
-        return setValue(value.orElse(null));
+    public CompletableFuture<FormSubmitResult> onFormSubmit(Optional<String> value) {
+        return submit(value.orElse(null));
     }
 
     @Override

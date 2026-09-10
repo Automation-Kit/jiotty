@@ -7,7 +7,7 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
+import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.EvenMoreObjects.mapIfNotNull;
 
 /// Option for editing a time interval (duration).
@@ -22,23 +22,28 @@ import static net.yudichev.jiotty.common.lang.EvenMoreObjects.mapIfNotNull;
 ///
 /// The value is persisted as a java.time.Duration.
 public abstract class DurationOption extends BaseOption<Duration> {
+    /// The answer to text that names no length this option can hold. It says nothing of what was typed, so one instance serves every refusal.
+    private static final FormSubmitResult INVALID_DURATION = FormSubmitResult.rejected(OptionRejectionReasons.INVALID_DURATION);
 
     public DurationOption(TaskExecutor executor, OptionMeta<Duration> meta) {
         super(executor, meta);
     }
 
     @Override
-    public CompletableFuture<?> onFormSubmit(Optional<String> value) {
+    public CompletableFuture<FormSubmitResult> onFormSubmit(Optional<String> value) {
+        Duration parsed;
         try {
-            Duration parsed = value.map(String::trim)
-                                   .filter(s -> !s.isEmpty())
-                                   .map(FriendlyDurationFormat::parseHuman)
-                                   .orElse(null);
-            // Clearing the option saves null, which renders as null.
-            return setValue(parsed).thenApply(saved -> mapIfNotNull(saved, FriendlyDurationFormat::formatHuman));
-        } catch (IllegalArgumentException e) {
-            return failure(OptionValueRejectedException.of(OptionRejectionReasons.INVALID_DURATION, e));
+            parsed = value.map(String::trim)
+                          .filter(s -> !s.isEmpty())
+                          .map(FriendlyDurationFormat::parseHuman)
+                          .orElse(null);
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            // A length beyond what a Duration holds overflows rather than failing to parse, and is refused the same way. The parser quotes what it could not
+            // read, and that is whatever the form held, so its message stays out of both the response and the log.
+            return completedFuture(INVALID_DURATION);
         }
+        // Clearing the option saves null, which renders as null.
+        return submit(parsed, saved -> mapIfNotNull(saved, FriendlyDurationFormat::formatHuman));
     }
 
     @Override

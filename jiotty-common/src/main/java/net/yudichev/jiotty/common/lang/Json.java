@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.lang;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
@@ -15,6 +16,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.Reader;
 import java.net.http.HttpResponse;
+import java.util.Optional;
 
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
@@ -34,6 +36,17 @@ public final class Json {
 
     public static <T> T parse(String json, Class<T> type) {
         return getAsUnchecked(() -> mapper.readValue(json, type));
+    }
+
+    /// The `type` value `json` holds, or empty when it holds none. For untrusted input, where a body that will not parse is one of the expected answers
+    /// rather than a fault — [#parse(String, Class)] reports that as an unchecked exception, which a caller can only tell apart from a real one by its cause.
+    public static <T> Optional<T> tryParse(String json, Class<T> type) {
+        try {
+            // A body of `null` is well-formed JSON that binds to no value, so it is one of the empty answers rather than a null slipping into the Optional.
+            return Optional.ofNullable(mapper.readValue(json, type));
+        } catch (JsonProcessingException e) {
+            return Optional.empty();
+        }
     }
 
     public static <T> T parse(String json, TypeToken<T> type) {

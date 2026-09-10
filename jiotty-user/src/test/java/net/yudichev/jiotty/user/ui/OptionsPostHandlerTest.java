@@ -9,11 +9,12 @@ import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Json;
+import net.yudichev.jiotty.user.ui.options.FormSubmitResult;
 import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionMeta;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
+import net.yudichev.jiotty.user.ui.options.OptionRejection;
 import net.yudichev.jiotty.user.ui.options.OptionRejectionReasons;
-import net.yudichev.jiotty.user.ui.options.OptionValueRejectedException;
 import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -24,7 +25,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
@@ -137,7 +137,7 @@ class OptionsPostHandlerTest {
     @Test
     void rejectionReasonAndParametersReachTheClient(@Mock Option<?> option) {
         register(option, "bounded-opt");
-        when(option.onFormSubmit(any())).thenThrow(OptionValueRejectedException.mustBeAtLeast(7));
+        doReturn(completedFuture(FormSubmitResult.rejected(OptionRejection.mustBeAtLeast(7)))).when(option).onFormSubmit(any());
 
         var responseBody = new CapturingServletOutputStream();
         HttpServletResponse response = submit("bounded-opt", "3", responseBody);
@@ -147,19 +147,16 @@ class OptionsPostHandlerTest {
         assertThat(Json.parse(responseBody.output()).path("params").path("min").asInt()).isEqualTo(7);
     }
 
-    /// The completion stages wrap what they carry, so a rejection arrives at the writer nested rather than as itself.
+    /// A value the option refused is an ordinary outcome of a form someone filled in, so it must not page an operator — only the server's own faults do.
     @Test
-    void rejectionWrappedByACompletionStageIsStillRecognised(@Mock Option<?> option) {
-        register(option, "wrapped-opt");
-        when(option.onFormSubmit(any()))
-                .thenReturn(CompletableFuture.failedFuture(new CompletionException(OptionValueRejectedException.mustBeAtMost(4))));
+    void aRejectedValueRaisesNoAlert(@Mock Option<?> option) {
+        register(option, "bounded-opt");
+        doReturn(completedFuture(FormSubmitResult.rejected(OptionRejection.mustBeAtMost(4)))).when(option).onFormSubmit(any());
 
-        var responseBody = new CapturingServletOutputStream();
-        HttpServletResponse response = submit("wrapped-opt", "9", responseBody);
+        submit("bounded-opt", "9", new CapturingServletOutputStream());
         clock.tick();
 
-        assertRejection(response, responseBody, OptionRejectionReasons.MUST_BE_AT_MOST);
-        assertThat(Json.parse(responseBody.output()).path("params").path("max").asInt()).isEqualTo(4);
+        verifyNoInteractions(alertService);
     }
 
     /// An option value is where an integration's credentials travel, and reading the parameter map would put the whole of it in carapp.log — the exposure
@@ -167,7 +164,7 @@ class OptionsPostHandlerTest {
     @Test
     void neverReadsTheWholeParameterMap(@Mock Option<?> option) {
         register(option, "opt");
-        doReturn(completedFuture("normalised")).when(option).onFormSubmit(any());
+        doReturn(completedFuture(FormSubmitResult.accepted("normalised"))).when(option).onFormSubmit(any());
 
         submit("opt", "hunter2-the-password", new CapturingServletOutputStream());
         clock.tick();
@@ -180,7 +177,7 @@ class OptionsPostHandlerTest {
     @Test
     void bothAnswersDeclareUtf8(@Mock Option<?> option) {
         register(option, "opt");
-        doReturn(completedFuture("normalised")).when(option).onFormSubmit(any());
+        doReturn(completedFuture(FormSubmitResult.accepted("normalised"))).when(option).onFormSubmit(any());
 
         HttpServletResponse accepted = submit("opt", "v", new CapturingServletOutputStream());
         clock.tick();
@@ -195,7 +192,7 @@ class OptionsPostHandlerTest {
     @Test
     void clientGoingAwayRaisesNoAlert(@Mock Option<?> option) {
         register(option, "opt");
-        doReturn(completedFuture("normalised")).when(option).onFormSubmit(any());
+        doReturn(completedFuture(FormSubmitResult.accepted("normalised"))).when(option).onFormSubmit(any());
 
         submitToADepartedClient("opt", "v");
         clock.tick();
@@ -208,7 +205,7 @@ class OptionsPostHandlerTest {
     @Test
     void anUnserialisableResponseAlertsWithTheFailure(@Mock Option<?> option) {
         register(option, "opt");
-        doReturn(completedFuture(new Object())).when(option).onFormSubmit(any());
+        doReturn(completedFuture(FormSubmitResult.accepted(new Object()))).when(option).onFormSubmit(any());
 
         submit("opt", "v", new CapturingServletOutputStream());
         clock.tick();
