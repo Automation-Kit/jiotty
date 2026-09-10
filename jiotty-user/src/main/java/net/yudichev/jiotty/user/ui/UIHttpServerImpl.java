@@ -71,6 +71,12 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     /// its token's expiry.
     @VisibleForTesting
     static final Duration IDLE_TIMEOUT = Duration.ofSeconds(30);
+    /// Time to first byte, recorded when Jetty commits the response.
+    @VisibleForTesting
+    static final String TTFB_TIMER = "http_response_begin_seconds";
+    /// The `path` tag every request outside the registered top-level segments is counted under.
+    @VisibleForTesting
+    static final String UNMATCHED_PATH = "unmatched";
     private static final Logger logger = LogManager.getLogger(UIHttpServerImpl.class);
     /// Accept backlog bound: excess inbound connections are refused by the OS rather than queued unbounded.
     private static final int ACCEPT_QUEUE_SIZE = 128;
@@ -185,9 +191,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     }
 
     private static final class TimingEventsHandler extends EventsHandler {
-        private static final String TTFB_TIMER = "http_response_begin_seconds";
         private static final String TOTAL_TIMER = "http_request_seconds";
-        private static final String UNMATCHED_PATH = "unmatched";
 
         private final MeterRegistry meterRegistry;
         private final ImmutableSet<String> allowedFirstSegments;

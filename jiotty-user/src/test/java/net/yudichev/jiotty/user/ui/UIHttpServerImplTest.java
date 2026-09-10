@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.ui;
 
+import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.FilterChain;
@@ -73,7 +74,7 @@ class UIHttpServerImplTest {
 
     @BeforeEach
     void setUp() {
-        server = new UIHttpServerImpl(0, defaultMounts(), meterRegistry, TEST_IDLE_TIMEOUT, Optional.of(LOOPBACK));
+        server = new UIHttpServerImpl(0, defaultMounts(), meterRegistry, UIHttpServerImpl.IDLE_TIMEOUT, Optional.of(LOOPBACK));
         server.start();
         httpClient = HttpClient.newBuilder()
                                .followRedirects(HttpClient.Redirect.NEVER)
@@ -176,7 +177,7 @@ class UIHttpServerImplTest {
 
         assertThat(response.statusCode()).as("the handler's own response reaches the client").isEqualTo(OK_200);
         assertThat(response.body()).isEqualTo("ok");
-        assertThat(meterRegistry.find("http_response_begin_seconds")
+        assertThat(meterRegistry.find(UIHttpServerImpl.TTFB_TIMER)
                                 .tag("path", "/api/analytics")
                                 .timer())
                 .as("TTFB timer should be tagged with the matched route name")
@@ -187,27 +188,33 @@ class UIHttpServerImplTest {
     void staticResource_pathTagFallsBackToFirstUrlSegment() {
         sendGet("/ui/style.css");
 
-        assertThat(meterRegistry.find("http_response_begin_seconds")
+        assertThat(meterRegistry.find(UIHttpServerImpl.TTFB_TIMER)
                                 .tag("path", "/ui")
                                 .timer())
                 .as("TTFB timer for a static resource falls back to the first URL segment")
                 .isNotNull();
     }
 
+    /// Unlike every other timing test here, this path is answered by the server-wide error handler rather than by a mount, so Jetty never writes through the
+    /// events-handler's response wrapper and the timer is registered by the request's completion listener instead — after the client already holds the body.
+    /// Hence awaiting the meter rather than reading it: the request returning says nothing about the recording having happened.
     @Test
     void unhandledRootPath_taggedAsUnmatched() {
+        var ttfbTimerRegistered = new CompletableFuture<Meter>();
+        meterRegistry.config().onMeterAdded(meter -> {
+            if (UIHttpServerImpl.TTFB_TIMER.equals(meter.getId().getName())) {
+                ttfbTimerRegistered.complete(meter);
+            }
+        });
+
         sendGet("/favicon.ico");
 
-        assertThat(meterRegistry.find("http_response_begin_seconds")
-                                .tag("path", "unmatched")
-                                .timer())
-                .as("TTFB timer for an unhandled root path collapses into the 'unmatched' bucket")
-                .isNotNull();
-        assertThat(meterRegistry.find("http_response_begin_seconds")
-                                .tag("path", "/favicon.ico")
-                                .timer())
-                .as("the literal per-file path must NOT appear as a tag value")
-                .isNull();
+        // Asserting the tag on the one timer this request registered also pins that the literal per-file path never becomes a tag value.
+        assertThat(ttfbTimerRegistered)
+                .as("TTFB timer for an unhandled root path collapses into the '%s' bucket", UIHttpServerImpl.UNMATCHED_PATH)
+                .succeedsWithin(ASSERTION_TIMEOUT)
+                .extracting(meter -> meter.getId().getTag("path"))
+                .isEqualTo(UIHttpServerImpl.UNMATCHED_PATH);
     }
 
     @Test
@@ -216,7 +223,7 @@ class UIHttpServerImplTest {
 
         sendGet("/admin/api/alerts/x");
 
-        assertThat(meterRegistry.find("http_response_begin_seconds")
+        assertThat(meterRegistry.find(UIHttpServerImpl.TTFB_TIMER)
                                 .tag("path", "/admin")
                                 .timer())
                 .as("a mount at /admin/api/alerts contributes /admin to the allowed first-segment set")
