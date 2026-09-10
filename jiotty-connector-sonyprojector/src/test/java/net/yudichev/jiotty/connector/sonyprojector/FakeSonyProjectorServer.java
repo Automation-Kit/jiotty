@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -17,6 +18,9 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 final class FakeSonyProjectorServer implements Closeable {
+    /// The address this server binds and its client dials — one literal, so the two can never drift onto different loopback addresses.
+    static final String HOST = "127.0.0.1";
+
     private static final Charset CHARSET = StandardCharsets.US_ASCII;
     private static final String LINE_TERMINATOR = "\r\n";
     private static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(2);
@@ -28,7 +32,9 @@ final class FakeSonyProjectorServer implements Closeable {
     private final CompletableFuture<Void> completion = new CompletableFuture<>();
 
     private FakeSonyProjectorServer(ConnectionHandler handler) {
-        serverSocket = MoreThrowables.getAsUnchecked(() -> new ServerSocket(0));
+        // Bound at the address the client dials rather than on the wildcard, so a listener already holding that port fails this outright instead of quietly
+        // taking the client's connection — see LoopbackPorts.
+        serverSocket = MoreThrowables.getAsUnchecked(() -> new ServerSocket(0, 0, InetAddress.getByName(HOST)));
         port = serverSocket.getLocalPort();
         thread = new Thread(() -> run(handler), "sony-projector-test-server");
         thread.setDaemon(true);

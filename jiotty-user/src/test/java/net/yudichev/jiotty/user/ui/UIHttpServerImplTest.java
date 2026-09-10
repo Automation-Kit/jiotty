@@ -33,6 +33,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -72,7 +73,7 @@ class UIHttpServerImplTest {
 
     @BeforeEach
     void setUp() {
-        server = new UIHttpServerImpl(0, defaultMounts(), meterRegistry);
+        server = new UIHttpServerImpl(0, defaultMounts(), meterRegistry, TEST_IDLE_TIMEOUT, Optional.of(LOOPBACK));
         server.start();
         httpClient = HttpClient.newBuilder()
                                .followRedirects(HttpClient.Redirect.NEVER)
@@ -301,7 +302,7 @@ class UIHttpServerImplTest {
         server.stop();
         var mounts = new LinkedHashSet<>(defaultMounts());
         Collections.addAll(mounts, extraMounts);
-        server = new UIHttpServerImpl(0, mounts, meterRegistry, idleTimeout);
+        server = new UIHttpServerImpl(0, mounts, meterRegistry, idleTimeout, Optional.of(LOOPBACK));
         server.start();
     }
 

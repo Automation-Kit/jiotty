@@ -135,7 +135,7 @@ class SonyProjectorClientImplTest {
 
     private static SonyProjectorClientImpl startClient(Optional<String> password, int port) {
         ExecutorFactory executorFactory = SingleThreadedSchedulingExecutor::new;
-        var client = new SonyProjectorClientImpl(executorFactory, "127.0.0.1", port, TIMEOUT, password);
+        var client = new SonyProjectorClientImpl(executorFactory, FakeSonyProjectorServer.HOST, port, TIMEOUT, password);
         client.start();
         return client;
     }

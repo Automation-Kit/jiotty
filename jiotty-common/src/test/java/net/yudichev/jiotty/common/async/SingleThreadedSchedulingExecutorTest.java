@@ -14,8 +14,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.google.common.util.concurrent.Uninterruptibles.awaitUninterruptibly;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.Closeable.closeIfNotNull;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -272,10 +273,15 @@ class SingleThreadedSchedulingExecutorTest {
         var release = new CountDownLatch(1);
         executor.execute(() -> {
             running.countDown();
-            awaitUninterruptibly(release);
+            await(release, "the occupying task was released");
         });
-        awaitUninterruptibly(running);
+        await(running, "the occupying task started");
         return release;
+    }
+
+    /// Bounded and interruptible, so a latch that never opens fails the test instead of hanging the build with no way to kill it.
+    private static void await(CountDownLatch latch, String what) {
+        assertThat(getAsUnchecked(() -> latch.await(10, SECONDS))).as(what).isTrue();
     }
 
     /// Runs [SingleThreadedSchedulingExecutor#close()] on another thread, waits until it is blocked inside its drain, then releases the occupying blocker

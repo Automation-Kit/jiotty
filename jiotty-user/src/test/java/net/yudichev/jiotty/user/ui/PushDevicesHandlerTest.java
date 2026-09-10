@@ -13,6 +13,7 @@ import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.user.push.PushDeviceRecord;
 import net.yudichev.jiotty.user.push.PushDeviceStore;
+import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,8 +24,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.ByteArrayInputStream;
-import java.io.PrintWriter;
-import java.io.StringWriter;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -38,6 +38,7 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -116,53 +117,53 @@ class PushDevicesHandlerTest {
     }
 
     @Test
-    void registerReturns400ForInvalidJson() {
-        var writer = new StringWriter();
+    void registerReturns400ForInvalidJson() throws IOException {
+        var writer = new CapturingServletOutputStream();
         configureRequest("POST", "/push/devices");
         when(request.startAsync()).thenReturn(asyncContext);
         asUnchecked(() -> when(request.getInputStream()).thenReturn(servletInputStream("not json")));
-        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
+        doReturn(writer).when(response).getOutputStream();
 
         handler.handle(request, response);
 
         verify(response).setStatus(BAD_REQUEST_400);
         verify(asyncContext).complete();
-        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().contains("Invalid JSON body");
+        assertThat(parseJson(writer.output())).extractingByKey("error").asString().isEqualTo("INVALID_BODY");
     }
 
     @Test
-    void registerReturns413ForOversizedBody() {
-        var writer = new StringWriter();
+    void registerReturns413ForOversizedBody() throws IOException {
+        var writer = new CapturingServletOutputStream();
         configureRequest("POST", "/push/devices");
         when(request.startAsync()).thenReturn(asyncContext);
         String oversizedBody = "{\"deviceId\":\"" + "x".repeat(40 * 1024) + "\"}";
         asUnchecked(() -> when(request.getInputStream()).thenReturn(servletInputStream(oversizedBody)));
-        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
+        doReturn(writer).when(response).getOutputStream();
 
         handler.handle(request, response);
 
         verify(response).setStatus(PAYLOAD_TOO_LARGE_413);
         verify(asyncContext).complete();
         verifyNoInteractions(pushDeviceStore);
-        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().contains("too large");
+        assertThat(parseJson(writer.output())).extractingByKey("error").asString().isEqualTo("BODY_TOO_LARGE");
     }
 
     @Test
-    void registerReturns500WhenUpsertFails() {
+    void registerReturns500WhenUpsertFails() throws IOException {
         when(pushDeviceStore.upsert(any())).thenReturn(CompletableFuture.failedFuture(new RuntimeException("store down")));
-        var writer = new StringWriter();
+        var writer = new CapturingServletOutputStream();
         configureRequest("POST", "/push/devices");
         when(request.startAsync()).thenReturn(asyncContext);
         asUnchecked(() -> when(request.getInputStream()).thenReturn(
                 servletInputStream("{\"deviceId\":\"dev1\",\"token\":\"tok1\"}")));
-        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
+        doReturn(writer).when(response).getOutputStream();
 
         handler.handle(request, response);
         clock.tick();
 
         verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
         verify(asyncContext).complete();
-        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().isEqualTo("INTERNAL_ERROR");
+        assertThat(parseJson(writer.output())).extractingByKey("error").asString().isEqualTo("INTERNAL_ERROR");
         assertRaisedAlert();
     }
 
@@ -181,19 +182,19 @@ class PushDevicesHandlerTest {
     }
 
     @Test
-    void unregisterReturns500WhenRemoveFails() {
+    void unregisterReturns500WhenRemoveFails() throws IOException {
         when(pushDeviceStore.remove("dev1")).thenReturn(CompletableFuture.failedFuture(new RuntimeException("store down")));
-        var writer = new StringWriter();
+        var writer = new CapturingServletOutputStream();
         configureRequest("DELETE", "/push/devices/dev1");
         when(request.startAsync()).thenReturn(asyncContext);
-        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(writer)));
+        doReturn(writer).when(response).getOutputStream();
 
         handler.handle(request, response);
         clock.tick();
 
         verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
         verify(asyncContext).complete();
-        assertThat(parseJson(writer.toString())).extractingByKey("error").asString().isEqualTo("INTERNAL_ERROR");
+        assertThat(parseJson(writer.output())).extractingByKey("error").asString().isEqualTo("INTERNAL_ERROR");
         assertRaisedAlert();
     }
 

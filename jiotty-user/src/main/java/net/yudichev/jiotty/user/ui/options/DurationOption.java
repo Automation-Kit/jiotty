@@ -1,12 +1,14 @@
 package net.yudichev.jiotty.user.ui.options;
 
 import net.yudichev.jiotty.common.async.TaskExecutor;
-import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.time.FriendlyDurationFormat;
 
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+
+import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
+import static net.yudichev.jiotty.common.lang.EvenMoreObjects.mapIfNotNull;
 
 /// Option for editing a time interval (duration).
 ///
@@ -32,9 +34,10 @@ public abstract class DurationOption extends BaseOption<Duration> {
                                    .filter(s -> !s.isEmpty())
                                    .map(FriendlyDurationFormat::parseHuman)
                                    .orElse(null);
-            return setValue(parsed).thenApply(FriendlyDurationFormat::formatHuman);
+            // Clearing the option saves null, which renders as null.
+            return setValue(parsed).thenApply(saved -> mapIfNotNull(saved, FriendlyDurationFormat::formatHuman));
         } catch (IllegalArgumentException e) {
-            return CompletableFutures.failure(e.getMessage());
+            return failure(OptionValueRejectedException.of(OptionRejectionReasons.INVALID_DURATION, e));
         }
     }
 

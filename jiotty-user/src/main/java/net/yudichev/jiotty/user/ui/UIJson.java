@@ -19,8 +19,15 @@ final class UIJson {
             .registerModule(new GuavaModule())
             .disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
 
+    /// For a value whose type is only known at run time — a displayable's DTO, an option's normalised value. A write through it resolves Jackson's serialiser
+    /// graph each time, so a type known at compile time takes [#createWriterFor] instead.
     static final ObjectWriter WRITER = MAPPER.writerWithView(Views.UI.class);
 
     private UIJson() {
+    }
+
+    /// A writer bound to `type`, resolving its serialiser once. Hold the result in a `static final` field, one per type written repeatedly.
+    static ObjectWriter createWriterFor(Class<?> type) {
+        return WRITER.forType(type);
     }
 }

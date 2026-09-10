@@ -17,8 +17,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.lang.annotation.Annotation;
+import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CompletableFuture;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
@@ -73,9 +74,17 @@ class TeslaFleetModuleTest {
                                                       .stream().map(binding -> injector.getInstance(binding.getKey())).toList();
         components.forEach(LifecycleComponent::start);
         try {
-            var states = new CopyOnWriteArrayList<AuthState>();
-            try (var _ = injector.getInstance(module.getExposedKey()).subscribeToTokenState(states::add)) {
-                assertThat(states).last().isInstanceOf(loginPending ? AuthState.TransientFailure.class : AuthState.PermanentFailure.class);
+            // The token manager publishes on its own executor, so the settled state can arrive after subscribe() returns; awaiting it is what stops this
+            // reading whichever value the observable happened to hold. Anything but the initial placeholder is that settled state.
+            var settledState = new CompletableFuture<AuthState>();
+            try (var _ = injector.getInstance(module.getExposedKey())
+                                 .subscribeToTokenState(state -> {
+                                     if (!TeslaFleetImpl.INITIAL_STATE.equals(state)) {
+                                         settledState.complete(state);
+                                     }
+                                 })) {
+                assertThat(settledState).succeedsWithin(Duration.ofSeconds(10))
+                                        .isInstanceOf(loginPending ? AuthState.TransientFailure.class : AuthState.PermanentFailure.class);
             }
         } finally {
             components.reversed().forEach(LifecycleComponent::stop);

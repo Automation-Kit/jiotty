@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,8 +16,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -62,12 +61,12 @@ class GetDisplayablesListHandlerTest {
         registry.register(createDisplayable("d2", "Display 2"));
         clock.tick();
 
-        var writer = new StringWriter();
-        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+        var writer = new CapturingServletOutputStream();
+        when(response.getOutputStream()).thenReturn(writer);
 
         handler.handle(request, response);
 
-        Map<String, Object> parsed = parseJson(writer.toString());
+        Map<String, Object> parsed = parseJson(writer.output());
         @SuppressWarnings("unchecked")
         var items = (List<Map<String, Object>>) parsed.get("items");
         assertThat(items).hasSize(2);
@@ -83,12 +82,12 @@ class GetDisplayablesListHandlerTest {
         registry.register(hidden);
         clock.tick();
 
-        var writer = new StringWriter();
-        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+        var writer = new CapturingServletOutputStream();
+        when(response.getOutputStream()).thenReturn(writer);
 
         handler.handle(request, response);
 
-        Map<String, Object> parsed = parseJson(writer.toString());
+        Map<String, Object> parsed = parseJson(writer.output());
         @SuppressWarnings("unchecked")
         var items = (List<Map<String, Object>>) parsed.get("items");
         assertThat(items).hasSize(1);
@@ -97,12 +96,12 @@ class GetDisplayablesListHandlerTest {
 
     @Test
     void returnsEmptyItemsWhenNoDisplayables() throws IOException {
-        var writer = new StringWriter();
-        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+        var writer = new CapturingServletOutputStream();
+        when(response.getOutputStream()).thenReturn(writer);
 
         handler.handle(request, response);
 
-        Map<String, Object> parsed = parseJson(writer.toString());
+        Map<String, Object> parsed = parseJson(writer.output());
         @SuppressWarnings("unchecked")
         var items = (List<Map<String, Object>>) parsed.get("items");
         assertThat(items).isEmpty();
@@ -113,12 +112,12 @@ class GetDisplayablesListHandlerTest {
         registry.register(createDisplayable("my display!", "Display"));
         clock.tick();
 
-        var writer = new StringWriter();
-        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+        var writer = new CapturingServletOutputStream();
+        when(response.getOutputStream()).thenReturn(writer);
 
         handler.handle(request, response);
 
-        Map<String, Object> parsed = parseJson(writer.toString());
+        Map<String, Object> parsed = parseJson(writer.output());
         @SuppressWarnings("unchecked")
         var items = (List<Map<String, Object>>) parsed.get("items");
         assertThat(items.getFirst().get("safeId")).isEqualTo("my-display-");

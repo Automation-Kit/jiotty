@@ -9,6 +9,7 @@ import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,8 +21,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -76,35 +75,35 @@ class GetDisplayableItemHandlerTest {
         registry.register(createDisplayable("d1", "Display 1", completedFuture(dto)));
         clock.tick();
 
-        var writer = new StringWriter();
+        var writer = new CapturingServletOutputStream();
         when(request.getParameter("id")).thenReturn("d1");
         when(request.startAsync()).thenReturn(asyncContext);
-        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+        when(response.getOutputStream()).thenReturn(writer);
 
         handler.handle(request, response);
         clock.tick();
 
         verify(asyncContext).complete();
-        Map<String, Object> parsed = parseJson(writer.toString());
+        Map<String, Object> parsed = parseJson(writer.output());
         assertThat(parsed.get("id")).isEqualTo("d1");
         assertThat(parsed).containsKey("dto");
     }
 
     @ParameterizedTest
     @CsvSource(value = {
-            "null, 400, missing id",
-            "'   ', 400, missing id",
-            "nonexistent, 404, unknown id"
+            "null, 400, MISSING_ID",
+            "'   ', 400, MISSING_ID",
+            "nonexistent, 404, UNKNOWN_ID"
     }, nullValues = "null")
     void returnsErrorForInvalidId(String id, int expectedStatus, String expectedError) throws IOException {
-        var writer = new StringWriter();
+        var writer = new CapturingServletOutputStream();
         when(request.getParameter("id")).thenReturn(id);
-        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+        when(response.getOutputStream()).thenReturn(writer);
 
         handler.handle(request, response);
 
         verify(response).setStatus(expectedStatus);
-        assertThat(writer.toString()).contains(expectedError);
+        assertThat(writer.output()).contains(expectedError);
     }
 
     @Test
@@ -113,10 +112,10 @@ class GetDisplayableItemHandlerTest {
                                             CompletableFuture.failedFuture(new RuntimeException("DTO generation failed"))));
         clock.tick();
 
-        var writer = new StringWriter();
+        var writer = new CapturingServletOutputStream();
         when(request.getParameter("id")).thenReturn("d1");
         when(request.startAsync()).thenReturn(asyncContext);
-        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+        when(response.getOutputStream()).thenReturn(writer);
 
         handler.handle(request, response);
         clock.tick();
@@ -124,7 +123,7 @@ class GetDisplayableItemHandlerTest {
         verify(asyncContext).complete();
         verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
         // The 500 body is a fixed opaque code — the internal exception text ("DTO generation failed") must not reach the client.
-        Map<String, Object> parsed = parseJson(writer.toString());
+        Map<String, Object> parsed = parseJson(writer.output());
         assertThat((String) parsed.get("error")).isEqualTo("INTERNAL_ERROR");
         // ...but the failure IS surfaced to operators as a WARNING admin alert.
         assertThat(alertService.activeAlertsById().values())

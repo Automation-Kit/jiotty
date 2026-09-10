@@ -13,6 +13,10 @@ import static net.yudichev.jiotty.common.lang.CompositeException.runForAll;
 /// When multiple threads call [#accept] concurrently, all values are delivered to all subscribers, but the delivery order is nondeterministic.
 ///
 /// Observers may safely subscribe, unsubscribe, or push new values from within their notification callbacks.
+///
+/// Actions are serialised through one queue drained by whichever thread finds it idle, so a [#subscribe(Consumer)] landing while another thread is delivering
+/// is completed by that thread: the new observer gets the current value promptly, and can get it after [#subscribe(Consumer)] has returned. This is guarantee
+/// 1 of [ObservableValue] — read that for what a caller may assume.
 public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
 
     private final ConcurrentLinkedQueue<Runnable> actionQueue = new ConcurrentLinkedQueue<>();

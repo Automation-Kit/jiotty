@@ -18,6 +18,7 @@ import java.sql.SQLException;
 
 import static com.google.common.base.Preconditions.checkState;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
+import static net.yudichev.jiotty.common.net.LoopbackPorts.findFreeLoopbackPort;
 
 /// Boots one real Postgres for the registering class and drops its schema between tests. A class registering it is annotated [UsingEmbeddedPostgres], which
 /// keeps two such classes from running at the same time.
@@ -46,7 +47,12 @@ public final class EmbeddedPostgresExtension implements BeforeAllCallback, After
                    "%s registers an embedded Postgres, so it must be annotated @%s to keep two such classes from running at once",
                    testClass.getName(),
                    UsingEmbeddedPostgres.class.getSimpleName());
-        EmbeddedPostgres startedPostgres = EmbeddedPostgres.start();
+        // The port is chosen here rather than by zonky, which probes with a wildcard bind: that succeeds over a listener already holding the port on
+        // 127.0.0.1, and Postgres then comes up on ::1 alone while zonky's readiness check — and every test — connects to 127.0.0.1 and reaches the other
+        // process, which accepts and never answers. See LoopbackPorts.
+        EmbeddedPostgres startedPostgres = EmbeddedPostgres.builder()
+                                                           .setPort(findFreeLoopbackPort())
+                                                           .start();
         postgres = startedPostgres;
         var pool = new HikariDataSource();
         pool.setDataSource(startedPostgres.getPostgresDatabase());

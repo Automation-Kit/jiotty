@@ -18,7 +18,6 @@ import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
-import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
@@ -101,13 +100,13 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
             try {
                 byte[] bodyBytes = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
                 if (bodyBytes.length > MAX_BODY_BYTES) {
-                    writeJsonError(response, PAYLOAD_TOO_LARGE_413, "Request body too large");
+                    ErrorResponse.write(response, PAYLOAD_TOO_LARGE_413, ErrorResponse.BODY_TOO_LARGE);
                     asyncContext.complete();
                     return;
                 }
                 body = REQUEST_READER.readValue(bodyBytes);
             } catch (IOException e) {
-                writeJsonError(response, BAD_REQUEST_400, "Invalid JSON body");
+                ErrorResponse.write(response, BAD_REQUEST_400, ErrorResponse.INVALID_BODY);
                 asyncContext.complete();
                 return;
             }
@@ -134,19 +133,12 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
         try {
             if (throwable != null) {
                 alertService.raise(WARNING, "Push device request failed", logger, throwable);
-                asUnchecked(() -> writeJsonError(response, INTERNAL_SERVER_ERROR_500, "INTERNAL_ERROR"));
+                ErrorResponse.write(response, INTERNAL_SERVER_ERROR_500, ErrorResponse.INTERNAL_ERROR);
             } else {
                 response.setStatus(NO_CONTENT_204);
             }
         } finally {
             asyncContext.complete();
         }
-    }
-
-    private static void writeJsonError(HttpServletResponse response, int status, String message) throws IOException {
-        response.setStatus(status);
-        response.setCharacterEncoding("utf-8");
-        response.setContentType("application/json");
-        UIJson.WRITER.writeValue(response.getWriter(), Map.of("error", message));
     }
 }

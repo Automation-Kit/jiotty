@@ -52,6 +52,11 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet {
     public static final AuthState.Success SUCCESS = new AuthState.Success("SUCCESS");
+
+    /// What the token state reads as until the token manager delivers the first real one, which it does on its own executor.
+    @VisibleForTesting
+    static final AuthState INITIAL_STATE = new AuthState.TransientFailure("Not authenticated yet");
+
     private static final Logger logger = LogManager.getLogger(TeslaFleetImpl.class);
     private static final TypeToken<ResponseWrapper<List<TeslaVehicleData>>> LIST_VEHICLES_RESPONSE_TYPE = new TypeToken<>() {};
     private static final TypeToken<ResponseWrapper<CommandResponse>> CMD_RESPONSE_TYPE = new TypeToken<>() {};
@@ -61,7 +66,7 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
     private final String listVehiclesUrl;
     private final String telemetryConfigCreateUrl;
     private final @Nullable SslCustomisation sslCustomisation;
-    private final ObservableValue<AuthState> accessTokenObservable = ObservableValue.concurrent(new AuthState.TransientFailure("Not authenticated yet"));
+    private final ObservableValue<AuthState> accessTokenObservable = ObservableValue.concurrent(INITIAL_STATE);
     private OkHttpClient httpClient;
     private @Nullable Closeable tokenSubscription;
 

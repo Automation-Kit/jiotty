@@ -3,20 +3,18 @@ package net.yudichev.jiotty.user.ui.options;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.geo.LatLon;
+import net.yudichev.jiotty.common.lang.Json;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class LocationOptionTest {
     private static final String OPTION_KEY = "test.location";
@@ -37,9 +35,10 @@ class LocationOptionTest {
 
     @Test
     void onFormSubmitParsesValidJson() {
-        Object result = await(option.onFormSubmit(Optional.of("{\"lat\":51.5,\"lon\":-0.12}")));
+        CompletableFuture<?> result = option.onFormSubmit(Optional.of("{\"lat\":51.5,\"lon\":-0.12}"));
+        clock.tick();
 
-        assertThat(result).isEqualTo(new LatLon(51.5, -0.12));
+        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(new LatLon(51.5, -0.12));
         assertThat(option.getValue()).contains(new LatLon(51.5, -0.12));
     }
 
@@ -47,8 +46,10 @@ class LocationOptionTest {
     void onFormSubmitClearsValueOnEmptyInput() {
         option.setValueSync(new LatLon(10.0, 20.0));
 
-        await(option.onFormSubmit(Optional.of("")));
+        CompletableFuture<?> result = option.onFormSubmit(Optional.of(""));
+        clock.tick();
 
+        assertThat(result).succeedsWithin(Duration.ZERO);
         assertThat(option.getValue()).isEmpty();
     }
 
@@ -56,33 +57,58 @@ class LocationOptionTest {
     void onFormSubmitClearsValueOnAbsentInput() {
         option.setValueSync(new LatLon(10.0, 20.0));
 
-        await(option.onFormSubmit(Optional.empty()));
+        CompletableFuture<?> result = option.onFormSubmit(Optional.empty());
+        clock.tick();
 
+        assertThat(result).succeedsWithin(Duration.ZERO);
         assertThat(option.getValue()).isEmpty();
     }
 
     @ParameterizedTest
-    @MethodSource
-    void onFormSubmitFailsOnInvalidInput(String input, String expectedMessageSubstring) {
+    @ValueSource(strings = {
+            // malformed payload
+            "not json",
+            // a payload that parses to nothing at all
+            "null",
+            // latitude out of range
+            "{\"lat\":-91.0,\"lon\":0.0}",
+            "{\"lat\":90.5,\"lon\":0.0}",
+            // longitude out of range
+            "{\"lat\":0.0,\"lon\":-180.5}",
+            "{\"lat\":0.0,\"lon\":180.5}",
+            // not a number: every comparison against a bound is false, so a check written as two rejecting comparisons would let these through
+            "{\"lat\":\"NaN\",\"lon\":0.0}",
+            "{\"lat\":0.0,\"lon\":\"NaN\"}",
+            "{\"lat\":\"Infinity\",\"lon\":0.0}",
+            // a coordinate absent or null: read into primitives these arrive as 0.0, which is in range and would save as a point off the coast of Africa
+            "{\"lat\":51.5}",
+            "{\"lon\":-0.12}",
+            "{\"lat\":51.5,\"lon\":null}",
+            "{\"lat\":null,\"lon\":null}",
+            "{}"})
+    void onFormSubmitFailsOnInvalidInput(String input) {
         CompletableFuture<?> result = option.onFormSubmit(Optional.of(input));
         clock.tick();
 
-        assertThatThrownBy(result::get)
-                .hasCauseInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(expectedMessageSubstring);
+        assertThat(result)
+                .failsWithin(Duration.ZERO)
+                .withThrowableOfType(ExecutionException.class)
+                .havingCause()
+                .isInstanceOfSatisfying(OptionValueRejectedException.class,
+                                        rejection -> assertThat(rejection.reason()).isEqualTo(OptionRejectionReasons.INVALID_LOCATION));
     }
 
-    static Stream<Arguments> onFormSubmitFailsOnInvalidInput() {
-        return Stream.of(
-                // malformed payload
-                arguments("not json", "Invalid location JSON"),
-                // latitude out of range
-                arguments("{\"lat\":-91.0,\"lon\":0.0}", "Latitude out of range"),
-                arguments("{\"lat\":90.5,\"lon\":0.0}", "Latitude out of range"),
-                // longitude out of range
-                arguments("{\"lat\":0.0,\"lon\":-180.5}", "Longitude out of range"),
-                arguments("{\"lat\":0.0,\"lon\":180.5}", "Longitude out of range")
-        );
+    /// A rejection travels to a response body and to the server log, so it must not carry the coordinate that caused it.
+    @Test
+    void outOfRangeRejectionNamesNoCoordinate() {
+        CompletableFuture<?> result = option.onFormSubmit(Optional.of(Json.stringify(new LatLon(91.5074, -0.1278))));
+        clock.tick();
+
+        assertThat(result)
+                .failsWithin(Duration.ZERO)
+                .withThrowableOfType(ExecutionException.class)
+                .havingCause()
+                .satisfies(rejection -> assertThat(rejection.getMessage()).doesNotContain("91.5074", "-0.1278"));
     }
 
     @Test
@@ -107,15 +133,6 @@ class LocationOptionTest {
         assertThat(dto).isInstanceOf(StandardOptionDtos.Location.class);
         var location = (StandardOptionDtos.Location) dto;
         assertThat(location.value()).isNull();
-    }
-
-    private <T> T await(CompletableFuture<T> future) {
-        clock.tick();
-        try {
-            return future.get();
-        } catch (InterruptedException | ExecutionException e) {
-            throw new AssertionError(e);
-        }
     }
 
     private static final class TestLocationOption extends LocationOption {

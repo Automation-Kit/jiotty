@@ -28,6 +28,7 @@ import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -92,6 +93,13 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     /// Takes the idle timeout so a test can pin the reclaim behaviour without waiting out the production [#IDLE_TIMEOUT].
     @VisibleForTesting
     UIHttpServerImpl(int listenPort, Set<ServletMount> servletMounts, MeterRegistry meterRegistry, Duration idleTimeout) {
+        this(listenPort, servletMounts, meterRegistry, idleTimeout, Optional.empty());
+    }
+
+    /// @param bindHost the address to bind, empty in production so every interface is served. A test passes the one address its client dials, so the port it
+    ///                 is handed is one it holds there rather than one another process can still claim.
+    @VisibleForTesting
+    UIHttpServerImpl(int listenPort, Set<ServletMount> servletMounts, MeterRegistry meterRegistry, Duration idleTimeout, Optional<String> bindHost) {
         this.servletMounts = checkNotNull(servletMounts, "servletMounts");
         this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
         checkNotNull(idleTimeout, "idleTimeout");
@@ -115,6 +123,8 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
             // of this server.
             connector.setReuseAddress(false);
         }
+        // Binding one address rather than the wildcard is what makes the port exclusively ours: nothing can then take the same port on that address behind us.
+        bindHost.ifPresent(connector::setHost);
         server.addConnector(connector);
     }
 

@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.net.LoopbackPorts;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import org.jspecify.annotations.Nullable;
@@ -14,7 +15,6 @@ import java.io.OutputStream;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.URLEncoder;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -74,7 +74,7 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
 
     private String startRedirectHttpServer(String state) {
         return getAsUnchecked(() -> {
-            int port = fixedCallbackHttpPort.orElseGet(LocalLoginOAuth2TokenManager::findFreeTcpPort);
+            int port = fixedCallbackHttpPort.orElseGet(LoopbackPorts::findFreeLoopbackPort);
             httpServer = HttpServer.create(new InetSocketAddress("localhost", port), 0);
             String callbackUrl = "http://localhost:" + httpServer.getAddress().getPort() + "/callback";
             httpServer.createContext("/callback", exchange -> {
@@ -106,14 +106,6 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
             httpServer.setExecutor(executor); // creates a default executor
             httpServer.start();
             return callbackUrl;
-        });
-    }
-
-    private static int findFreeTcpPort() {
-        return getAsUnchecked(() -> {
-            try (ServerSocket socket = new ServerSocket(0)) {
-                return socket.getLocalPort();
-            }
         });
     }
 

@@ -4,12 +4,12 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.geo.LatLon;
-import net.yudichev.jiotty.common.lang.CompletableFutures;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.google.common.base.Preconditions.checkArgument;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
 
 /// Option for editing a geographic location as a single `LatLon`.
 ///
@@ -31,7 +31,7 @@ public abstract class LocationOption extends BaseOption<LatLon> {
                           .map(LocationOption::parse)
                           .orElse(null);
         } catch (IllegalArgumentException e) {
-            return CompletableFutures.failure(e);
+            return failure(e);
         }
         return setValue(parsed);
     }
@@ -47,14 +47,27 @@ public abstract class LocationOption extends BaseOption<LatLon> {
     }
 
     private static LatLon parse(String json) {
-        LatLon parsed;
+        // Read through boxed fields: LatLon's are primitive, so a payload missing a coordinate, or sending it as null, would arrive as 0.0 and save as a
+        // point off the coast of Africa.
+        Payload payload;
         try {
-            parsed = MAPPER.readValue(json, LatLon.class);
+            payload = MAPPER.readValue(json, Payload.class);
         } catch (JsonProcessingException e) {
-            throw new IllegalArgumentException("Invalid location JSON: " + e.getMessage(), e);
+            throw OptionValueRejectedException.of(OptionRejectionReasons.INVALID_LOCATION, e);
         }
-        checkArgument(parsed.lat() >= -90.0 && parsed.lat() <= 90.0, "Latitude out of range [-90, 90]: %s", parsed.lat());
-        checkArgument(parsed.lon() >= -180.0 && parsed.lon() <= 180.0, "Longitude out of range [-180, 180]: %s", parsed.lon());
-        return parsed;
+        if (payload == null || payload.lat() == null || payload.lon() == null) {
+            // The message names no coordinate — it goes to the app and to the log, and neither should hold someone's location.
+            throw OptionValueRejectedException.of(OptionRejectionReasons.INVALID_LOCATION);
+        }
+        double lat = payload.lat();
+        double lon = payload.lon();
+        // Testing for "in range" and negating it also rejects NaN, which compares false against every bound and so would pass an "out of range" test.
+        if (!(lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0)) {
+            throw OptionValueRejectedException.of(OptionRejectionReasons.INVALID_LOCATION);
+        }
+        return new LatLon(lat, lon);
     }
+
+    /// What arrives on the wire, before it is known to be a location.
+    private record Payload(@Nullable Double lat, @Nullable Double lon) {}
 }

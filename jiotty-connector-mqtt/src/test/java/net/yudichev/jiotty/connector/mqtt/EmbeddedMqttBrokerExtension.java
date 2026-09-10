@@ -8,12 +8,11 @@ import org.junit.jupiter.api.extension.AfterAllCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
-import java.net.ServerSocket;
 import java.util.Properties;
 
 import static com.google.common.base.Preconditions.checkState;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.net.LoopbackPorts.findFreeLoopbackPort;
 
 /// JUnit 5 extension that boots a real in-JVM Moquette MQTT broker for MQTT integration tests, mirroring the embedded-Postgres extension in the persistence
 /// modules: a real server (here an MQTT broker, there Postgres) started once per test class, reachable over loopback on an ephemeral port, with no Docker
@@ -23,13 +22,16 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 /// The broker keeps retained state for its whole lifetime, so each test must use its own unique topics to stay isolated; the broker itself is not reset
 /// between tests (except by an explicit [#restart]).
 public final class EmbeddedMqttBrokerExtension implements BeforeAllCallback, AfterAllCallback {
+    /// The address the broker binds and [#serverUri] hands out — one literal, so the two can never drift onto different loopback addresses.
+    private static final String HOST = "127.0.0.1";
+
     /// The running broker; `null` before it is started and after it is stopped.
     private @Nullable Server broker;
     private int port;
 
     @Override
     public void beforeAll(ExtensionContext context) {
-        port = findFreePort();
+        port = findFreeLoopbackPort();
         startBroker();
     }
 
@@ -54,12 +56,12 @@ public final class EmbeddedMqttBrokerExtension implements BeforeAllCallback, Aft
 
     public String serverUri() {
         checkState(broker != null, "Embedded MQTT broker is not started");
-        return "tcp://127.0.0.1:" + port;
+        return "tcp://" + HOST + ':' + port;
     }
 
     private void startBroker() {
         var properties = new Properties();
-        properties.setProperty(IConfig.HOST_PROPERTY_NAME, "127.0.0.1");
+        properties.setProperty(IConfig.HOST_PROPERTY_NAME, HOST);
         properties.setProperty(IConfig.PORT_PROPERTY_NAME, Integer.toString(port));
         properties.setProperty(IConfig.PERSISTENCE_ENABLED_PROPERTY_NAME, "false");
         var server = new Server();
@@ -68,11 +70,4 @@ public final class EmbeddedMqttBrokerExtension implements BeforeAllCallback, Aft
         broker = server;
     }
 
-    private static int findFreePort() {
-        return getAsUnchecked(() -> {
-            try (var socket = new ServerSocket(0)) {
-                return socket.getLocalPort();
-            }
-        });
-    }
 }

@@ -32,8 +32,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -338,7 +336,7 @@ class SseServiceImplTest {
     @Test
     void optionFormPostBroadcastsOptionUpdateViaSse() {
         Provider<SchedulingExecutor> executorProvider = () -> clock.createSingleThreadedSchedulingExecutor("post");
-        var handler = new OptionsPostHandler(optionRegistry, executorProvider);
+        OptionsPostHandler handler = new OptionsPostHandler(optionRegistry, alertService, executorProvider, "user-1");
         handler.start();
         clock.tick();
         try {
@@ -352,7 +350,6 @@ class SseServiceImplTest {
             var request = mock(HttpServletRequest.class);
             var response = mock(HttpServletResponse.class);
             var asyncContext = mock(AsyncContext.class);
-            var responseBody = new StringWriter();
             when(request.getMethod()).thenReturn("POST");
             when(request.startAsync()).thenReturn(asyncContext);
             doAnswer(invocation -> {
@@ -362,7 +359,8 @@ class SseServiceImplTest {
             when(request.getParameter("name")).thenReturn("opt1");
             when(request.getParameter("value")).thenReturn("new value");
             lenient().when(request.getParameterMap()).thenReturn(Map.of());
-            asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(responseBody)));
+            // This test asserts on the SSE broadcast, not the POST's own body, so the response only has to accept the bytes.
+            asUnchecked(() -> when(response.getOutputStream()).thenReturn(new CapturingServletOutputStream()));
 
             handler.handle(request, response);
             clock.advanceTimeAndTick(THROTTLING_PERIOD);

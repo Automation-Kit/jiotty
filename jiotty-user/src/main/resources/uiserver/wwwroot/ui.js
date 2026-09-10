@@ -460,6 +460,26 @@ $(function () {
         });
     }
 
+    // A rejected save answers with {"reason": CODE, "params": {...}} and no sentence to show, so this operator page renders the code itself.
+    function rejectionText(jqXHR) {
+        try {
+            const rejection = JSON.parse(jqXHR.responseText);
+            // Other endpoints answer with JSON of their own shape, so parsing alone does not make this a rejection.
+            if (rejection && typeof rejection.reason === 'string') {
+                const params = rejection.params || {};
+                const keys = Object.keys(params);
+                return keys.length === 0
+                    ? rejection.reason
+                    : rejection.reason + ' (' + keys.map(function (k) {
+                    return k + '=' + params[k];
+                }).join(', ') + ')';
+            }
+        } catch (e) {
+            // Falls through to the raw body below.
+        }
+        return jqXHR.responseText || 'Error';
+    }
+
     // ----- Option save handlers -----
     function attachOptionHandlers() {
         $('[data-option][data-option-type!="chat"][data-option-type!="location"]').each(function () {
@@ -538,7 +558,7 @@ $(function () {
                     .fail(function (jqXHR) {
                         if (mySeq !== reqSeq) return;
                         clearHideTimer();
-                        $stat.text(jqXHR.responseText || 'Error').addClass('error show');
+                        $stat.text(rejectionText(jqXHR)).addClass('error show');
                     });
             }
         });
@@ -640,7 +660,7 @@ $(function () {
                     .fail(function (jqXHR) {
                         if (mySeq !== reqSeq) return;
                         clearHideTimer();
-                        $stat.text(jqXHR.responseText || 'Error').addClass('error show');
+                        $stat.text(rejectionText(jqXHR)).addClass('error show');
                     });
             }
 

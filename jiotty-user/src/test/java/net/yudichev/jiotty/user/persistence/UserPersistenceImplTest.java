@@ -37,9 +37,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.util.concurrent.Uninterruptibles.awaitUninterruptibly;
 import static java.util.Optional.of;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static net.yudichev.jiotty.user.persistence.UserPersistence.UserCreationResult;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -212,7 +212,7 @@ class UserPersistenceImplTest {
             @Override
             boolean onBeforeInsertingNewUser() {
                 atRaceWindow.countDown();
-                return awaitUninterruptibly(competitorCommitted, 10, SECONDS);
+                return getAsUnchecked(() -> competitorCommitted.await(10, SECONDS));
             }
         };
         racer.start();
