@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableList;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import net.yudichev.jiotty.user.persistence.ConditionalSoftDeleteOutcome;
 import net.yudichev.jiotty.user.persistence.UserIdentity;
 import net.yudichev.jiotty.user.persistence.UserIdentityRecord;
 import net.yudichev.jiotty.user.persistence.UserPersistence;
@@ -13,6 +14,7 @@ import net.yudichev.jiotty.user.persistence.UserProfileWithDeletion;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -161,6 +163,58 @@ public final class FakeUserPersistence implements UserPersistence {
     }
 
     @Override
+    public CompletableFuture<Boolean> touchLastActive(String userId, Instant activeAt) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            checkNotNull(activeAt, "activeAt");
+            StoredUser storedUser = usersById.get(userId);
+            // Soft-deleted users are touched too, mirroring UserPersistenceImpl, so a restored row carries what was recorded while it was deleted.
+            if (storedUser == null || !storedUser.lastActiveAt().isBefore(activeAt)) {
+                return completedFuture(false);
+            }
+            storedUser.touchLastActive(activeAt);
+            return completedFuture(true);
+        }
+    }
+
+    @Override
+    public CompletableFuture<List<UserProfile>> listInactiveSince(Instant cutoff, int limit) {
+        synchronized (lock) {
+            checkNotNull(cutoff, "cutoff");
+            checkArgument(limit > 0, "limit must be positive, got %s", limit);
+            var profiles = ImmutableList.<UserProfile>builder();
+            // Least recently active first and capped, as the interface declares — a fake that returned insertion order, or everything, would pass tests the
+            // real store fails.
+            usersById.values().stream()
+                     .filter(user -> user.active() && user.lastActiveAt().isBefore(cutoff))
+                     .sorted(Comparator.comparing(StoredUser::lastActiveAt))
+                     .limit(limit)
+                     .forEach(user -> profiles.add(user.profile()));
+            return completedFuture(profiles.build());
+        }
+    }
+
+    @Override
+    public CompletableFuture<ConditionalSoftDeleteOutcome> softDeleteIfInactiveSince(String userId, Instant cutoff) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            checkNotNull(cutoff, "cutoff");
+            StoredUser storedUser = usersById.get(userId);
+            if (storedUser == null) {
+                return completedFuture(ConditionalSoftDeleteOutcome.ABSENT);
+            }
+            if (!storedUser.active()) {
+                return completedFuture(ConditionalSoftDeleteOutcome.ALREADY_SOFT_DELETED);
+            }
+            if (!storedUser.lastActiveAt().isBefore(cutoff)) {
+                return completedFuture(ConditionalSoftDeleteOutcome.STILL_ACTIVE);
+            }
+            softDeleteLocked(userId, storedUser);
+            return completedFuture(ConditionalSoftDeleteOutcome.SOFT_DELETED);
+        }
+    }
+
+    @Override
     public CompletableFuture<UserProfile> updateProfile(String userId, UserProfileInput profile) {
         synchronized (lock) {
             checkNotNull(profile, "profile");
@@ -230,14 +284,18 @@ public final class FakeUserPersistence implements UserPersistence {
             if (storedUser == null || !storedUser.active()) {
                 return completedFuture(null); // idempotent: already soft-deleted (or unknown) — no-op
             }
-            for (UserIdentity oldIdentity : storedUser.activeIdentities()) {
-                String removedUserId = activeUserIdsByIdentity.remove(oldIdentity);
-                assert userId.equals(removedUserId);
-            }
-            storedUser.softDelete(currentInstant());
-            changeListeners.notify(userId);
+            softDeleteLocked(userId, storedUser);
             return completedFuture(null);
         }
+    }
+
+    private void softDeleteLocked(String userId, StoredUser storedUser) {
+        for (UserIdentity oldIdentity : storedUser.activeIdentities()) {
+            String removedUserId = activeUserIdsByIdentity.remove(oldIdentity);
+            assert userId.equals(removedUserId);
+        }
+        storedUser.softDelete(currentInstant());
+        changeListeners.notify(userId);
     }
 
     @Override
@@ -327,10 +385,21 @@ public final class FakeUserPersistence implements UserPersistence {
         private final Map<String, UserIdentityRecord> activeIdentityRecordsByProvider = new LinkedHashMap<>();
 
         private UserProfile profile;
+        private Instant lastActiveAt;
         private @Nullable Instant deletedAt;
 
         private StoredUser(UserProfile profile) {
             this.profile = checkNotNull(profile, "profile");
+            // Creating the account is the first activity, matching the value UserPersistenceImpl's insert writes.
+            lastActiveAt = profile.createdAt();
+        }
+
+        public Instant lastActiveAt() {
+            return lastActiveAt;
+        }
+
+        public void touchLastActive(Instant activeAt) {
+            lastActiveAt = activeAt;
         }
 
         public boolean active() {

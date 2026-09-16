@@ -52,6 +52,10 @@ import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.SchemaV
 public class UserPersistenceImpl extends BaseLifecycleComponent implements UserPersistence {
     private static final Logger logger = LogManager.getLogger(UserPersistenceImpl.class);
     private static final String UNIQUE_VIOLATION_SQL_STATE = "23505";
+    /// Shared with [UserSchemaMigrator], which adds the column to a store created before it existed: one statement, so a fresh store and a migrated one
+    /// cannot end up with differently-shaped indexes. The `deleted_at IS NULL` matches what [#listInactiveSince] scans.
+    static final String LAST_ACTIVE_AT_INDEX_DDL =
+            "CREATE INDEX IF NOT EXISTS %DOMAIN_PREFIX%user_last_active_at_idx ON %DOMAIN_PREFIX%user (last_active_at) WHERE deleted_at IS NULL;";
 
     private static final List<String> BASE_INIT_STATEMENTS = List.of(
             """
@@ -62,8 +66,10 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                 timezone text NOT NULL,
                 created_at timestamptz NOT NULL,
                 updated_at timestamptz NOT NULL,
+                last_active_at timestamptz NOT NULL,
                 deleted_at timestamptz
             );""",
+            LAST_ACTIVE_AT_INDEX_DDL,
             """
             CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%identity (
                 user_id text NOT NULL REFERENCES %DOMAIN_PREFIX%user(id),
@@ -108,6 +114,9 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     private final String restoreUserSql;
     private final String restoreIdentitiesSql;
     private final String updateUserSql;
+    private final String touchLastActiveSql;
+    private final String selectInactiveSinceSql;
+    private final String softDeleteUserIfInactiveSql;
 
     private final Listeners<String> changeListeners = new Listeners<>();
     private final TaskFailureReporter taskFailureReporter;
@@ -161,7 +170,8 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                 "SELECT user_id FROM " + identityTable + " WHERE provider=? AND provider_user_id=?";
         selectActiveIdentityProvidersByUserSql =
                 "SELECT provider FROM " + identityTable + " WHERE user_id=? AND deleted_at IS NULL";
-        insertUserSql = "INSERT INTO " + userTable + " (id, email, display_name, timezone, created_at, updated_at) VALUES (?,?,?,?,?,?)";
+        insertUserSql =
+                "INSERT INTO " + userTable + " (id, email, display_name, timezone, created_at, updated_at, last_active_at) VALUES (?,?,?,?,?,?,?)";
         insertIdentitySql =
                 "INSERT INTO " + identityTable + " (user_id, provider, provider_user_id, created_at, updated_at) VALUES (?,?,?,?,?)";
         updateIdentitySql =
@@ -183,6 +193,15 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         restoreUserSql = "UPDATE " + userTable + " SET deleted_at=NULL, updated_at=? WHERE id=? AND deleted_at IS NOT NULL";
         restoreIdentitiesSql = "UPDATE " + identityTable + " SET deleted_at=NULL, updated_at=? WHERE user_id=? AND deleted_at=?";
         updateUserSql = "UPDATE " + userTable + " SET email=?, display_name=?, timezone=?, updated_at=? WHERE id=? AND deleted_at IS NULL";
+        // Monotonic by construction: the last_active_at predicate makes an out-of-order or repeated call a no-op rather than a backwards move. Matches on the
+        // id alone, so a soft-deleted user that is later restored comes back carrying what was recorded while it was deleted.
+        touchLastActiveSql = "UPDATE " + userTable + " SET last_active_at=? WHERE id=? AND last_active_at<?";
+        // Ordered by the column being selected on, which UserProfile does not carry: without it here the ordering could not be reproduced from the result.
+        // Limited because a cutoff that matches everybody — a clock or policy error — would otherwise materialise the whole table.
+        selectInactiveSinceSql = "SELECT id, email, display_name, timezone, created_at, updated_at FROM " + userTable +
+                                 " WHERE deleted_at IS NULL AND last_active_at<? ORDER BY last_active_at LIMIT ?";
+        softDeleteUserIfInactiveSql =
+                "UPDATE " + userTable + " SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL AND last_active_at<?";
     }
 
     @Override
@@ -246,6 +265,27 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     public CompletableFuture<Boolean> existsIgnoringDeletion(String userId) {
         validateUserId(userId);
         return whenStartedAndNotLifecycling(() -> executor.submit(() -> doExistsIgnoringDeletion(userId)));
+    }
+
+    @Override
+    public CompletableFuture<Boolean> touchLastActive(String userId, Instant activeAt) {
+        validateUserId(userId);
+        checkNotNull(activeAt, "activeAt");
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doTouchLastActive(userId, activeAt)));
+    }
+
+    @Override
+    public CompletableFuture<List<UserProfile>> listInactiveSince(Instant cutoff, int limit) {
+        checkNotNull(cutoff, "cutoff");
+        checkArgument(limit > 0, "limit must be positive, got %s", limit);
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doListInactiveSince(cutoff, limit)));
+    }
+
+    @Override
+    public CompletableFuture<ConditionalSoftDeleteOutcome> softDeleteIfInactiveSince(String userId, Instant cutoff) {
+        validateUserId(userId);
+        checkNotNull(cutoff, "cutoff");
+        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doSoftDeleteIfInactiveSince(userId, cutoff)));
     }
 
     @Override
@@ -499,6 +539,31 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         }
     }
 
+    private boolean doTouchLastActive(String userId, Instant activeAt) {
+        try {
+            try (Connection connection = dataSource.getConnection()) {
+                Timestamp at = Timestamp.from(activeAt);
+                return doUpdate(connection, touchLastActiveSql, -1, stmt -> {
+                    stmt.setTimestamp(1, at);
+                    stmt.setString(2, userId);
+                    stmt.setTimestamp(3, at);
+                }) > 0;
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to record activity for user " + userId, e);
+        }
+    }
+
+    private List<UserProfile> doListInactiveSince(Instant cutoff, int limit) {
+        return queryList(selectInactiveSinceSql,
+                         stmt -> {
+                             stmt.setTimestamp(1, Timestamp.from(cutoff));
+                             stmt.setInt(2, limit);
+                         },
+                         UserPersistenceImpl::mapUserProfile,
+                         "Failed to list users inactive since " + cutoff);
+    }
+
     private List<UserIdentityRecord> doListIdentities(String sql, String userId) {
         return queryList(sql, stmt -> stmt.setString(1, userId), UserPersistenceImpl::mapIdentityRecord, "Failed to list identities for user " + userId);
     }
@@ -521,22 +586,46 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         }
     }
 
+    /// Idempotent: the `WHERE deleted_at IS NULL` guard makes a repeat call a no-op (0 rows), mirroring restore/hardDelete — a re-issued soft-delete (e.g.
+    /// crash-recovery reconciliation) must not fail.
     private void doSoftDelete(String userId) {
+        softDeleteInTransaction(userId, null);
+    }
+
+    /// Unlike [#doSoftDelete] a zero-row outcome here is reported rather than committed over, and says which of three things happened.
+    private ConditionalSoftDeleteOutcome doSoftDeleteIfInactiveSince(String userId, Instant cutoff) {
+        return softDeleteInTransaction(userId, cutoff);
+    }
+
+    /// Soft-deletes the user and the identities that must share their deletion timestamp, so [#restore] can match them again, in one transaction.
+    ///
+    /// @param cutoff when present, the user is deleted only if last active strictly before it, and a miss rolls back and is classified in the same
+    ///               transaction; when `null` the delete is unconditional and idempotent, and the outcome is always
+    ///               [ConditionalSoftDeleteOutcome#SOFT_DELETED]
+    private ConditionalSoftDeleteOutcome softDeleteInTransaction(String userId, @Nullable Instant cutoff) {
+        String failureDescription = (cutoff == null ? "Failed to delete user " : "Failed to delete inactive user ") + userId;
         try {
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
                     Instant now = persistenceNow();
-                    // Idempotent: the WHERE deleted_at IS NULL guard makes a repeat call a no-op (0 rows), mirroring restore/hardDelete — a re-issued
-                    // soft-delete (e.g. crash-recovery reconciliation) must not fail.
-                    doUpdate(connection,
-                             softDeleteUserSql,
-                             -1,
-                             stmt -> {
-                                 stmt.setTimestamp(1, Timestamp.from(now));
-                                 stmt.setTimestamp(2, Timestamp.from(now));
-                                 stmt.setString(3, userId);
-                             });
+                    int userRows = doUpdate(connection,
+                                            cutoff == null ? softDeleteUserSql : softDeleteUserIfInactiveSql,
+                                            -1,
+                                            stmt -> {
+                                                stmt.setTimestamp(1, Timestamp.from(now));
+                                                stmt.setTimestamp(2, Timestamp.from(now));
+                                                stmt.setString(3, userId);
+                                                if (cutoff != null) {
+                                                    stmt.setTimestamp(4, Timestamp.from(cutoff));
+                                                }
+                                            });
+                    if (cutoff != null && userRows == 0) {
+                        // Classified inside the same transaction, so the answer cannot be overtaken between the update and the explanation.
+                        ConditionalSoftDeleteOutcome outcome = classifyMissedConditionalDelete(connection, userId);
+                        connection.rollback();
+                        return outcome;
+                    }
                     doUpdate(connection,
                              softDeleteIdentitiesSql,
                              -1,
@@ -547,15 +636,32 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                              });
                     connection.commit();
                     notifyChanged(userId);
+                    return ConditionalSoftDeleteOutcome.SOFT_DELETED;
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
-                    throw new RuntimeException("Failed to delete user " + userId, e);
+                    throw new RuntimeException(failureDescription, e);
                 } finally {
                     resetAutoCommit(connection);
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to delete user " + userId, e);
+            throw new RuntimeException(failureDescription, e);
+        }
+    }
+
+    /// Why the conditional statement matched nothing: the row is gone, it is already soft-deleted, or the user has been active since the cutoff. Only the last
+    /// of those is about their activity, so the three cannot be collapsed.
+    private ConditionalSoftDeleteOutcome classifyMissedConditionalDelete(Connection connection, String userId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(selectUserDeletedAtSql)) {
+            stmt.setString(1, userId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (!rs.next()) {
+                    return ConditionalSoftDeleteOutcome.ABSENT;
+                }
+                return rs.getTimestamp("deleted_at") == null
+                       ? ConditionalSoftDeleteOutcome.STILL_ACTIVE
+                       : ConditionalSoftDeleteOutcome.ALREADY_SOFT_DELETED;
+            }
         }
     }
 
@@ -775,6 +881,9 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                      stmt.setString(4, profile.timezone().getId());
                      stmt.setTimestamp(5, Timestamp.from(now));
                      stmt.setTimestamp(6, Timestamp.from(now));
+                     // Creating the account is itself activity, so a new row starts current rather than at the epoch — to the day, as every writer of this
+                     // column is, so no reader has to ask which one produced a given value.
+                     stmt.setTimestamp(7, Timestamp.from(now.truncatedTo(ChronoUnit.DAYS)));
                  });
     }
 

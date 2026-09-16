@@ -19,6 +19,18 @@ class UserSchemaMigratorTest {
                                                       .contains("email SET NOT NULL");
     }
 
+    /// The default exists only to date the rows already in the table, and must not survive the migration: every insert supplies `last_active_at` from the
+    /// app's clock, so a column left with a default would silently fall back to the database's whenever one did not.
+    @Test
+    void addsLastActiveAtAndDropsItsBackfillDefaultAtVersion3() {
+        assertThat(migrator.getMigrationStatements(3)).satisfiesExactly(
+                // Dated to the day, like every other writer of the column: the backfill must not put a time of day into rows that predate it.
+                addColumn -> assertThat(addColumn).contains("%DOMAIN_PREFIX%user")
+                                                  .contains("last_active_at timestamptz NOT NULL DEFAULT date_trunc('day', now())"),
+                dropDefault -> assertThat(dropDefault).contains("last_active_at").contains("DROP DEFAULT"),
+                index -> assertThat(index).contains("last_active_at").contains("deleted_at IS NULL"));
+    }
+
     /// Every version up to [UserSchemaMigrator#BASE_SCHEMA_VERSION] must be reachable, or an app on an older store cannot be migrated forward at all — which
     /// is what makes bumping that constant without adding statements fail here rather than at a deployed environment's startup.
     @Test

@@ -2,6 +2,7 @@ package net.yudichev.jiotty.user.persistence;
 
 import net.yudichev.jiotty.common.lang.Closeable;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -14,6 +15,10 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// - Acts as the golden source for user profile data.
 /// - Uses soft deletes; reads exclude deleted users and identities.
 /// - Supports multiple provider identities per user.
+///
+/// TODO the change subscription here is an eventing bolt-on — no image on subscribe and no filter, so every subscriber
+///  re-derives what this store already knew. It is to be merged with car-engine's `AdminUserDirectory`, which has the
+///  shape that is wanted (image, then deltas). See `workspace/USER-DIRECTORY-MERGE.md`.
 public interface UserPersistence {
     /// Returns an existing user for `identity`, or creates a new user atomically with `profile`.
     ///
@@ -57,6 +62,31 @@ public interface UserPersistence {
     /// Lists all user profiles regardless of soft-delete state — unlike [#listAllProfiles], which excludes soft-deleted users — reporting each user's
     /// soft-delete time.
     CompletableFuture<List<UserProfileWithDeletion>> listAllProfilesIgnoringDeletion();
+
+    /// Records the user's most recent activity, monotonically and whatever their deletion state. The value is stored as supplied, at whatever resolution it
+    /// carries.
+    ///
+    /// @param userId   internal user id
+    /// @param activeAt when the activity happened
+    /// @return `true` if the stored instant moved, `false` if it was already at or past `activeAt`, or the user is absent
+    CompletableFuture<Boolean> touchLastActive(String userId, Instant activeAt);
+
+    /// Lists the active users whose last recorded activity ([#touchLastActive]) is strictly before `cutoff`, **least recently active first**, at most `limit`
+    /// of them; soft-deleted users are excluded. The ordering is part of the contract: the instant it sorts by is not exposed on [UserProfile], so the result
+    /// cannot be re-ordered by it afterwards, and the limit is only meaningful alongside it.
+    ///
+    /// @param cutoff the instant a user must have been active at or after to be left out of the result
+    /// @param limit  the most rows to return, so a cutoff that matches everybody costs a bounded read rather than the whole table
+    /// @throws IllegalArgumentException if `limit` is not positive
+    CompletableFuture<List<UserProfile>> listInactiveSince(Instant cutoff, int limit);
+
+    /// Soft-deletes the user ([#softDelete]), atomically and only if their last recorded activity is strictly before `cutoff`. The condition is evaluated and
+    /// the delete applied indivisibly, so activity recorded at or after `cutoff` always wins over a concurrent call naming an earlier one.
+    ///
+    /// @param userId internal user id
+    /// @param cutoff the instant a user must have been active at or after to be spared
+    /// @return which of the four outcomes occurred; only [ConditionalSoftDeleteOutcome#STILL_ACTIVE] says the user's own activity spared them
+    CompletableFuture<ConditionalSoftDeleteOutcome> softDeleteIfInactiveSince(String userId, Instant cutoff);
 
     /// Reports whether a user row exists for `userId`, regardless of soft-delete state; `false` once the user is hard-deleted.
     ///

@@ -5,6 +5,7 @@ import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
@@ -33,12 +34,29 @@ public interface AdminAlertService {
     default String raise(AdminAlertSeverity severity, String title, Logger logger, @Nullable String description, Throwable e) {
         var noDescription = description == null || description.isBlank();
         String combined = noDescription ? humanReadableMessage(e) : description + ": " + humanReadableMessage(e);
-        logger.log(switch (severity) {
-                       case WARNING -> Level.WARN;
-                       case ERROR -> Level.ERROR;
-                   },
-                   "{}{}", title, noDescription ? "" : ": " + description, e);
+        logger.log(logLevelOf(severity), "{}{}", title, noDescription ? "" : ": " + description, e);
         return raise(severity, title, combined);
+    }
+
+    /// The log level an alert of this severity is logged at, so a raise and its log line can never disagree.
+    private static Level logLevelOf(AdminAlertSeverity severity) {
+        return switch (severity) {
+            case WARNING -> Level.WARN;
+            case ERROR -> Level.ERROR;
+        };
+    }
+
+    /// [#raise(AdminAlertSeverity, String, Logger, String, Throwable)] with labels, for a subject whose alerts have to be found again later — deletion by
+    /// label being the usual reason. The subject rides the labels rather than the title, so the title stays a clean grouping key across subjects, and the
+    /// log line carries it so the text of the alert need not.
+    default String raise(AdminAlertSeverity severity, String title, Logger logger, String description, Throwable e, Map<String, String> labels) {
+        logger.log(logLevelOf(severity), "[{}] {}: {}", labels.values(), title, description, e);
+        return raise(AdminAlertData.builder()
+                                   .setSeverity(severity)
+                                   .setTitle(title)
+                                   .setDescription(description + ": " + humanReadableMessage(e))
+                                   .setLabels(labels)
+                                   .build());
     }
 
     /// Returns a [BiConsumer] for [CompletableFuture#whenComplete] that raises an alert (and logs) when the stage completed exceptionally, and does nothing on

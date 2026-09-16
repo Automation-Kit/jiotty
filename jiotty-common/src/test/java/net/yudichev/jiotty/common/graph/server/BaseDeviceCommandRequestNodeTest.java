@@ -15,6 +15,7 @@ import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class BaseDeviceCommandRequestNodeTest {
@@ -24,6 +25,7 @@ class BaseDeviceCommandRequestNodeTest {
     private GraphRunner graphRunner;
     private TestStateNode stateNode;
     private TestCommandRequestNode requestNode;
+    private ThrowingConfirmationRequestNode throwingNode;
 
     @BeforeEach
     void setUp() {
@@ -31,8 +33,10 @@ class BaseDeviceCommandRequestNodeTest {
         graphRunner = new TestGraphRunner(new Graph(clock, Assertions::fail), clock.createSingleThreadedSchedulingExecutor("test"));
         stateNode = new TestStateNode(graphRunner);
         requestNode = new TestCommandRequestNode(graphRunner, stateNode);
+        throwingNode = new ThrowingConfirmationRequestNode(graphRunner, stateNode);
         stateNode.registerInGraph();
         requestNode.registerInGraph();
+        throwingNode.registerInGraph();
         runWave();
     }
 
@@ -45,6 +49,53 @@ class BaseDeviceCommandRequestNodeTest {
 
         assertThat(requestNode.commandsSent).isEmpty();
         assertThat(requestNode.requestPending()).isFalse();
+    }
+
+    /// The hook says this node changed the device, so it must not fire for a device that was already in the requested state — nothing was sent, and a caller
+    /// attributing the state to its own command would be crediting itself with somebody else's doing.
+    @Test
+    void deviceAlreadyInRequestedState_doesNotReportTheCommandAsConfirmed() {
+        stateNode.set("ON");
+
+        requestNode.request("ON");
+        runWave();
+
+        assertThat(requestNode.confirmations).isEmpty();
+    }
+
+    @Test
+    void aSentCommandTheDeviceConfirms_reportsItOnceWhenTheStateArrives() {
+        stateNode.set("OFF");
+        requestNode.request("ON");
+        runWave();
+        // Sent, and not yet confirmed: the device has not reached the requested state.
+        assertThat(requestNode.confirmations).isEmpty();
+
+        stateNode.set("ON");
+        runWave();
+        assertThat(requestNode.confirmations).containsExactly("ON");
+
+        // The request is complete, so a later wave must not report it again.
+        runWave();
+        assertThat(requestNode.confirmations).containsExactly("ON");
+    }
+
+    /// The request is cleared before the hook runs, so a hook that throws cannot leave it pending and have the next wave send the command a second time.
+    /// Ordering is the whole of it: swap the two statements and this node would re-command a device that had already done what was asked.
+    @Test
+    void aConfirmationHookThatThrows_leavesTheRequestCompleteAndSendsNoSecondCommand() {
+        stateNode.set("OFF");
+        throwingNode.request("ON");
+        runWave();
+        assertThat(throwingNode.commandsSent).containsExactly("ON");
+
+        stateNode.set("ON");
+        assertThatThrownBy(this::runWave).hasRootCauseInstanceOf(IllegalStateException.class);
+
+        // The throw escaped, but the request had already been cleared: a later wave finds nothing pending and sends nothing.
+        runWave();
+        assertThat(throwingNode.commandsSent).containsExactly("ON");
+        assertThat(throwingNode.requestPending()).isFalse();
     }
 
     @Test
@@ -227,6 +278,7 @@ class BaseDeviceCommandRequestNodeTest {
 
     private static final class TestCommandRequestNode extends BaseDeviceCommandRequestNode<String> {
         final List<String> commandsSent = new ArrayList<>();
+        final List<String> confirmations = new ArrayList<>();
         private final TestStateNode stateNode;
 
         TestCommandRequestNode(GraphRunner runner, TestStateNode stateNode) {
@@ -251,6 +303,46 @@ class BaseDeviceCommandRequestNodeTest {
         @Override
         protected void sendCommand(int retryNumber, String payload, Consumer<String> failureHandler) {
             commandsSent.add(payload);
+        }
+
+        @Override
+        protected void onSentCommandConfirmed() {
+            confirmations.add(stateNode.state());
+        }
+    }
+
+    /// Throws from the confirmation hook, so a test can see what the request is left as when a subscriber of that hook fails.
+    private static final class ThrowingConfirmationRequestNode extends BaseDeviceCommandRequestNode<String> {
+        final List<String> commandsSent = new ArrayList<>();
+        private final TestStateNode stateNode;
+
+        ThrowingConfirmationRequestNode(GraphRunner runner, TestStateNode stateNode) {
+            super(runner, "ThrowingConfirmationRequest", RETRY_DELAY, 5, false);
+            this.stateNode = subscribeTo(stateNode);
+        }
+
+        void request(String payload) {
+            createRequestIfNotAlreadyInProgress(() -> new DeviceRequest<>("Set state", payload));
+        }
+
+        @Override
+        protected boolean deviceStateValidForRequestToBeSent() {
+            return !"UNKNOWN".equals(stateNode.state());
+        }
+
+        @Override
+        protected boolean deviceStateIndicatesRequestSuccessful(String payload) {
+            return payload.equals(stateNode.state());
+        }
+
+        @Override
+        protected void sendCommand(int retryNumber, String payload, Consumer<String> failureHandler) {
+            commandsSent.add(payload);
+        }
+
+        @Override
+        protected void onSentCommandConfirmed() {
+            throw new IllegalStateException("hook failed");
         }
     }
 

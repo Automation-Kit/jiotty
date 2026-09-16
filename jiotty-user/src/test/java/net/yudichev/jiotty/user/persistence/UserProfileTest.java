@@ -5,6 +5,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.lang.reflect.RecordComponent;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Optional;
@@ -70,5 +71,16 @@ class UserProfileTest {
 
         assertThat(profile.email()).isEqualTo("alexey@example.com");
         assertThat(profile.displayName()).contains("Alexey");
+    }
+
+    /// The profile is what every reader of a user gets — an admin listing, a data export, a log line — so what it carries is the whole of what those can
+    /// disclose. The activity instant behind the retention policy is deliberately not among them: it answers only whether an account may be expired, and
+    /// widening this record is how it would quietly become a record of when each person opens their app. Adding a component here is a privacy decision, and
+    /// this test is where it has to be taken deliberately.
+    @Test
+    void carriesNothingBeyondTheDeclaredProfileFields() {
+        assertThat(UserProfile.class.getRecordComponents())
+                .extracting(RecordComponent::getName)
+                .containsExactly("id", "email", "displayName", "timezone", "createdAt", "updatedAt");
     }
 }

@@ -58,7 +58,10 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
         if (request.sent()) {
             if (deviceStateIndicatesRequestSuccessful(request.payload())) {
                 logger.info("Successfully executed: {}", request);
-                return completeRequest();
+                // After the request is cleared, so a hook that throws cannot leave it pending and have the next wave send the command again.
+                boolean completed = completeRequest();
+                onSentCommandConfirmed();
+                return completed;
             } else {
                 if (retryDue) {
                     // a retry the device cannot accept yet stays due, so the state change that makes it sendable re-waves this node; consuming it here would
@@ -166,6 +169,12 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     /// @return `true` to reset the retry counter and keep retrying, otherwise panic (unless configured not to via `panicOnFailure=false`)
     protected boolean onCommandFailedFatally(String lastFailure, Runnable retryTrigger) {
         return false;
+    }
+
+    /// Called when a command this node **sent** has been confirmed by the device's own state — never when the device was already in the requested state, no
+    /// command went out. Only the first means this node changed the device, and [#deviceStateIndicatesRequestSuccessful] cannot distinguish them because it
+    /// answers the same on both.
+    protected void onSentCommandConfirmed() {
     }
 
     protected @Nullable Object additionalLoggingStateKey() {

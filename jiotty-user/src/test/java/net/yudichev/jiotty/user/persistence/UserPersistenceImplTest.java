@@ -226,7 +226,7 @@ class UserPersistenceImplTest {
         var winner = createUser(identity, createProfileInput("winner@example.com", "Winner", UTC));
         competitorCommitted.countDown();
 
-        // The racer loses the insert and adopts the winner's user rather than failing or creating a second one — and reports created=false, which is what lets
+        // The racer loses the insert and adopts the winner's user rather than failing or creating a second one — and reports created=false, which lets
         // a caller do something once per account rather than once per resolution.
         assertThat(racerCreation).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(new UserCreationResult.Resolved(winner, false));
         // Its own half-written user row was rolled back, so the race leaves no orphan behind.
@@ -627,6 +627,156 @@ class UserPersistenceImplTest {
         assertThat(created.id()).startsWith("u");
         // The surviving listener still ran, so one listener's failure neither aborted the write nor stopped the fan-out.
         assertThat(changedUserIds).containsExactly(created.id());
+    }
+
+    /// A row starts current rather than at the epoch, so a selection by activity never returns a user who has simply not been touched yet — and it starts on
+    /// the day of creation rather than at its instant, because nothing may write a time of day into this column.
+    @Test
+    void aNewUserIsActiveAsOfTheDayOfCreation() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-03-01T10:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var created = createUser(new UserIdentity("firebase", "uid-fresh"), createProfileInput("fresh@example.com", "Fresh", UTC));
+        Instant dayOfCreation = created.createdAt().truncatedTo(ChronoUnit.DAYS);
+
+        assertThat(userPersistence.listInactiveSince(dayOfCreation, 100).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.listInactiveSince(dayOfCreation.plusMillis(1), 100).get(5, SECONDS))
+                .extracting(UserProfile::id).containsExactly(created.id());
+    }
+
+    /// The column only ever moves forward, so a late-delivered sighting cannot make a live account look dormant.
+    @Test
+    void touchLastActiveNeverMovesTheInstantBackwards() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-03-01T10:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var created = createUser(new UserIdentity("firebase", "uid-touch"), createProfileInput("touch@example.com", "Touch", UTC));
+        var later = created.createdAt().plus(Duration.ofDays(10));
+
+        assertThat(userPersistence.touchLastActive(created.id(), later).get(5, SECONDS)).isTrue();
+        assertThat(userPersistence.touchLastActive(created.id(), later).get(5, SECONDS)).isFalse();
+        assertThat(userPersistence.touchLastActive(created.id(), created.createdAt()).get(5, SECONDS)).isFalse();
+        assertThat(userPersistence.listInactiveSince(later, 100).get(5, SECONDS)).isEmpty();
+    }
+
+    /// Both operations exclude an already soft-deleted user, so neither can act twice on the same deletion.
+    @Test
+    void aSoftDeletedUserIsNotListedAsInactiveAndCannotBeDeletedAgain() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-03-01T10:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var created = createUser(new UserIdentity("firebase", "uid-gone"), createProfileInput("gone@example.com", "Gone", UTC));
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        var cutoff = created.createdAt().plus(Duration.ofDays(1));
+
+        assertThat(userPersistence.listInactiveSince(cutoff, 100).get(5, SECONDS)).isEmpty();
+        // ALREADY_SOFT_DELETED, not STILL_ACTIVE: nothing here says anything about this user's activity, and a caller re-asserting a delete it already made
+        // relies on being able to tell the two apart.
+        assertThat(userPersistence.softDeleteIfInactiveSince(created.id(), cutoff).get(5, SECONDS))
+                .isEqualTo(ConditionalSoftDeleteOutcome.ALREADY_SOFT_DELETED);
+    }
+
+    /// The one outcome that means the user's own activity spared them, which is the only one a caller may read as "leave this account alone".
+    @Test
+    void softDeleteIfInactiveSinceReportsWhyItDidNothing() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-03-01T10:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var created = createUser(new UserIdentity("firebase", "uid-outcomes"), createProfileInput("outcomes@example.com", "Outcomes", UTC));
+        var cutoff = created.createdAt().plus(Duration.ofDays(365));
+
+        assertThat(userPersistence.softDeleteIfInactiveSince("no-such-user", cutoff).get(5, SECONDS))
+                .isEqualTo(ConditionalSoftDeleteOutcome.ABSENT);
+
+        userPersistence.touchLastActive(created.id(), cutoff.plus(Duration.ofDays(1))).get(5, SECONDS);
+        assertThat(userPersistence.softDeleteIfInactiveSince(created.id(), cutoff).get(5, SECONDS))
+                .isEqualTo(ConditionalSoftDeleteOutcome.STILL_ACTIVE);
+    }
+
+    /// A soft-deleted user may still be restored, so activity recorded while they were deleted has to survive the restore — otherwise the revived row
+    /// understates when it was last active and a selection by activity picks it up again immediately.
+    @Test
+    void activityRecordedWhileSoftDeletedSurvivesTheRestore() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-03-01T10:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var created = createUser(new UserIdentity("firebase", "uid-returner-2"), createProfileInput("returner2@example.com", "Returner", UTC));
+        var cutoff = created.createdAt().plus(Duration.ofDays(365));
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+
+        assertThat(userPersistence.touchLastActive(created.id(), cutoff.plus(Duration.ofDays(1))).get(5, SECONDS)).isTrue();
+        userPersistence.restore(created.id()).get(5, SECONDS);
+
+        // The revived row carries the activity recorded while it was deleted, so neither operation sees it as inactive.
+        assertThat(userPersistence.listInactiveSince(cutoff, 100).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.softDeleteIfInactiveSince(created.id(), cutoff).get(5, SECONDS))
+                .isEqualTo(ConditionalSoftDeleteOutcome.STILL_ACTIVE);
+    }
+
+    /// The reason the conditional variant exists: activity landing after the selection and before the delete must win, which a separate read then
+    /// [UserPersistence#softDelete] cannot guarantee.
+    /// The limit bounds the read, and the ordering decides which rows survive it: a caller sweeping the least recently active first must get exactly those,
+    /// or a cutoff that matches everybody would both cost a whole-table read and hand back an arbitrary slice of it.
+    @Test
+    void listInactiveSinceReturnsNoMoreThanTheLimitAndTakesTheLeastRecentlyActiveFirst() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-03-01T10:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var first = createUser(new UserIdentity("firebase", "uid-a"), createProfileInput("a@example.com", "A", UTC));
+        var second = createUser(new UserIdentity("firebase", "uid-b"), createProfileInput("b@example.com", "B", UTC));
+        var third = createUser(new UserIdentity("firebase", "uid-c"), createProfileInput("c@example.com", "C", UTC));
+        // Distinct activity days, so "least recently active" is a total order rather than a tie.
+        Instant day = first.createdAt().truncatedTo(ChronoUnit.DAYS);
+        userPersistence.touchLastActive(second.id(), day.plus(Duration.ofDays(1))).get(5, SECONDS);
+        userPersistence.touchLastActive(third.id(), day.plus(Duration.ofDays(2))).get(5, SECONDS);
+        var cutoff = day.plus(Duration.ofDays(10));
+
+        assertThat(userPersistence.listInactiveSince(cutoff, 2).get(5, SECONDS))
+                .extracting(UserProfile::id)
+                .containsExactly(first.id(), second.id());
+        assertThat(userPersistence.listInactiveSince(cutoff, 100).get(5, SECONDS))
+                .extracting(UserProfile::id)
+                .containsExactly(first.id(), second.id(), third.id());
+    }
+
+    @Test
+    void softDeleteIfInactiveSinceSparesAUserWhoBecameActive() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-03-01T10:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var identity = new UserIdentity("firebase", "uid-returner");
+        var created = createUser(identity, createProfileInput("returner@example.com", "Returner", UTC));
+        var cutoff = created.createdAt().plus(Duration.ofDays(365));
+        // Listed as inactive, then touched before the conditional delete is issued.
+        assertThat(userPersistence.listInactiveSince(cutoff, 100).get(5, SECONDS)).extracting(UserProfile::id).containsExactly(created.id());
+        userPersistence.touchLastActive(created.id(), cutoff.plus(Duration.ofDays(1))).get(5, SECONDS);
+
+        assertThat(userPersistence.softDeleteIfInactiveSince(created.id(), cutoff).get(5, SECONDS))
+                .isEqualTo(ConditionalSoftDeleteOutcome.STILL_ACTIVE);
+        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isPresent();
+    }
+
+    /// When it does fire it must leave exactly the state [UserPersistence#softDelete] leaves, identity rows included, so nothing downstream can observe the
+    /// two as different kinds of deletion.
+    @Test
+    void softDeleteIfInactiveSinceDeletesTheUserAndItsIdentities() throws Exception {
+        var clock = new ProgrammableClock();
+        clock.setTime(Instant.parse("2026-03-01T10:00:00Z"));
+        startUserPersistence(dataSourceFactory, List.of(), clock);
+        var identity = new UserIdentity("firebase", "uid-idle");
+        var created = createUser(identity, createProfileInput("idle@example.com", "Idle", UTC));
+        var cutoff = created.createdAt().plus(Duration.ofDays(365));
+
+        assertThat(userPersistence.softDeleteIfInactiveSince(created.id(), cutoff).get(5, SECONDS))
+                .isEqualTo(ConditionalSoftDeleteOutcome.SOFT_DELETED);
+
+        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.getByIdIgnoringDeletion(created.id()).get(5, SECONDS)).isPresent();
+        assertThat(userPersistence.listIdentities(created.id()).get(5, SECONDS)).isEmpty();
+        assertThat(userPersistence.resolveByIdentity(identity).get(5, SECONDS)).isInstanceOf(UserPersistence.IdentityResolution.SoftDeleted.class);
+        // A second call reports that the account had already gone, which is a different fact from its owner having come back.
+        assertThat(userPersistence.softDeleteIfInactiveSince(created.id(), cutoff).get(5, SECONDS))
+                .isEqualTo(ConditionalSoftDeleteOutcome.ALREADY_SOFT_DELETED);
     }
 
     /// Returns the profile for `identity`, creating the user if needed; fails the test if the store reports an email conflict.
