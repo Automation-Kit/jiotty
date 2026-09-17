@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.user.persistence.testing;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Listeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
@@ -11,6 +12,8 @@ import net.yudichev.jiotty.user.persistence.UserPersistence;
 import net.yudichev.jiotty.user.persistence.UserProfile;
 import net.yudichev.jiotty.user.persistence.UserProfileInput;
 import net.yudichev.jiotty.user.persistence.UserProfileWithDeletion;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
@@ -29,11 +32,13 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
 public final class FakeUserPersistence implements UserPersistence {
+    private static final Logger logger = LogManager.getLogger(FakeUserPersistence.class);
+
     private final Object lock = new Object();
     private final CurrentDateTimeProvider timeProvider;
     private final Map<String, StoredUser> usersById = new LinkedHashMap<>();
     private final Map<UserIdentity, String> activeUserIdsByIdentity = new HashMap<>();
-    private final Listeners<String> changeListeners = new Listeners<>();
+    private final Listeners<UserChange> changeListeners = new Listeners<>();
 
     private int nextUserNumber = 1;
     private @Nullable CompletableFuture<Void> nextResolveByIdentityGate;
@@ -69,7 +74,7 @@ public final class FakeUserPersistence implements UserPersistence {
             storedUser.replaceActiveIdentities(List.of(identity), timestamp);
             usersById.put(userId, storedUser);
             activeUserIdsByIdentity.put(identity, userId);
-            changeListeners.notify(userId);
+            notifyChanged(userId, storedUser);
             return completedFuture(new UserCreationResult.Resolved(createdProfile, true));
         }
     }
@@ -228,7 +233,7 @@ public final class FakeUserPersistence implements UserPersistence {
                                                  storedUser.profile().createdAt(),
                                                  timestamp);
             storedUser.updateProfile(updatedProfile);
-            changeListeners.notify(userId);
+            notifyChanged(userId, storedUser);
             return completedFuture(updatedProfile);
         }
     }
@@ -246,14 +251,20 @@ public final class FakeUserPersistence implements UserPersistence {
                 String ownerUserId = activeUserIdsByIdentity.get(identity);
                 checkState(ownerUserId == null || ownerUserId.equals(userId), "Identity %s is already linked to another user", identity);
             }
-            for (UserIdentity oldIdentity : storedUser.activeIdentities()) {
+            // The real store writes an identity row where one is new, changed or dropped, and announces nothing when none of those applies. It looks each
+            // provider up on its own, so the order the caller supplies them in makes no difference — hence the set comparison.
+            List<UserIdentity> previousIdentities = storedUser.activeIdentities();
+            boolean anyIdentityWritten = !ImmutableSet.copyOf(previousIdentities).equals(ImmutableSet.copyOf(identitiesByProvider.values()));
+            for (UserIdentity oldIdentity : previousIdentities) {
                 String removedUserId = activeUserIdsByIdentity.remove(oldIdentity);
                 assert userId.equals(removedUserId);
             }
             Instant timestamp = currentInstant();
             storedUser.replaceActiveIdentities(identitiesByProvider.values(), timestamp);
             identitiesByProvider.values().forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
-            changeListeners.notify(userId);
+            if (anyIdentityWritten) {
+                notifyChanged(userId, storedUser);
+            }
             return completedFuture(null);
         }
     }
@@ -295,7 +306,7 @@ public final class FakeUserPersistence implements UserPersistence {
             assert userId.equals(removedUserId);
         }
         storedUser.softDelete(currentInstant());
-        changeListeners.notify(userId);
+        notifyChanged(userId, storedUser);
     }
 
     @Override
@@ -305,7 +316,7 @@ public final class FakeUserPersistence implements UserPersistence {
             StoredUser removed = usersById.remove(userId);
             if (removed != null) {
                 activeUserIdsByIdentity.values().removeIf(userId::equals);
-                changeListeners.notify(userId);
+                notifyChanged(userId, null);
             }
             return completedFuture(null);
         }
@@ -317,9 +328,9 @@ public final class FakeUserPersistence implements UserPersistence {
             checkNotNull(userId, "userId");
             StoredUser storedUser = usersById.get(userId);
             if (storedUser != null && !storedUser.active()) {
-                storedUser.restore();
+                storedUser.restore(currentInstant());
                 storedUser.activeIdentities().forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
-                changeListeners.notify(userId);
+                notifyChanged(userId, storedUser);
             }
             return completedFuture(null);
         }
@@ -327,8 +338,22 @@ public final class FakeUserPersistence implements UserPersistence {
 
     /// Notifies on the calling thread inside this fake's reentrant lock, matching the real store, which notifies on the thread that performed the write.
     @Override
-    public Closeable subscribeToChanges(Consumer<? super String> userIdUpdateListener) {
-        return changeListeners.addListener(checkNotNull(userIdUpdateListener, "listener"));
+    public Closeable subscribeToChanges(Consumer<? super UserChange> listener) {
+        return changeListeners.addListener(checkNotNull(listener, "listener"));
+    }
+
+    /// Announces a change to the subscribers of [#subscribeToChanges], carrying the user's state as this fake holds it once the change has been applied. A
+    /// listener's failure is contained here as the real store contains it, so one throwing subscriber cannot fail the mutation that is already applied.
+    ///
+    /// @param storedUser the user as it now stands, or `null` once erased
+    private void notifyChanged(String userId, @Nullable StoredUser storedUser) {
+        try {
+            changeListeners.notify(new UserChange(userId,
+                                                  Optional.ofNullable(storedUser)
+                                                          .map(user -> new UserProfileWithDeletion(user.profile(), user.deletedAt()))));
+        } catch (RuntimeException e) {
+            logger.info("[{}] User-change listener failed", userId, e);
+        }
     }
 
     public Optional<UserProfile> findActiveProfileByIdentity(UserIdentity identity) {
@@ -447,8 +472,10 @@ public final class FakeUserPersistence implements UserPersistence {
             profile = new UserProfile(profile.id(), profile.email(), profile.displayName(), profile.timezone(), profile.createdAt(), deletedAt);
         }
 
-        public void restore() {
+        /// Mirrors `restoreUserSql`, which stamps `updated_at` with the restore instant as it clears `deleted_at`.
+        public void restore(Instant restoredAt) {
             deletedAt = null;
+            profile = new UserProfile(profile.id(), profile.email(), profile.displayName(), profile.timezone(), profile.createdAt(), restoredAt);
         }
     }
 }

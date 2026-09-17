@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 /// Persistence gateway for user profiles and identities.
@@ -136,11 +137,30 @@ public interface UserPersistence {
     /// @param userId internal user id
     CompletableFuture<Void> restore(String userId);
 
-    /// Calls the listener with the affected user's internal id once any change to a user record has committed, including one that changed nothing. No image is
-    /// delivered on subscribe: a subscriber reads the current state from this store itself.
+    /// Calls the listener once a committed change has altered a user's profile, identity set or deletion state. Activity recorded by [#touchLastActive] is
+    /// excluded, along with any statement that altered no row.
+    ///
+    /// **Late-joiner contract: no image is delivered on subscribe by design.** This is a delta stream whose image is [#listAllProfilesIgnoringDeletion], and
+    /// registration is not atomic with that read: a change committing between the two is delivered before the image that already contains it, so a
+    /// subscriber holds arriving changes until it has applied the image, then applies them.
     ///
     /// @return a handle that unsubscribes the listener
-    Closeable subscribeToChanges(Consumer<? super String> userIdUpdateListener);
+    Closeable subscribeToChanges(Consumer<? super UserChange> listener);
+
+    /// A committed change to one user's record.
+    ///
+    /// @param userId internal user id of the user whose record changed
+    /// @param state  the user's state as it was read back after the commit: present with an empty [UserProfileWithDeletion#deletedAt()] when active, present
+    ///               with one when soft-deleted, and empty once the user is hard-deleted. A second change committing in between is read here instead, so this
+    ///               is the state after the change rather than the state the change produced. It carries no identity data, so a change to the identity set
+    ///               alone arrives with a `state` equal to the previous one; read [#listIdentities] to see what changed.
+    record UserChange(String userId, Optional<UserProfileWithDeletion> state) {
+        public UserChange {
+            checkNotNull(userId, "userId");
+            checkArgument(!userId.isBlank(), "userId must not be blank");
+            checkNotNull(state, "state");
+        }
+    }
 
     /// The outcome of [#getOrCreateByIdentity].
     sealed interface UserCreationResult permits UserCreationResult.Resolved, UserCreationResult.EmailAlreadyInUse {

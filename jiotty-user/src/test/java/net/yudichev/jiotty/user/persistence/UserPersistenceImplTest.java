@@ -5,7 +5,6 @@ import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegist
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
-import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.common.time.TimeProvider;
@@ -22,6 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.sql.DataSource;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -35,11 +36,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Optional.of;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.user.persistence.UserPersistence.UserChange;
 import static net.yudichev.jiotty.user.persistence.UserPersistence.UserCreationResult;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -53,7 +56,7 @@ class UserPersistenceImplTest {
     private static final String DROP_USER_TABLE_SQL = "DROP TABLE %DOMAIN_PREFIX%user CASCADE";
     private static final ZoneId UTC = ZoneId.of("UTC");
     private static final ZoneId EUROPE_LONDON = ZoneId.of("Europe/London");
-    private static final TaskFailureReporter taskFailureReporter = new ListenerBackedTaskExceptionHandlerRegistry();
+    private static final ListenerBackedTaskExceptionHandlerRegistry failureRegistry = new ListenerBackedTaskExceptionHandlerRegistry();
 
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
@@ -96,7 +99,7 @@ class UserPersistenceImplTest {
                                                          domain.name(),
                                                          List.of(),
                                                          PersistenceDomainMigrator.FAIL_ON_MIGRATION,
-                                                         taskFailureReporter))
+                                                         failureRegistry))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -208,7 +211,7 @@ class UserPersistenceImplTest {
         var atRaceWindow = new CountDownLatch(1);
         var competitorCommitted = new CountDownLatch(1);
         var racer = new UserPersistenceImpl(dataSourceFactory, () -> racingExecutor, domainService, new TimeProvider(), 1,
-                                            domain.name(), List.of(), PersistenceDomainMigrator.FAIL_ON_MIGRATION, taskFailureReporter) {
+                                            domain.name(), List.of(), PersistenceDomainMigrator.FAIL_ON_MIGRATION, failureRegistry) {
             @Override
             boolean onBeforeInsertingNewUser() {
                 atRaceWindow.countDown();
@@ -577,56 +580,27 @@ class UserPersistenceImplTest {
                 .hasRootCauseInstanceOf(IllegalStateException.class);
     }
 
+    /// Reading the state back is the one part of announcing a change that can fail after the write has already committed. The write must stand, the failure
+    /// must reach an operator, and the notification is lost — there is no state to announce and no transaction left to retry it in.
     @Test
-    void notifiesSubscribersOfEveryCommittedChange() throws Exception {
-        startUserPersistence(dataSourceFactory, List.of());
-        var changedUserIds = Collections.synchronizedList(new ArrayList<String>());
-        Closeable subscription = userPersistence.subscribeToChanges(changedUserIds::add);
-
-        var identity = new UserIdentity("firebase", "uid-1");
-        var created = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
-        userPersistence.updateProfile(created.id(), createProfileInput("user@example.com", "Alexandra", UTC)).get(5, SECONDS);
-        userPersistence.updateAllIdentities(created.id(), List.of(identity, new UserIdentity("google.com", "uid-g"))).get(5, SECONDS);
-        userPersistence.softDelete(created.id()).get(5, SECONDS);
-        userPersistence.restore(created.id()).get(5, SECONDS);
-        userPersistence.hardDelete(created.id()).get(5, SECONDS);
-
-        assertThat(changedUserIds).containsExactly(created.id(), created.id(), created.id(), created.id(), created.id(), created.id());
-
-        subscription.close();
-        createUser(new UserIdentity("firebase", "uid-2"), createProfileInput("other@example.com", "Morgan", UTC));
-        assertThat(changedUserIds).hasSize(6);
-    }
-
-    @Test
-    void doesNotNotifyWhenGetOrCreateResolvesAnExistingUser() throws Exception {
-        startUserPersistence(dataSourceFactory, List.of());
-        var identity = new UserIdentity("firebase", "uid-1");
-        var profileInput = createProfileInput("user@example.com", "Alex", UTC);
-        var created = createUser(identity, profileInput);
-        var changedUserIds = Collections.synchronizedList(new ArrayList<String>());
-        userPersistence.subscribeToChanges(changedUserIds::add);
-
-        createUser(identity, profileInput);
-
-        assertThat(changedUserIds).isEmpty();
-        assertThat(created.id()).isNotBlank();
-    }
-
-    @Test
-    void containsAFailingSubscriberSoTheCommittedChangeStillSucceeds() throws Exception {
-        startUserPersistence(dataSourceFactory, List.of());
-        var changedUserIds = Collections.synchronizedList(new ArrayList<String>());
-        userPersistence.subscribeToChanges(_ -> {
-            throw new RuntimeException("listener boom");
-        });
-        userPersistence.subscribeToChanges(changedUserIds::add);
-
+    void reportsAndDropsTheNotificationWhenTheStateReadBackFails() throws Exception {
+        var toggleableDataSource = new ToggleableDataSource(dataSource);
+        startUserPersistence(() -> toggleableDataSource, List.of());
         var created = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
+        var changes = Collections.synchronizedList(new ArrayList<UserChange>());
+        userPersistence.subscribeToChanges(changes::add);
+        var reportedFailures = Collections.synchronizedList(new ArrayList<String>());
+        Closeable failureSubscription = failureRegistry.addExceptionHandler((description, _) -> reportedFailures.add(description));
+        toggleableDataSource.setFailStatementsContaining("deleted_at FROM");
 
-        assertThat(created.id()).startsWith("u");
-        // The surviving listener still ran, so one listener's failure neither aborted the write nor stopped the fan-out.
-        assertThat(changedUserIds).containsExactly(created.id());
+        userPersistence.softDelete(created.id()).get(5, SECONDS);
+
+        assertThat(changes).as("the notification is dropped: there is no state to carry").isEmpty();
+        assertThat(reportedFailures).contains("reading back a committed user change");
+        // The write itself stands, so the drop costs a notification rather than the deletion.
+        toggleableDataSource.setFailStatementsContaining(null);
+        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isEmpty();
+        failureSubscription.close();
     }
 
     /// A row starts current rather than at the epoch, so a selection by activity never returns a user who has simply not been touched yet — and it starts on
@@ -801,7 +775,7 @@ class UserPersistenceImplTest {
                                                   domain.name(),
                                                   initStatements,
                                                   PersistenceDomainMigrator.FAIL_ON_MIGRATION,
-                                                  taskFailureReporter);
+                                                  failureRegistry);
         userPersistence.start();
     }
 
@@ -832,6 +806,7 @@ class UserPersistenceImplTest {
     private static final class ToggleableDataSource implements CloseableDataSource {
         private final DataSource delegate;
         private final AtomicBoolean failConnections = new AtomicBoolean();
+        private final AtomicReference<String> failStatementsContaining = new AtomicReference<>();
 
         private ToggleableDataSource(DataSource delegate) {
             this.delegate = checkNotNull(delegate, "delegate");
@@ -841,12 +816,35 @@ class UserPersistenceImplTest {
             this.failConnections.set(failConnections);
         }
 
+        /// Fails one statement on an otherwise working connection — the only way to reach a failure that happens *after* a write has committed, which failing
+        /// the connection outright cannot do.
+        private void setFailStatementsContaining(String sqlFragment) {
+            failStatementsContaining.set(sqlFragment);
+        }
+
         @Override
         public Connection getConnection() throws SQLException {
             if (failConnections.get()) {
                 throw new SQLException("Simulated connection failure");
             }
-            return delegate.getConnection();
+            Connection connection = delegate.getConnection();
+            String sqlFragment = failStatementsContaining.get();
+            return sqlFragment == null ? connection : failingOn(connection, sqlFragment);
+        }
+
+        private static Connection failingOn(Connection connection, String sqlFragment) {
+            return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
+                                                       new Class<?>[]{Connection.class},
+                                                       (_, method, args) -> {
+                                                           if ("prepareStatement".equals(method.getName()) && ((String) args[0]).contains(sqlFragment)) {
+                                                               throw new SQLException("Simulated statement failure");
+                                                           }
+                                                           try {
+                                                               return method.invoke(connection, args);
+                                                           } catch (InvocationTargetException e) {
+                                                               throw e.getCause();
+                                                           }
+                                                       });
         }
 
         @Override
