@@ -17,8 +17,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// - Supports multiple provider identities per user.
 ///
 /// TODO the change subscription here is an eventing bolt-on — no image on subscribe and no filter, so every subscriber
-///  re-derives what this store already knew. It is to be merged with car-engine's `AdminUserDirectory`, which has the
-///  shape that is wanted (image, then deltas). See `workspace/USER-DIRECTORY-MERGE.md`.
+///  re-derives what this store already knew. It is to be merged with car-engine's `AdminUserDirectory`, which delivers
+///  an image on subscribe and then deltas. See `workspace/USER-DIRECTORY-MERGE.md`.
 public interface UserPersistence {
     /// Returns an existing user for `identity`, or creates a new user atomically with `profile`.
     ///
