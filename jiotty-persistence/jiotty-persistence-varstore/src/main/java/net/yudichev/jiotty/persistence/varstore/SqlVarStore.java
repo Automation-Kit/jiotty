@@ -8,6 +8,7 @@ import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import org.apache.logging.log4j.LogManager;
@@ -44,7 +45,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     private final String deleteSql;
     private final String deleteAllSql;
     private final String selectAllSql;
-    private final Optional<VarStoreEncryption> encryption;
+    private final Optional<EnvelopeEncryption> encryption;
 
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
@@ -55,7 +56,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
                        ExecutorFactory executorFactory,
                        @TableName String tableName,
                        @SingleUser boolean singleUser,
-                       Optional<VarStoreEncryption> encryption) {
+                       Optional<EnvelopeEncryption> encryption) {
         this.tableName = checkNotNull(tableName, "tableName");
         // prevent SQL injection
         //noinspection DynamicRegexReplaceableByCompiledPattern

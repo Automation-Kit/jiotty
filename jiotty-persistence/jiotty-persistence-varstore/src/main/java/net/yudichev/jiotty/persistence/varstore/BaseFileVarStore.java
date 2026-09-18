@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.google.common.reflect.TypeToken;
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
@@ -39,9 +40,9 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
     private final Path storeFile;
     private final Path storeFileTmp;
     private final Lock lock = new ReentrantLock();
-    private final @Nullable VarStoreEncryption encryption;
+    private final @Nullable EnvelopeEncryption encryption;
 
-    BaseFileVarStore(Path storeFile, @Nullable VarStoreEncryption encryption) {
+    BaseFileVarStore(Path storeFile, @Nullable EnvelopeEncryption encryption) {
         this.storeFile = checkNotNull(storeFile, "storeFile");
         logger.info("Using store file {}", this.storeFile.toAbsolutePath());
         storeFileTmp = this.storeFile.resolveSibling("data.tmp");
@@ -55,9 +56,9 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
 
     @Override
     public void saveValueEncrypted(String key, Object value) {
-        VarStoreEncryption enc = requireEncryption();
+        EnvelopeEncryption enc = requireEncryption();
         String plaintextJson = getAsUnchecked(() -> OBJECT_MAPPER.writeValueAsString(value));
-        String envelope = enc.encrypt("", key, plaintextJson);
+        String envelope = enc.encrypt(VarStoreAad.of("", key), plaintextJson);
         updateConfig(configNode -> configNode.set(key, TextNode.valueOf(envelope)));
     }
 
@@ -98,7 +99,7 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
                 if (name.startsWith(keyPrefix)) {
                     JsonNode value = configNode.get(name);
                     // A value stored encrypted at rest is a secret — report it redacted, without decrypting; everything else exports as its stored JSON.
-                    entries.add(value.isTextual() && VarStoreEncryption.isEnvelope(value.textValue())
+                    entries.add(value.isTextual() && EnvelopeEncryption.isEnvelope(value.textValue())
                                 ? new ExportedEntry(name.substring(keyPrefix.length()), true, null)
                                 : new ExportedEntry(name.substring(keyPrefix.length()), false, value.toString()));
                 }
@@ -120,19 +121,19 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
 
     @Override
     public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
-        VarStoreEncryption enc = requireEncryption();
+        EnvelopeEncryption enc = requireEncryption();
         JsonNode valueNode = inLock(lock, () -> getAsUnchecked(() -> readConfig().get(key)));
         if (valueNode == null) {
             return Optional.empty();
         }
-        checkState(valueNode.isTextual() && VarStoreEncryption.isEnvelope(valueNode.textValue()),
+        checkState(valueNode.isTextual() && EnvelopeEncryption.isEnvelope(valueNode.textValue()),
                    "value under '%s' read via readValueEncrypted is not an encryption envelope", key);
-        String plaintextJson = enc.decrypt("", key, valueNode.textValue());
+        String plaintextJson = enc.decrypt(VarStoreAad.of("", key), valueNode.textValue());
         JavaType javaType = OBJECT_MAPPER.constructType(type.getType());
         return Optional.of(getAsUnchecked(() -> OBJECT_MAPPER.readerFor(javaType).readValue(plaintextJson)));
     }
 
-    private VarStoreEncryption requireEncryption() {
+    private EnvelopeEncryption requireEncryption() {
         checkState(encryption != null, "VarStore not configured with encryption");
         return encryption;
     }

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.varstore;
 
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
@@ -8,7 +9,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 final class SingleUserFileVarStore extends BaseFileVarStore {
 
-    public SingleUserFileVarStore(Path storeFile, @Nullable VarStoreEncryption encryption) {
+    public SingleUserFileVarStore(Path storeFile, @Nullable EnvelopeEncryption encryption) {
         super(storeFile, encryption);
     }
 

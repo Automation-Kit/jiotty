@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.inject.Inject;
 import jakarta.servlet.http.HttpServletRequest;
+import net.yudichev.jiotty.common.metrics.GuardMetrics;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 
 import java.lang.annotation.Retention;
@@ -26,7 +27,6 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 /// Every [#tryAdmit] returning [Outcome#ADMITTED] takes an in-flight permit that the caller must return via [#releaseInFlight], on every completion path
 /// including failure and timeout. A leaked permit is never recovered and permanently shrinks the pool.
 final class PreAuthAdmissionControl {
-    private static final String REJECTED_COUNTER = "guard_rejected_total";
     private static final String INFLIGHT_GAUGE = "preauth_verify_inflight";
     private static final String INFLIGHT_LIMIT_GAUGE = "preauth_verify_inflight_limit";
     /// Caps the per-source bucket map, which would otherwise grow one entry per source address seen — an exhaustion vector in its own right. Eviction only
@@ -51,8 +51,9 @@ final class PreAuthAdmissionControl {
         inFlightVerifications = new Semaphore(maxInFlightVerifications);
         // A source's burst equals its sustained rate here: an unauthenticated caller has no legitimate startup fan-out to absorb, unlike an authenticated user.
         perSourceRateLimiter = new PerKeyRateLimiter(currentDateTimeProvider, permitsPerSecond, permitsPerSecond, MAX_TRACKED_SOURCES, SOURCE_IDLE_EVICTION);
-        rateLimitedCounter = meterRegistry.counter(REJECTED_COUNTER, "guard", "pre_auth", "outcome", "rate_limited");
-        verifySaturatedCounter = meterRegistry.counter(REJECTED_COUNTER, "guard", "pre_auth", "outcome", "verify_saturated");
+        rateLimitedCounter = meterRegistry.counter(GuardMetrics.REJECTED_COUNTER, "guard", "pre_auth", "outcome", GuardMetrics.OUTCOME_RATE_LIMITED);
+        verifySaturatedCounter =
+                meterRegistry.counter(GuardMetrics.REJECTED_COUNTER, "guard", "pre_auth", "outcome", GuardMetrics.OUTCOME_VERIFY_SATURATED);
         // Occupancy alongside its limit, so saturation reads as a ratio at any level. Both take the supplier form: the value-and-function form holds its
         // subject weakly, and a boxed limit that nothing else retains is collectable — the gauge then reports NaN and the ratio alert stops evaluating.
         Gauge.builder(INFLIGHT_GAUGE, () -> maxInFlightVerifications - inFlightVerifications.availablePermits()).register(meterRegistry);

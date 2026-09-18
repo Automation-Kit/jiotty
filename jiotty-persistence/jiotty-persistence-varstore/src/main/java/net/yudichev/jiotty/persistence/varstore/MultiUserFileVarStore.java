@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.varstore;
 
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
@@ -7,7 +8,7 @@ import java.util.List;
 
 final class MultiUserFileVarStore extends BaseFileVarStore {
 
-    public MultiUserFileVarStore(Path storeFile, @Nullable VarStoreEncryption encryption) {
+    public MultiUserFileVarStore(Path storeFile, @Nullable EnvelopeEncryption encryption) {
         super(storeFile, encryption);
     }
 

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.varstore;
 
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,12 +29,12 @@ class FileVarStoreTest {
     private static final String ISO_JSON = "\"2026-08-27T12:00:00Z\"";
 
     @Mock
-    private VarStoreEncryption encryption;
+    private EnvelopeEncryption encryption;
 
     @Test
     void encryptedReadDecryptsEnvelope(@TempDir Path tempDir) {
-        when(encryption.encrypt("", "token", "\"super-secret\"")).thenReturn("ENC1$cipher");
-        when(encryption.decrypt("", "token", "ENC1$cipher")).thenReturn("\"super-secret\"");
+        when(encryption.encrypt(VarStoreAad.of("", "token"), "\"super-secret\"")).thenReturn("ENC1$cipher");
+        when(encryption.decrypt(VarStoreAad.of("", "token"), "ENC1$cipher")).thenReturn("\"super-secret\"");
         VarStore varStore = new FileVarStore(tempDir.resolve("data.json"), true, Optional.of(encryption));
 
         varStore.saveValueEncrypted("token", "super-secret");

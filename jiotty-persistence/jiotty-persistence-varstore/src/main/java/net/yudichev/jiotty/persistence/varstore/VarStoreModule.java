@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.persistence.varstore;
 
+import com.google.inject.BindingAnnotation;
 import com.google.inject.TypeLiteral;
 import com.google.inject.multibindings.OptionalBinder;
 import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
@@ -8,15 +9,24 @@ import net.yudichev.jiotty.common.inject.BindingSpec;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccess;
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
+import net.yudichev.jiotty.common.security.EnvelopeEncryptionModule;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import org.jspecify.annotations.Nullable;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 import java.nio.file.Path;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.Boolean.FALSE;
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.PARAMETER;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
+import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class VarStoreModule extends BaseExposedKeyModule<VarStore> {
     private final @Nullable BindingSpec<Path> pathSpec;
@@ -50,18 +60,19 @@ public final class VarStoreModule extends BaseExposedKeyModule<VarStore> {
         singleUserSpec.bind(new TypeLiteral<>() {})
                       .annotatedWith(Bindings.SingleUser.class)
                       .installedBy(this::installLifecycleComponentModule);
-        OptionalBinder<VarStoreEncryption> encryptionOptionalBinder =
-                OptionalBinder.newOptionalBinder(binder(), VarStoreEncryption.class);
+        OptionalBinder<EnvelopeEncryption> encryptionOptionalBinder =
+                OptionalBinder.newOptionalBinder(binder(), EnvelopeEncryption.class);
         if (encryptionKeyAliasSpec != null) {
             checkArgument(keyStoreAccessSpec != null,
                           "withKeyStoreAccess is required when withEncryptionKeyAlias is set");
-            encryptionKeyAliasSpec.bind(String.class)
-                                  .annotatedWith(VarStoreEncryptionImpl.MasterKeyAlias.class)
-                                  .installedBy(this::installLifecycleComponentModule);
-            keyStoreAccessSpec.bind(KeyStoreAccess.class)
-                              .annotatedWith(VarStoreEncryptionImpl.Dependency.class)
-                              .installedBy(this::installLifecycleComponentModule);
-            encryptionOptionalBinder.setBinding().to(registerLifecycleComponent(VarStoreEncryptionImpl.class));
+            // Annotated so the nested module's exposed key differs from the optional binding's own key, which would otherwise point at itself.
+            ExposedKeyModule<EnvelopeEncryption> encryptionModule = EnvelopeEncryptionModule.builder()
+                                                                                           .setMasterKeyAlias(encryptionKeyAliasSpec)
+                                                                                           .setKeyStoreAccess(keyStoreAccessSpec)
+                                                                                           .withAnnotation(forAnnotation(Dependency.class))
+                                                                                           .build();
+            installLifecycleComponentModule(encryptionModule);
+            encryptionOptionalBinder.setBinding().to(encryptionModule.getExposedKey());
         }
         if (dataSourceFactorySpec != null) {
             checkArgument(pathSpec == null, "'path' is for the file-backed store and has no meaning alongside 'dataSourceFactory'");
@@ -78,6 +89,12 @@ public final class VarStoreModule extends BaseExposedKeyModule<VarStore> {
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Dependency {
     }
 
     public static final class Builder extends BaseModuleBuilder<VarStore, Builder> {

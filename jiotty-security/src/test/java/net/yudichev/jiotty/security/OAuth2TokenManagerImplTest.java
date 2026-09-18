@@ -5,8 +5,8 @@ import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.rest.OkHttpStubs;
 import net.yudichev.jiotty.common.security.AuthState;
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
-import net.yudichev.jiotty.persistence.varstore.VarStoreEncryption;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.FormBody;
@@ -163,7 +163,7 @@ class OAuth2TokenManagerImplTest {
                 .hasValue(OauthAccessToken.of("at-1", "rt-1", NOW.plusSeconds(2880)));
         // The credential is persisted encrypted at rest, not as plaintext JSON.
         assertThat(varStore.rawStoredValue(VAR_STORE_KEY)).hasValueSatisfying(stored ->
-                                                                                      assertThat(VarStoreEncryption.isEnvelope(stored)).as(
+                                                                                      assertThat(EnvelopeEncryption.isEnvelope(stored)).as(
                                                                                               "token stored as encryption envelope").isTrue());
     }
 

@@ -2,6 +2,7 @@ package net.yudichev.jiotty.persistence.varstore;
 
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
 import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
 import org.junit.jupiter.api.AfterEach;
@@ -38,11 +39,11 @@ class SqlVarStoreTest {
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
 
     @Mock
-    private VarStoreEncryption encryption;
+    private EnvelopeEncryption encryption;
 
     private SqlVarStore varStore;
     private boolean singleUser;
-    private Optional<VarStoreEncryption> configuredEncryption = Optional.empty();
+    private Optional<EnvelopeEncryption> configuredEncryption = Optional.empty();
 
     @AfterEach
     void tearDown() {
@@ -272,38 +273,38 @@ class SqlVarStoreTest {
     @Test
     void encryptedSaveInvokesEncryptAndStoresResult() {
         configuredEncryption = Optional.of(encryption);
-        when(encryption.encrypt(eq(""), eq("token"), any())).thenReturn("ENC1$stubbed-ciphertext");
+        when(encryption.encrypt(eq(VarStoreAad.of("", "token")), any())).thenReturn("ENC1$stubbed-ciphertext");
         startVarStore();
 
         varStore.saveValueEncrypted("token", "super-secret");
         flushExecutor();
 
         assertThat(readRawValue("", "token")).isEqualTo("ENC1$stubbed-ciphertext");
-        verify(encryption).encrypt("", "token", "\"super-secret\"");
+        verify(encryption).encrypt(VarStoreAad.of("", "token"), "\"super-secret\"");
     }
 
     @Test
     void encryptedReadInvokesDecryptOnEnvelope() {
         configuredEncryption = Optional.of(encryption);
-        when(encryption.decrypt("", "token", "ENC1$stored-envelope")).thenReturn("\"decrypted-value\"");
+        when(encryption.decrypt(VarStoreAad.of("", "token"), "ENC1$stored-envelope")).thenReturn("\"decrypted-value\"");
         startVarStore();
         seedRawRowAndReload("", "token", "ENC1$stored-envelope");
 
         assertThat(varStore.readValueEncrypted(String.class, "token")).contains("decrypted-value");
-        verify(encryption).decrypt("", "token", "ENC1$stored-envelope");
+        verify(encryption).decrypt(VarStoreAad.of("", "token"), "ENC1$stored-envelope");
     }
 
     @Test
     void encryptedReadDecryptsOnceAcrossRepeatedReads() {
         configuredEncryption = Optional.of(encryption);
-        when(encryption.decrypt("", "token", "ENC1$stored-envelope")).thenReturn("\"decrypted-value\"");
+        when(encryption.decrypt(VarStoreAad.of("", "token"), "ENC1$stored-envelope")).thenReturn("\"decrypted-value\"");
         startVarStore();
         seedRawRowAndReload("", "token", "ENC1$stored-envelope");
 
         assertThat(varStore.readValueEncrypted(String.class, "token")).contains("decrypted-value");
         assertThat(varStore.readValueEncrypted(String.class, "token")).contains("decrypted-value");
         // The decrypting collaborator is invoked once; a repeated read of the same key does not decrypt again.
-        verify(encryption).decrypt("", "token", "ENC1$stored-envelope");
+        verify(encryption).decrypt(VarStoreAad.of("", "token"), "ENC1$stored-envelope");
     }
 
     @Test
@@ -311,7 +312,7 @@ class SqlVarStoreTest {
         configuredEncryption = Optional.of(encryption);
         // A shape the caller's type no longer parses: Jackson quotes the offending content in its own message, and that message ends up in log lines and
         // admin-alert descriptions.
-        when(encryption.decrypt("", "token", "ENC1$stored-envelope")).thenReturn("\"rf-super-secret-refresh-token\"");
+        when(encryption.decrypt(VarStoreAad.of("", "token"), "ENC1$stored-envelope")).thenReturn("\"rf-super-secret-refresh-token\"");
         startVarStore();
         seedRawRowAndReload("", "token", "ENC1$stored-envelope");
 
@@ -350,8 +351,8 @@ class SqlVarStoreTest {
     @Test
     void encryptedPerUserScopedStorePassesUserIdToEncryption() {
         configuredEncryption = Optional.of(encryption);
-        when(encryption.encrypt(eq("alice"), eq("token"), any())).thenReturn("ENC1$alice");
-        when(encryption.encrypt(eq("bob"), eq("token"), any())).thenReturn("ENC1$bob");
+        when(encryption.encrypt(eq(VarStoreAad.of("alice", "token")), any())).thenReturn("ENC1$alice");
+        when(encryption.encrypt(eq(VarStoreAad.of("bob", "token")), any())).thenReturn("ENC1$bob");
         startVarStore();
 
         varStore.forUser("alice").saveValueEncrypted("token", "alice-secret");
@@ -360,14 +361,14 @@ class SqlVarStoreTest {
 
         assertThat(readRawValue("alice", "token")).isEqualTo("ENC1$alice");
         assertThat(readRawValue("bob", "token")).isEqualTo("ENC1$bob");
-        verify(encryption).encrypt("alice", "token", "\"alice-secret\"");
-        verify(encryption).encrypt("bob", "token", "\"bob-secret\"");
+        verify(encryption).encrypt(VarStoreAad.of("alice", "token"), "\"alice-secret\"");
+        verify(encryption).encrypt(VarStoreAad.of("bob", "token"), "\"bob-secret\"");
     }
 
     @Test
     void exportEntriesReturnsPlainValuesVerbatimAndRedactsEncryptedSecrets() {
         configuredEncryption = Optional.of(encryption);
-        when(encryption.encrypt(eq("alice"), eq("secret"), any())).thenReturn("ENC1$cipher");
+        when(encryption.encrypt(eq(VarStoreAad.of("alice", "secret")), any())).thenReturn("ENC1$cipher");
         startVarStore();
         VarStore alice = varStore.forUser("alice");
         alice.saveValue("colour", "red");
@@ -382,7 +383,7 @@ class SqlVarStoreTest {
     @Test
     void exportEntriesRedactsSecretEvenAfterItHasBeenDecryptedIntoTheCache() {
         configuredEncryption = Optional.of(encryption);
-        when(encryption.decrypt("alice", "secret", "ENC1$envelope")).thenReturn("\"plaintext\"");
+        when(encryption.decrypt(VarStoreAad.of("alice", "secret"), "ENC1$envelope")).thenReturn("\"plaintext\"");
         startVarStore();
         seedRawRowAndReload("alice", "secret", "ENC1$envelope");
         VarStore alice = varStore.forUser("alice");

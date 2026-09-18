@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.ui;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.http.HttpServletRequest;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.metrics.GuardMetrics;
 import net.yudichev.jiotty.common.metrics.NoopMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -207,7 +208,7 @@ class PreAuthAdmissionControlTest {
     }
 
     private static double rejections(SimpleMeterRegistry meterRegistry, String outcome) {
-        return meterRegistry.get("guard_rejected_total").tag("guard", "pre_auth").tag("outcome", outcome).counter().count();
+        return meterRegistry.get(GuardMetrics.REJECTED_COUNTER).tag("guard", "pre_auth").tag("outcome", outcome).counter().count();
     }
 
     private PreAuthAdmissionControl control(boolean trustProxyHeaders) {

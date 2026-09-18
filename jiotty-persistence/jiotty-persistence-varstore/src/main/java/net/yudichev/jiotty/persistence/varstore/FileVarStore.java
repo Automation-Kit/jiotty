@@ -2,6 +2,7 @@ package net.yudichev.jiotty.persistence.varstore;
 
 import com.google.common.reflect.TypeToken;
 import jakarta.inject.Inject;
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -14,7 +15,7 @@ public final class FileVarStore implements VarStore {
     private final BaseFileVarStore delegate;
 
     @Inject
-    public FileVarStore(@ThePath Path path, @SingleUser boolean singleUser, Optional<VarStoreEncryption> encryption) {
+    public FileVarStore(@ThePath Path path, @SingleUser boolean singleUser, Optional<EnvelopeEncryption> encryption) {
         delegate = singleUser
                    ? new SingleUserFileVarStore(path, encryption.orElse(null))
                    : new MultiUserFileVarStore(path, encryption.orElse(null));

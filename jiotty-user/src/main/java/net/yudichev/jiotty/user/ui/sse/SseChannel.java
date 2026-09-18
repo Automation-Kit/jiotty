@@ -71,7 +71,10 @@ public final class SseChannel extends BaseIdempotentCloseable {
     private Closeable heartbeat = Closeable.noop();
 
     /// @param name         identifies this channel in log lines and in each client's id
-    /// @param jsonWriter   serialises event payloads; auto-close is stripped from it here, so an event write cannot close the shared stream
+    /// @param jsonWriter   serialises event payloads; auto-close is stripped from it here, so an event write cannot close the shared stream. It must be
+    ///                     rooted at [Object] (`Json.createWriterFor(new TypeToken<>() {})`), because this channel writes its own `hello` and `ping` frames
+    ///                     through it as well as the feature's: a writer bound to one frame type fails on the `hello` that opens every stream, and the
+    ///                     client sees the event name with no data before the stream dies
     /// @param alertService escalates a frame this channel cannot serialise, which is a defect in the feature's frame types
     /// @param maxClients   the most concurrent streams this channel accepts, or [#UNBOUNDED]
     @Inject

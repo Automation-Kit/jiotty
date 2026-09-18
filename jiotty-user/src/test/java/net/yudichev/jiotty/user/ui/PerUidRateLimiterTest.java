@@ -2,6 +2,7 @@ package net.yudichev.jiotty.user.ui;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.metrics.GuardMetrics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -55,7 +56,11 @@ class PerUidRateLimiterTest {
         assertThat(limiter.tryAdmit("user-1")).isFalse();
         assertThat(limiter.tryAdmit("user-1")).isFalse();
 
-        assertThat(meterRegistry.get("guard_rejected_total").tag("guard", "per_uid").tag("outcome", "rate_limited").counter().count())
+        assertThat(meterRegistry.get(GuardMetrics.REJECTED_COUNTER)
+                                .tag("guard", "per_uid")
+                                .tag("outcome", GuardMetrics.OUTCOME_RATE_LIMITED)
+                                .counter()
+                                .count())
                 .isEqualTo(2.0);
     }
 }

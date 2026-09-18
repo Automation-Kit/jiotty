@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Throwables;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -36,12 +37,12 @@ final class SqlVarStoreOperations {
     private final String deleteAllSql;
     private final String selectAllSql;
     private final SchedulingExecutor executor;
-    private final @Nullable VarStoreEncryption encryption;
+    private final @Nullable EnvelopeEncryption encryption;
     private final ConcurrentMap<String, Object> cache = new ConcurrentHashMap<>();
 
     public SqlVarStoreOperations(CloseableDataSource dataSource, SchedulingExecutor executor, String userId,
                                  String upsertSql, String deleteSql, String deleteAllSql, String selectAllSql,
-                                 @Nullable VarStoreEncryption encryption) {
+                                 @Nullable EnvelopeEncryption encryption) {
         this.dataSource = checkNotNull(dataSource);
         this.executor = checkNotNull(executor);
         this.userId = checkNotNull(userId);
@@ -73,8 +74,8 @@ final class SqlVarStoreOperations {
     }
 
     public void saveValueEncrypted(String key, Object value) {
-        VarStoreEncryption enc = requireEncryption();
-        persist(key, value, plaintextJson -> enc.encrypt(userId, key, plaintextJson));
+        EnvelopeEncryption enc = requireEncryption();
+        persist(key, value, plaintextJson -> enc.encrypt(VarStoreAad.of(userId, key), plaintextJson));
     }
 
     public void clearValue(String key) {
@@ -118,7 +119,7 @@ final class SqlVarStoreOperations {
                     while (rs.next()) {
                         String key = rs.getString(1);
                         String storedValue = rs.getString(2);
-                        entries.add(VarStoreEncryption.isEnvelope(storedValue)
+                        entries.add(EnvelopeEncryption.isEnvelope(storedValue)
                                     ? new VarStore.ExportedEntry(key, true, null)
                                     : new VarStore.ExportedEntry(key, false, storedValue));
                     }
@@ -140,12 +141,12 @@ final class SqlVarStoreOperations {
 
     @SuppressWarnings("unchecked")
     public <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key) {
-        VarStoreEncryption enc = requireEncryption();
+        EnvelopeEncryption enc = requireEncryption();
         return Optional.ofNullable((T) cache.computeIfPresent(key, (k, v) -> {
             if (v instanceof Json(var json)) {
-                checkState(VarStoreEncryption.isEnvelope(json),
+                checkState(EnvelopeEncryption.isEnvelope(json),
                            "[%s] value under '%s' read via readValueEncrypted is not an encryption envelope", userId, k);
-                return deserialiseSecret(type, k, enc.decrypt(userId, k, json));
+                return deserialiseSecret(type, k, enc.decrypt(VarStoreAad.of(userId, k), json));
             }
             return v;
         }));
@@ -203,7 +204,7 @@ final class SqlVarStoreOperations {
         }
     }
 
-    private VarStoreEncryption requireEncryption() {
+    private EnvelopeEncryption requireEncryption() {
         checkState(encryption != null, "VarStore not configured with encryption");
         return encryption;
     }

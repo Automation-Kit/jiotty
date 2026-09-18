@@ -126,7 +126,7 @@ public final class UserPersistenceModule extends BaseExposedKeyModule<UserPersis
 
     public static final class Builder extends BaseModuleBuilder<UserPersistence, Builder> {
         private BindingSpec<DataSourceFactory> dataSourceFactorySpec;
-        private BindingSpec<Integer> schemaVersionSpec;
+        private BindingSpec<Integer> schemaVersionSpec = literally(UserSchemaMigrator.BASE_SCHEMA_VERSION);
         private BindingSpec<String> domainNameSpec = literally(DEFAULT_DOMAIN_NAME);
         private BindingSpec<List<String>> initStatementsSpec = literally(List.of());
         private BindingSpec<PersistenceDomainMigrator> migratorSpec = literally(PersistenceDomainMigrator.FAIL_ON_MIGRATION);
@@ -136,7 +136,7 @@ public final class UserPersistenceModule extends BaseExposedKeyModule<UserPersis
             return this;
         }
 
-        public Builder setSchemaVersion(BindingSpec<Integer> schemaVersionSpec) {
+        public Builder withSchemaVersion(BindingSpec<Integer> schemaVersionSpec) {
             this.schemaVersionSpec = checkNotNull(schemaVersionSpec, "schemaVersionSpec");
             return this;
         }

@@ -3,6 +3,7 @@ package net.yudichev.jiotty.persistence.varstore;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.reflect.TypeToken;
+import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -29,7 +30,7 @@ public final class InMemoryVarStore implements PrefixClearableVarStore {
     @Override
     public void saveValueEncrypted(String key, Object value) {
         String plaintext = getAsUnchecked(() -> mapper.writeValueAsString(value));
-        serialisedValuesByKey.put(key, VarStoreEncryption.ENVELOPE_PREFIX + plaintext);
+        serialisedValuesByKey.put(key, EnvelopeEncryption.ENVELOPE_PREFIX + plaintext);
     }
 
     @Override
@@ -58,7 +59,7 @@ public final class InMemoryVarStore implements PrefixClearableVarStore {
         serialisedValuesByKey.forEach((key, stored) -> {
             if (key.startsWith(keyPrefix)) {
                 String scopedKey = key.substring(keyPrefix.length());
-                entries.add(VarStoreEncryption.isEnvelope(stored)
+                entries.add(EnvelopeEncryption.isEnvelope(stored)
                             ? new ExportedEntry(scopedKey, true, null)
                             : new ExportedEntry(scopedKey, false, stored));
             }
@@ -80,9 +81,9 @@ public final class InMemoryVarStore implements PrefixClearableVarStore {
         if (stored == null) {
             return Optional.empty();
         }
-        checkState(VarStoreEncryption.isEnvelope(stored),
+        checkState(EnvelopeEncryption.isEnvelope(stored),
                    "value under '%s' read via readValueEncrypted is not an encryption envelope", key);
-        String plaintext = stored.substring(VarStoreEncryption.ENVELOPE_PREFIX.length());
+        String plaintext = stored.substring(EnvelopeEncryption.ENVELOPE_PREFIX.length());
         return Optional.of(getAsUnchecked(() -> mapper.readerFor(javaType).readValue(plaintext)));
     }
 
