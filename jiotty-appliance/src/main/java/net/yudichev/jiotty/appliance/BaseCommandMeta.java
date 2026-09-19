@@ -19,6 +19,9 @@ abstract class BaseCommandMeta<T extends Command<T>> {
         return ImmutableMap.of();
     }
 
+    /// @return a factory building the command from the decoded parameters. It must reject invalid parameters with [IllegalArgumentException], as a command's
+    ///         constructor validating its arguments does, and that message must carry no internal detail, because a server may show it to whoever sent them;
+    ///         any other exception means the factory itself is broken.
     public abstract Function<Map<String, Object>, T> commandFactory();
 
     public final T createCommand(Map<String, Object> parameters) {
