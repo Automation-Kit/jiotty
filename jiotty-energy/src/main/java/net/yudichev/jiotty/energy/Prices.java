@@ -56,17 +56,27 @@ public final class Prices implements StringFormattable {
         return index == profile.pricePerInterval().size() - 1 ? profileEnd() : startOfProfileIndex(index + 1);
     }
 
+    /// @return the index of the slot `t` falls in, or `-1` where `t` lies outside the curve at either end — which is why a caller that has to tell those two
+    ///         ends apart wants [#firstUnendedProfileIndex(Instant)] instead
     public int profileIndexOf(Instant t) {
-        long offset = Duration.between(profileStart(), t).toSeconds();
-        if (offset < 0) {
+        if (t.isBefore(profileStart)) {
             return -1;
         }
-        int idx = (int) (offset / profile().intervalLengthSec());
-        int max = profile().pricePerInterval().size() - 1;
-        if (idx > max) {
-            return -1;
+        int index = firstUnendedProfileIndex(t);
+        return index == profile.pricePerInterval().size() ? -1 : index;
+    }
+
+    /// The count of slots already behind `t`, which is the same number as the index of the one still running, so it saturates at either end instead of
+    /// reporting both as absent.
+    ///
+    /// @return the index of the first slot that has not ended at `t`: `0` where `t` precedes the curve, and the slot count once every slot has ended — the
+    ///         one-past-the-last index that [#startOfProfileIndex(int)] accepts, so the end of the curve is still addressable
+    public int firstUnendedProfileIndex(Instant t) {
+        long offsetSec = Duration.between(profileStart(), t).toSeconds();
+        if (offsetSec <= 0) {
+            return 0;
         }
-        return idx;
+        return (int) Math.min(offsetSec / profile.intervalLengthSec(), profile.pricePerInterval().size());
     }
 
     public Prices limitTo(Duration maxLength) {
