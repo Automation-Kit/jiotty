@@ -5,15 +5,18 @@ import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.TypeLiteral;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.inject.Inject;
 import net.yudichev.jiotty.adminalerts.LoggingAdminAlertServiceModule;
 import net.yudichev.jiotty.common.app.Application;
 import net.yudichev.jiotty.common.async.ExecutorModule;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
+import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.metrics.NoopMeterRegistry;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.user.push.PushDeviceStore;
+import net.yudichev.jiotty.user.ui.options.Option;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +25,8 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.List;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.inject.BindingSpec.boundTo;
 import static net.yudichev.jiotty.common.inject.BindingSpec.exposedBy;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,19 +43,7 @@ class UIServerModuleTest {
     /// rather than only its bindings.
     @BeforeEach
     void setUp() {
-        injector = Guice.createInjector(ExecutorModule.builder().build(),
-                                        TimeModule.builder().build(),
-                                        new AbstractModule() {
-                                            @Override
-                                            protected void configure() {
-                                                bind(MeterRegistry.class).toInstance(new NoopMeterRegistry());
-                                                bind(VarStore.class).toInstance(new InMemoryVarStore());
-                                            }
-                                        },
-                                        UIServerModule.builder()
-                                                      .setAdminAlertService(exposedBy(LoggingAdminAlertServiceModule.builder().build()))
-                                                      .withThreadNameSuffix(literally("test-user"))
-                                                      .build());
+        injector = injectorWith(moduleBuilder());
         components = injector.findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
                              .stream()
                              .map(binding -> injector.getInstance(binding.getKey()))
@@ -72,5 +65,65 @@ class UIServerModuleTest {
         assertThat(injector.getInstance(PushDeviceStore.class).list()).succeedsWithin(CALL_TIMEOUT)
                                                                       .asInstanceOf(LIST)
                                                                       .isEmpty();
+    }
+
+    @Test
+    void registersWithTheRealServerWhenNoOtherIsNamed() {
+        assertThat(injector.getInstance(UIServer.class)).isInstanceOf(UIServerImpl.class);
+    }
+
+    /// A replacement is resolved in this module's scope, which is what lets one that wraps the real server reach it.
+    @Test
+    void registersWithTheNamedServerWhichCanWrapTheRealOne() {
+        Injector wrappedInjector = injectorWith(moduleBuilder().withUIServer(boundTo(PassThroughUIServer.class)));
+
+        assertThat(wrappedInjector.getInstance(UIServer.class)).isInstanceOfSatisfying(
+                PassThroughUIServer.class, wrapper -> assertThat(wrapper.delegate).isInstanceOf(UIServerImpl.class));
+    }
+
+    /// The app registers with one server, however many components ask for it.
+    @Test
+    void registersWithOneServerInstance() {
+        Injector wrappedInjector = injectorWith(moduleBuilder().withUIServer(boundTo(PassThroughUIServer.class)));
+
+        assertThat(wrappedInjector.getInstance(UIServer.class)).isSameAs(wrappedInjector.getInstance(UIServer.class));
+    }
+
+    private static UIServerModule.Builder moduleBuilder() {
+        return UIServerModule.builder()
+                             .setAdminAlertService(exposedBy(LoggingAdminAlertServiceModule.builder().build()))
+                             .withThreadNameSuffix(literally("test-user"));
+    }
+
+    private static Injector injectorWith(UIServerModule.Builder moduleBuilder) {
+        return Guice.createInjector(ExecutorModule.builder().build(),
+                                    TimeModule.builder().build(),
+                                    new AbstractModule() {
+                                        @Override
+                                        protected void configure() {
+                                            bind(MeterRegistry.class).toInstance(new NoopMeterRegistry());
+                                            bind(VarStore.class).toInstance(new InMemoryVarStore());
+                                        }
+                                    },
+                                    moduleBuilder.build());
+    }
+
+    static final class PassThroughUIServer implements UIServer {
+        private final UIServer delegate;
+
+        @Inject
+        PassThroughUIServer(UIServerImpl delegate) {
+            this.delegate = checkNotNull(delegate);
+        }
+
+        @Override
+        public Closeable registerDisplayable(Displayable displayable) {
+            return delegate.registerDisplayable(displayable);
+        }
+
+        @Override
+        public Closeable registerOption(Option<?> option) {
+            return delegate.registerOption(option);
+        }
     }
 }

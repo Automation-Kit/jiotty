@@ -50,22 +50,28 @@ import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 ///
 /// The [AdminAlertService] supplied via [Builder#setAdminAlertService] is required and is consumed by the built-in handlers to surface internal failures as
 /// admin alerts (rather than only logging them).
+///
+/// The [UIServer] the app registers with is [UIServerImpl] unless [Builder#withUIServer] names another. The spec is resolved in this module's scope, so a
+/// replacement that wraps the real server takes [UIServerImpl] in its `@Inject` constructor.
 public final class UIServerModule extends BaseLifecycleComponentModule {
     private final BindingSpec<String> threadNameSuffixSpec;
     private final BindingSpec<Duration> optionsThrottlingPeriodSpec;
     private final BindingSpec<VarStore> varStoreSpec;
     private final BindingSpec<AdminAlertService> adminAlertServiceSpec;
+    private final BindingSpec<UIServer> uiServerSpec;
     private final List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs;
 
     private UIServerModule(BindingSpec<String> threadNameSuffixSpec,
                            BindingSpec<Duration> optionsThrottlingPeriodSpec,
                            BindingSpec<VarStore> varStoreSpec,
                            BindingSpec<AdminAlertService> adminAlertServiceSpec,
+                           BindingSpec<UIServer> uiServerSpec,
                            List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs) {
         this.threadNameSuffixSpec = checkNotNull(threadNameSuffixSpec);
         this.optionsThrottlingPeriodSpec = checkNotNull(optionsThrottlingPeriodSpec);
         this.varStoreSpec = checkNotNull(varStoreSpec);
         this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec);
+        this.uiServerSpec = checkNotNull(uiServerSpec);
         this.apiPathHandlerSpecs = ImmutableList.copyOf(apiPathHandlerSpecs);
     }
 
@@ -111,7 +117,8 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         bind(DisplayableRegistry.class).to(registerLifecycleComponent(DisplayableRegistryImpl.class));
         bind(SseService.class).to(registerLifecycleComponent(SseServiceImpl.class));
 
-        bind(UIServer.class).to(UIServerImpl.class).in(Singleton.class);
+        uiServerSpec.bind(UIServer.class).annotatedWith(Dependency.class).installedBy(this::installLifecycleComponentModule);
+        bind(UIServer.class).to(Key.get(UIServer.class, Dependency.class)).in(Singleton.class);
         expose(UIServer.class);
 
         // Built-in handlers are constructed in THIS module's scope so they see the registries/executor/SseService/PushDeviceStore/@Dependency bound above, then
@@ -165,6 +172,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         private BindingSpec<Duration> optionsThrottlingPeriodSpec = literally(Duration.ofMillis(500));
         private BindingSpec<VarStore> varStoreSpec = boundTo(VarStore.class);
         private BindingSpec<AdminAlertService> adminAlertServiceSpec;
+        private BindingSpec<UIServer> uiServerSpec = boundTo(UIServerImpl.class);
 
         private Builder() {
         }
@@ -189,6 +197,12 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
             return this;
         }
 
+        /// Replaces the [UIServer] an app registers with, for a test mode that has to see what is registered.
+        public Builder withUIServer(BindingSpec<UIServer> uiServerSpec) {
+            this.uiServerSpec = checkNotNull(uiServerSpec);
+            return this;
+        }
+
         /// Register an additional handler.
         public Builder addApiPathHandler(BindingSpec<ApiPathHandler> apiPathHandlerSpec) {
             apiPathHandlerSpecs.add(checkNotNull(apiPathHandlerSpec));
@@ -201,6 +215,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                                       optionsThrottlingPeriodSpec,
                                       varStoreSpec,
                                       adminAlertServiceSpec,
+                                      uiServerSpec,
                                       apiPathHandlerSpecs);
         }
     }
