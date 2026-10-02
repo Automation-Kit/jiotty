@@ -4,16 +4,24 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.timeseriescache.TimeSeriesCache.Scope;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class NoOpTimeSeriesCacheTest {
     private static final Instant SLOT_APR_1 = Instant.parse("2026-04-01T00:00:00Z");
@@ -95,22 +103,35 @@ class NoOpTimeSeriesCacheTest {
     }
 
     @Test
-    void defineStream_sameKey_returnsSameHandle() {
-        var first = cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE,
-                                       _ -> CompletableFuture.completedFuture(Map.of()));
-        var second = cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE,
-                                        _ -> CompletableFuture.completedFuture(Map.of()));
+    void defineStream_sameKey_eachHandleComputesWithItsOwnComputation() {
+        TimeSeriesStream<TestValue> first = cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE, _ -> completeWithValueAtSlotApr1("first"));
+        TimeSeriesStream<TestValue> second = cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE, _ -> completeWithValueAtSlotApr1("second"));
 
-        assertThat(second).isSameAs(first);
+        assertThat(first.readRange(SLOT_APR_1, SLOT_APR_1).getNow(null)).containsExactly(Map.entry(SLOT_APR_1, new TestValue("first")));
+        assertThat(second.readRange(SLOT_APR_1, SLOT_APR_1).getNow(null)).containsExactly(Map.entry(SLOT_APR_1, new TestValue("second")));
     }
 
-    @Test
-    void defineStream_conflictingResolution_throws() {
-        cache.defineStream(STREAM_ID, SCOPE, Resolution.daily(), TYPE, _ -> CompletableFuture.completedFuture(Map.of()));
+    @ParameterizedTest
+    @MethodSource
+    void defineStream_conflictingRedefinition_throws(Resolution resolution, TypeToken<?> type) {
+        defineEmptyStream(Resolution.daily(), TYPE);
 
-        assertThatThrownBy(() -> cache.defineStream(STREAM_ID, SCOPE, Resolution.halfHourly(), TYPE,
-                                                    _ -> CompletableFuture.completedFuture(Map.of())))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> defineEmptyStream(resolution, type)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    static Stream<Arguments> defineStream_conflictingRedefinition_throws() {
+        return Stream.of(arguments(Resolution.halfHourly(), TYPE),
+                         arguments(Resolution.daily(), TypeToken.of(String.class)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void deleteAll_forgetsTheDeletedStreamsDefinitions(boolean byScope) {
+        defineEmptyStream(Resolution.daily(), TYPE);
+
+        assertThat(byScope ? cache.deleteAllForScope(SCOPE) : cache.deleteAllForStream(STREAM_ID)).succeedsWithin(Duration.ZERO);
+
+        assertThatCode(() -> defineEmptyStream(Resolution.halfHourly(), TYPE)).doesNotThrowAnyException();
     }
 
     @Test
@@ -120,6 +141,14 @@ class NoOpTimeSeriesCacheTest {
         assertThat(cache.deleteAllForScope(SCOPE).join()).isZero();
         assertThat(cache.deleteAllForStream(STREAM_ID).join()).isZero();
         assertThat(cache.deleteOlderThan(SLOT_APR_3).join()).isZero();
+    }
+
+    private static CompletableFuture<Map<Instant, Optional<TestValue>>> completeWithValueAtSlotApr1(String content) {
+        return CompletableFuture.completedFuture(Map.of(SLOT_APR_1, Optional.of(new TestValue(content))));
+    }
+
+    private <T> void defineEmptyStream(Resolution resolution, TypeToken<T> type) {
+        cache.defineStream(STREAM_ID, SCOPE, resolution, type, 1, _ -> CompletableFuture.completedFuture(Map.of()));
     }
 
     @CacheSchemaVersion(1)

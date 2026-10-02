@@ -52,7 +52,7 @@ public final class OctopusStreams {
     private OctopusStreams() {
     }
 
-    /// Defines (or returns the existing) `octopus.rates:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandardUnitRates].
+    /// Returns a handle on the `octopus.rates:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandardUnitRates].
     /// Each half-hour slot maps to whichever returned rate's `[validFrom, validTo)` window contains it: an exact match for half-hourly tariffs (each
     /// window is one half-hour), the covering window for flat or multi-day tariffs. A slot no returned rate covers is left absent (uncached) so a future read
     /// requests it again: an uncovered slot can be a future or not-yet-published half-hour whose rate will exist later, so it must stay re-queryable rather
@@ -73,7 +73,7 @@ public final class OctopusStreams {
                                               slots, rates, StandardUnitRate::validFrom, StandardUnitRate::validTo, false)));
     }
 
-    /// Defines (or returns the existing) `octopus.standing:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandingCharges]. Each daily
+    /// Returns a handle on the `octopus.standing:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandingCharges]. Each daily
     /// slot maps to whichever returned charge's `[validFrom, validTo)` window contains the slot's start instant; slots not covered by any returned charge are
     /// tombstoned (negative-cached) so a future call does not re-request them — this stream is only ever read for settled past days, so an uncovered slot is
     /// definitively empty.
@@ -96,7 +96,7 @@ public final class OctopusStreams {
                                                                                             true)));
     }
 
-    /// Defines (or returns the existing) `octopus.consumption:<mpan>:<meterSerial>` stream backed by [OctopusAccountService#getConsumption]. The stream is
+    /// Returns a handle on the `octopus.consumption:<mpan>:<meterSerial>` stream backed by [OctopusAccountService#getConsumption]. The stream is
     /// scoped to the supplied `userId` since consumption data is per-account. Requested slots with no matching consumption row are tombstoned (negative-cached)
     /// so a future call does not re-request them — this stream is only ever read for settled past days, so a slot with no published reading is definitively
     /// empty.

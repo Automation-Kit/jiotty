@@ -30,9 +30,8 @@ import java.util.function.Function;
 /// @implSpec Implementations MUST serialise and deserialise values idempotently using a single mapper configuration consistent across every method, so values
 /// written by any caller round-trip back to the same POJO shape regardless of which call made the write.
 public interface TimeSeriesCache {
-    /// Registers a stream and returns its typed handle. Re-registering the same `(streamId, scope)` with the same `resolution` and same `type` returns the
-    /// previously-registered handle (idempotent). The `slotsComputation` of a re-registration is silently ignored — lambdas are not comparable, so the first
-    /// registration's lambda stays in effect.
+    /// Returns a typed handle on the stream that fills missing slots with `slotsComputation`. Every handle on the same `(streamId, scope)` reads and writes the
+    /// same cached values, and each computes its misses with the `slotsComputation` it was defined with.
     ///
     /// **Schema versioning.** Every cached value records the schema version it was written under. When a value is read back under a version different from the
     /// stream's current one — because the version was bumped after a change to the type's shape that older values can no longer satisfy — it is treated as
@@ -44,8 +43,8 @@ public interface TimeSeriesCache {
     /// one. For types you own, prefer the [#defineStream(String, Scope, Resolution, TypeToken, Function)] overload, which reads the version from the type's
     /// [CacheSchemaVersion]. There is no implicit default: a value type must declare its version one way or the other.
     ///
-    /// @throws IllegalArgumentException if `streamId` is blank; if `schemaVersion` is outside `[1, 65535]`; or if re-registration of the same `(streamId,
-    /// scope)` specifies a different `resolution` or `type` than the existing registration
+    /// @throws IllegalArgumentException if `streamId` is blank; if `schemaVersion` is outside `[1, 65535]`; or if the same `(streamId, scope)` was already
+    /// defined with a different `resolution` or `type`, and not deleted since
     <T> TimeSeriesStream<T> defineStream(String streamId,
                                          Scope scope,
                                          Resolution resolution,
@@ -66,18 +65,19 @@ public interface TimeSeriesCache {
         return defineStream(streamId, scope, resolution, type, CacheSchemaVersions.resolve(type), slotsComputation);
     }
 
-    /// Removes every cached entry whose [Scope] matches the argument exactly, and evicts every registered stream handle with the same scope. Use when the
-    /// underlying scope-bearing entity goes away — e.g. a deleted user account ([Scope.User]), a decommissioned region ([Scope.Region]), or a flush of all
-    /// global rows ([Scope.Global]). Operates across all streamIds.
+    /// Removes every cached entry, across all streamIds, whose [Scope] matches the argument exactly, and forgets those streams' definitions so they can be
+    /// defined afresh with any `resolution` and `type`. Use when the scope-bearing entity goes away — a deleted user account ([Scope.User]), a
+    /// decommissioned region ([Scope.Region]), or a flush of all global rows ([Scope.Global]).
     CompletableFuture<Integer> deleteAllForScope(Scope scope);
 
-    /// Removes every cached entry for the named stream (across all scopes) and evicts every registered stream handle with that streamId. Used when a stream is
-    /// decommissioned.
+    /// Removes every cached entry for the named stream across all scopes, and forgets its definitions so it can be defined afresh with any `resolution` and
+    /// `type`. Used when a stream is decommissioned.
     CompletableFuture<Integer> deleteAllForStream(String streamId);
 
-    /// Removes every cached entry, across all scopes and all streams, whose slot start is strictly before `cutoffExclusive`. This is the storage-management
-    /// purge for a retention horizon. Unlike [#deleteAllForScope] / [#deleteAllForStream] it does NOT evict any stream handle — the streams stay live; a
-    /// purged past slot simply recomputes through its `slotsComputation` if read again. Returns the number of rows deleted.
+    /// Removes every cached entry, across all scopes and all streams, whose slot start is strictly before `cutoffExclusive`. Stream definitions are kept, so
+    /// a purged past slot read through any handle recomputes through that handle's `slotsComputation`.
+    ///
+    /// @return a future completing with the number of cached entries removed
     CompletableFuture<Integer> deleteOlderThan(Instant cutoffExclusive);
 
     sealed interface Scope permits Scope.Global, Scope.User, Scope.Region {

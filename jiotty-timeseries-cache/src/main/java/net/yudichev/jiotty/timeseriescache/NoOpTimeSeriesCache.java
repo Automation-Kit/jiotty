@@ -5,7 +5,6 @@ import com.google.common.reflect.TypeToken;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.SortedSet;
@@ -15,43 +14,33 @@ import java.util.function.Function;
 
 /// A non-retaining [TimeSeriesCache]: every [TimeSeriesStream#readRange] recomputes the whole requested range through the stream's `slotsComputation` and
 /// stores nothing. Suitable for deployments that want the typed-stream API but must not accumulate data — notably ones where the underlying source is cheap to
-/// re-query and the unbounded in-memory growth an [InMemoryTimeSeriesCache] would incur is unacceptable. For persistent caching use [TimeSeriesCacheModule]
+/// re-query and the unbounded in-memory growth an `InMemoryTimeSeriesCache` would incur is unacceptable. For persistent caching use [TimeSeriesCacheModule]
 /// (Postgres-backed); for an in-memory cache that *retains* rows (e.g. tests asserting cache hits) use the test-scoped `InMemoryTimeSeriesCache`.
 public final class NoOpTimeSeriesCache implements TimeSeriesCache {
-    private final Map<StreamKey, NoOpTimeSeriesStream<?>> streams = new HashMap<>();
+    private final StreamDefinitions definitions = new StreamDefinitions();
 
-    @SuppressWarnings("unchecked")
     @Override
-    public synchronized <T> TimeSeriesStream<T> defineStream(String streamId,
-                                                             Scope scope,
-                                                             Resolution resolution,
-                                                             TypeToken<T> type,
-                                                             int schemaVersion,
-                                                             Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
+    public <T> TimeSeriesStream<T> defineStream(String streamId,
+                                                Scope scope,
+                                                Resolution resolution,
+                                                TypeToken<T> type,
+                                                int schemaVersion,
+                                                Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation) {
         // Nothing is ever stored, so the version is never used to evict; still validate it so the contract is uniform across implementations.
         CacheSchemaVersions.checkVersion(schemaVersion);
-        var key = new StreamKey(streamId, scope);
-        NoOpTimeSeriesStream<?> existingStream = streams.get(key);
-        if (existingStream != null) {
-            if (!existingStream.resolution().equals(resolution) || !existingStream.type().getType().equals(type.getType())) {
-                throw new IllegalArgumentException("conflicting redefinition of stream " + streamId + " for scope " + scope);
-            }
-            return (TimeSeriesStream<T>) existingStream;
-        }
-        var stream = new NoOpTimeSeriesStream<>(resolution, type, slotsComputation);
-        streams.put(key, stream);
-        return stream;
+        definitions.register(streamId, scope, resolution, type);
+        return new NoOpTimeSeriesStream<>(resolution, slotsComputation);
     }
 
     @Override
-    public synchronized CompletableFuture<Integer> deleteAllForScope(Scope scope) {
-        streams.keySet().removeIf(k -> k.scope().equals(scope));
+    public CompletableFuture<Integer> deleteAllForScope(Scope scope) {
+        definitions.forgetScope(scope);
         return CompletableFuture.completedFuture(0);
     }
 
     @Override
-    public synchronized CompletableFuture<Integer> deleteAllForStream(String streamId) {
-        streams.keySet().removeIf(k -> k.streamId().equals(streamId));
+    public CompletableFuture<Integer> deleteAllForStream(String streamId) {
+        definitions.forgetStream(streamId);
         return CompletableFuture.completedFuture(0);
     }
 
@@ -61,12 +50,8 @@ public final class NoOpTimeSeriesCache implements TimeSeriesCache {
         return CompletableFuture.completedFuture(0);
     }
 
-    private record StreamKey(String streamId, Scope scope) {}
-
-    /// Recomputes the full requested range on every [#readRange] and retains nothing. `type` is retained only so [#defineStream] can reject a conflicting
-    /// redefinition of the same `(streamId, scope)` with a different element type.
+    /// Recomputes the full requested range on every [#readRange] and retains nothing.
     private record NoOpTimeSeriesStream<T>(Resolution resolution,
-                                           TypeToken<T> type,
                                            Function<SortedSet<Instant>, CompletableFuture<Map<Instant, Optional<T>>>> slotsComputation)
             implements TimeSeriesStream<T> {
         @Override

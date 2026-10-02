@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.energy.octopus;
 
+import com.google.common.collect.ImmutableMap;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
@@ -28,6 +29,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -57,7 +59,7 @@ class OctopusEnergyProviderServiceTest {
     private static final String GO_TARIFF_A = "E-1R-GO-VAR-22-10-14-A";
     private static final Instant TARIFF_VALID_FROM = Instant.parse("2020-01-01T00:00:00Z");
     private static final Instant TARIFF_VALID_TO = Instant.parse("2099-01-01T00:00:00Z");
-
+    private final InMemoryTimeSeriesCache cache = new InMemoryTimeSeriesCache();
     private ProgrammableClock clock;
     @Mock
     private OctopusEnergy octopusEnergy;
@@ -69,20 +71,17 @@ class OctopusEnergyProviderServiceTest {
     private OctopusAgilePriceServiceRegistry octopusRegistry;
     @Mock
     private PriceForecastServiceRegistry priceForecastRegistry;
-
     private FakeAgilePriceService agileRegionA;
     private FakeAgilePriceService agileRegionB;
     private FakeForecastPriceService forecastRegionA;
     private FakeForecastPriceService forecastRegionB;
-
     private OctopusEnergyProviderService service;
-    private SchedulingExecutor executor;
 
     @BeforeEach
     void setUp() {
         clock = new ProgrammableClock();
         clock.setTime(Instant.parse("2024-01-01T10:00:00Z"));
-        executor = clock.createSingleThreadedSchedulingExecutor("provider");
+        SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("provider");
 
         agileRegionA = new FakeAgilePriceService();
         agileRegionB = new FakeAgilePriceService();
@@ -95,9 +94,7 @@ class OctopusEnergyProviderServiceTest {
         lenient().when(priceForecastRegistry.forRegion('A')).thenReturn(forecastRegionA);
         lenient().when(priceForecastRegistry.forRegion('B')).thenReturn(forecastRegionB);
 
-        service = new OctopusEnergyProviderService(() -> executor, clock, octopusEnergy, ACCOUNT_ID, API_KEY,
-                                                   RetryableOperationExecutor.noRetries(),
-                                                   octopusRegistry, priceForecastRegistry, new InMemoryTimeSeriesCache());
+        service = createService(executor);
     }
 
     // ---- Price routing ----
@@ -445,6 +442,37 @@ class OctopusEnergyProviderServiceTest {
     }
 
     @Test
+    void queryConsumption_afterAnEarlierProviderOnTheSameCacheStopped_fetchesThroughThisProvidersAccount(@Mock OctopusAccountService earlierAccountService) {
+        Instant earlierDay = Instant.parse("2023-12-31T00:00:00Z");
+        Instant from = Instant.parse("2024-01-01T00:00:00Z");
+        Instant to = Instant.parse("2024-01-01T00:30:00Z");
+        when(octopusEnergy.account(ACCOUNT_ID, API_KEY)).thenReturn(earlierAccountService, accountService);
+        when(earlierAccountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        when(earlierAccountService.getConsumption(eq(MPAN), eq(METER_SERIAL), any(), any())).thenReturn(completedFuture(List.of()));
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        when(accountService.getConsumption(eq(MPAN), eq(METER_SERIAL), any(), any()))
+                .thenReturn(completedFuture(List.of(consumption("2024-01-01T00:00:00Z", "2024-01-01T00:30:00Z", 0.3))));
+        // The earlier provider defines the user's consumption stream, then stops, as the provider of a restarted user app does.
+        OctopusEnergyProviderService earlierService = createService(clock.createSingleThreadedSchedulingExecutor("earlier-provider"));
+        earlierService.start();
+        CompletableFuture<ImmutableMap<Instant, ConsumptionRow>> earlierRead = earlierService.queryConsumption("user-1",
+                                                                                                               MPAN,
+                                                                                                               METER_SERIAL,
+                                                                                                               earlierDay,
+                                                                                                               earlierDay);
+        clock.tick();
+        assertThat(earlierRead).succeedsWithin(Duration.ZERO);
+        earlierService.stop();
+        service.start();
+
+        CompletableFuture<ImmutableMap<Instant, ConsumptionRow>> result = service.queryConsumption("user-1", MPAN, METER_SERIAL, from, to);
+        clock.tick();
+
+        assertThat(result).succeedsWithin(Duration.ZERO).satisfies(rows -> assertThat(rows).containsOnlyKeys(from));
+        verify(earlierAccountService, times(1)).getConsumption(any(), any(), any(), any());
+    }
+
+    @Test
     void latestConsumptionInstant_returnsLatestPublishedSlot_viaDirectConnectorCall() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
         when(accountService.getConsumption(eq(MPAN), eq(METER_SERIAL), any(), any()))
@@ -459,6 +487,18 @@ class OctopusEnergyProviderServiceTest {
         assertThat(result.join()).contains(Instant.parse("2026-06-02T11:30:00Z"));
         // Direct connector call — the frontier probe must NOT route through the (tombstoning) consumption cache stream.
         verify(accountService, times(1)).getConsumption(any(), any(), any(), any());
+    }
+
+    private OctopusEnergyProviderService createService(SchedulingExecutor serviceExecutor) {
+        return new OctopusEnergyProviderService(() -> serviceExecutor,
+                                                clock,
+                                                octopusEnergy,
+                                                ACCOUNT_ID,
+                                                API_KEY,
+                                                RetryableOperationExecutor.noRetries(),
+                                                octopusRegistry,
+                                                priceForecastRegistry,
+                                                cache);
     }
 
     /// Runs a cache-backed query twice over the same range, draining the provider's executor after each so the futures complete deterministically.

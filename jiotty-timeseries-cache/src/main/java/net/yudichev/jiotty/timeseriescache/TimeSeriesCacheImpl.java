@@ -37,7 +37,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -72,10 +71,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
     private final String deleteAllForStreamSql;
     private final String deleteOlderThanSql;
     private final String deleteSlotsSql;
-    /// Registry of live stream handles. Keyed by `(streamId, scope)` because the same logical streamId can have N concurrent registrations across different
-    /// users / regions / global. [#deleteAllForScope] and [#deleteAllForStream] sweep matching entries so handles bound to a deleted scope don't linger
-    /// pointing at empty rows.
-    private final Map<StreamKey, TimeSeriesStreamImpl<?>> streamsByKey = new ConcurrentHashMap<>();
+    private final StreamDefinitions definitions = new StreamDefinitions();
 
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
@@ -130,7 +126,6 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         Closeable.closeSafelyIfNotNull(logger, dataSource);
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public <T> TimeSeriesStream<T> defineStream(String streamId,
                                                 Scope scope,
@@ -144,19 +139,8 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         checkNotNull(type, "type");
         CacheSchemaVersions.checkVersion(schemaVersion);
         checkNotNull(slotsComputation, "slotsComputation");
-        TimeSeriesStreamImpl<?> existingStream = streamsByKey.compute(new StreamKey(streamId, scope), (key, currentStream) -> {
-            if (currentStream == null) {
-                return new TimeSeriesStreamImpl<>(this, key.streamId(), key.scope(), resolution, type, schemaVersion, slotsComputation);
-            }
-            checkArgument(currentStream.resolution().equals(resolution),
-                          "stream '%s' for scope %s already defined with resolution %s; conflicting redefinition with %s",
-                          key.streamId(), key.scope(), currentStream.resolution(), resolution);
-            checkArgument(currentStream.type().getType().equals(type.getType()),
-                          "stream '%s' for scope %s already defined with type %s; conflicting redefinition with %s",
-                          key.streamId(), key.scope(), currentStream.type(), type);
-            return currentStream;
-        });
-        return (TimeSeriesStream<T>) existingStream;
+        definitions.register(streamId, scope, resolution, type);
+        return new TimeSeriesStreamImpl<>(this, streamId, scope, resolution, type, schemaVersion, slotsComputation);
     }
 
     @Override
@@ -338,7 +322,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
              PreparedStatement stmt = connection.prepareStatement(deleteAllForScopeSql)) {
             bindScopeColumns(stmt, scope);
             int deleted = stmt.executeUpdate();
-            streamsByKey.keySet().removeIf(key -> key.scope().equals(scope));
+            definitions.forgetScope(scope);
             logger.info("Time-series cache: deleted {} row(s) for scope {}", deleted, scope);
             return deleted;
         } catch (SQLException e) {
@@ -351,7 +335,7 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
              PreparedStatement stmt = connection.prepareStatement(deleteAllForStreamSql)) {
             stmt.setString(1, streamId);
             int deleted = stmt.executeUpdate();
-            streamsByKey.keySet().removeIf(key -> key.streamId().equals(streamId));
+            definitions.forgetStream(streamId);
             logger.info("Time-series cache: deleted {} row(s) for stream {}", deleted, streamId);
             return deleted;
         } catch (SQLException e) {
@@ -364,8 +348,6 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
              PreparedStatement stmt = connection.prepareStatement(deleteOlderThanSql)) {
             stmt.setObject(1, cutoffExclusive.atOffset(ZoneOffset.UTC));
             int deleted = stmt.executeUpdate();
-            // No streamsByKey eviction: this purge spans live streams, so the handles stay valid — a re-read of a purged past slot recomputes via the
-            // stream's slotsComputation.
             logger.info("Time-series cache: deleted {} row(s) older than {}", deleted, cutoffExclusive);
             return deleted;
         } catch (SQLException e) {
@@ -373,5 +355,4 @@ final class TimeSeriesCacheImpl extends BaseLifecycleComponent implements TimeSe
         }
     }
 
-    private record StreamKey(String streamId, Scope scope) {}
 }

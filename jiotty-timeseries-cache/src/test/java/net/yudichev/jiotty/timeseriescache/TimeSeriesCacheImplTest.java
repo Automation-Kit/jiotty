@@ -290,11 +290,20 @@ class TimeSeriesCacheImplTest {
     }
 
     @Test
-    void defineStream_sameParams_isIdempotent_andReturnsSameHandle() {
-        var first = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of());
-        var second = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of());
+    void defineStream_sameKey_eachHandleComputesWithItsOwnComputation_andHandlesShareRows() {
+        var firstRow = new TestRow("d", 1, "first");
+        var secondRow = new TestRow("d", 2, "second");
+        TimeSeriesStream<TestRow> first = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of(SLOT_APR_1, firstRow));
+        TimeSeriesStream<TestRow> second = defineStreamWithSeed(STREAM_A,
+                                                                Scope.user("user-1"),
+                                                                Resolution.daily(),
+                                                                Map.of(SLOT_APR_1, new TestRow("d", 9, "second"), SLOT_APR_2, secondRow));
 
-        assertThat(second).isSameAs(first);
+        assertThat(compose(second, SLOT_APR_2, SLOT_APR_2)).containsEntry(SLOT_APR_2, secondRow);
+        assertThat(compose(first, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, firstRow);
+        // Each slot computed through one handle is a hit through the other.
+        assertThat(compose(first, SLOT_APR_2, SLOT_APR_2)).containsEntry(SLOT_APR_2, secondRow);
+        assertThat(compose(second, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, firstRow);
     }
 
     @Test
@@ -341,13 +350,12 @@ class TimeSeriesCacheImplTest {
         var u2 = defineStreamWithSeed(STREAM_A, Scope.user("user-2"), Resolution.daily(),
                                       Map.of(SLOT_APR_1, new TestRow("d", 2, "u2")));
 
-        assertThat(u2).isNotSameAs(u1);
         assertThat(compose(u1, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, new TestRow("d", 1, "u1"));
         assertThat(compose(u2, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, new TestRow("d", 2, "u2"));
     }
 
     @Test
-    void deleteAllForScope_user_removesOnlyThatUsersRows_andEvictsRegistry() {
+    void deleteAllForScope_user_removesOnlyThatUsersRows_andForgetsOnlyThatUsersDefinitions() {
         var u1A = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(),
                                        Map.of(SLOT_APR_1, new TestRow("d", 1, "u1-a")));
         var u1B = defineStreamWithSeed(STREAM_B, Scope.user("user-1"), Resolution.daily(),
@@ -368,10 +376,10 @@ class TimeSeriesCacheImplTest {
         // Other scopes still hit.
         assertThat(compose(u2, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, new TestRow("d", 3, "u2"));
         assertThat(compose(g, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, new TestRow("d", 4, "g"));
-        // Re-registering user-1's stream now returns a fresh handle, proving registry eviction.
-        var u1AFresh = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(),
-                                            Map.of(SLOT_APR_1, new TestRow("d", 9, "u1-a-fresh")));
-        assertThat(u1AFresh).isNotSameAs(u1A);
+        // user-1's stream can be defined afresh with another resolution; user-2's definition still stands.
+        defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.halfHourly(), Map.of());
+        assertThatThrownBy(() -> defineStreamWithSeed(STREAM_A, Scope.user("user-2"), Resolution.halfHourly(), Map.of()))
+                .hasMessageContaining("conflicting redefinition");
     }
 
     @Test
@@ -394,16 +402,14 @@ class TimeSeriesCacheImplTest {
     }
 
     @Test
-    void deleteOlderThan_doesNotEvictStreamHandles() {
+    void deleteOlderThan_keepsStreamDefinitions() {
         var stream = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of(SLOT_APR_1, new TestRow("d", 1, "u")));
         compose(stream, SLOT_APR_1, SLOT_APR_1);
 
         service.deleteOlderThan(SLOT_APR_5).orTimeout(5, SECONDS).join();
 
-        // Unlike deleteAllForScope/deleteAllForStream, the time-based purge leaves the handle live: re-defining the same (streamId, scope) returns the same
-        // instance, not a fresh one.
-        var same = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of(SLOT_APR_1, new TestRow("d", 9, "u")));
-        assertThat(same).isSameAs(stream);
+        assertThatThrownBy(() -> defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.halfHourly(), Map.of()))
+                .hasMessageContaining("conflicting redefinition");
     }
 
     @Test
@@ -455,7 +461,7 @@ class TimeSeriesCacheImplTest {
     }
 
     @Test
-    void deleteAllForStream_removesAllScopesForThatStream_andEvictsRegistry() {
+    void deleteAllForStream_removesAllScopesForThatStream_andForgetsOnlyThatStreamsDefinitions() {
         var u1A = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(),
                                        Map.of(SLOT_APR_1, new TestRow("d", 1, "u1")));
         var u2A = defineStreamWithSeed(STREAM_A, Scope.user("user-2"), Resolution.daily(),
@@ -474,9 +480,10 @@ class TimeSeriesCacheImplTest {
         assertThat(deleted).isEqualTo(3);
         // Stream-B for user-1 still hits.
         assertThat(compose(u1B, SLOT_APR_1, SLOT_APR_1)).containsEntry(SLOT_APR_1, new TestRow("d", 4, "u1-b"));
-        // Re-registering any of the evicted (STREAM_A, scope) tuples returns a fresh handle.
-        var u1AFresh = defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.daily(), Map.of());
-        assertThat(u1AFresh).isNotSameAs(u1A);
+        // STREAM_A can be defined afresh with another resolution; user-1's STREAM_B definition still stands.
+        defineStreamWithSeed(STREAM_A, Scope.user("user-1"), Resolution.halfHourly(), Map.of());
+        assertThatThrownBy(() -> defineStreamWithSeed(STREAM_B, Scope.user("user-1"), Resolution.halfHourly(), Map.of()))
+                .hasMessageContaining("conflicting redefinition");
     }
 
     @Test

@@ -330,11 +330,10 @@ class TimeSeriesStreamTest {
 
         assertThat(result).containsEntry(SLOT_APR_2, new TestValue("cached-2")); // not overwritten
 
-        // And the cache itself still holds the original value, not the over-fetched one — a fresh compose against the same range with a stream that would
-        // re-fetch fresh data must still see the cached value at slot 2.
+        // And the cache itself still holds the original value, not the over-fetched one: another handle on the same key, whose computation yields nothing,
+        // must see the cached value at slot 2.
         var verifyStream = cache.defineStream(streamId, SCOPE, Resolution.daily(), TYPE,
                                               _ -> CompletableFuture.completedFuture(Map.of()));
-        assertThat(verifyStream).isSameAs(stream); // same key → idempotent registration
         var verifyResult = verifyStream.readRange(SLOT_APR_2, SLOT_APR_2).orTimeout(5, SECONDS).join();
         assertThat(verifyResult).containsEntry(SLOT_APR_2, new TestValue("cached-2"));
     }
