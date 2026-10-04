@@ -15,6 +15,7 @@ import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ObservableValue;
@@ -66,7 +67,7 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     private final Optional<String> codeVerifier;
     private final int timeoutMillis;
     private final String logSubjectId;
-    private final ObservableValue<AuthState> authState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"));
+    private final ObservableValue<AuthState> authState;
     /// The current calendar set, kept up to date by incremental `calendarList` sync (see [#syncCalendarList]). Confined to [#executor]: an unchanged calendar
     /// keeps its existing [GoogleCalendar] instance across refreshes, so the consumer's identity-based change detection only fires on real changes.
     private final Map<String, GoogleCalendar> calendarsById = new LinkedHashMap<>();
@@ -87,7 +88,11 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                                  @AuthCode Optional<String> authCode,
                                  @CodeVerifier Optional<String> codeVerifier,
                                  @Timeout Duration timeout,
-                                 @LogSubjectId String logSubjectId) {
+                                 @LogSubjectId String logSubjectId,
+                                 TaskFailureReporter taskFailureReporter) {
+        checkNotNull(taskFailureReporter);
+        authState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"),
+                                               e -> taskFailureReporter.onTaskException("Delivering the Google Calendar authentication state", e));
         this.executorFactory = checkNotNull(executorFactory);
         this.tokenManager = checkNotNull(tokenManager);
         this.redirectUri = checkNotNull(redirectUri);

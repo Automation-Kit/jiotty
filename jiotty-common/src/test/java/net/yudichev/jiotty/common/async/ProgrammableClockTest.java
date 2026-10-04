@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.concurrent.Callable;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsString;
@@ -162,6 +163,30 @@ class ProgrammableClockTest {
 
         clock.advanceTimeAndTick(Duration.ofSeconds(1));
         verify(task, never()).run();
+    }
+
+    @Test
+    void aTaskThatThrowsIsDroppedAsALiveExecutorDropsIt() {
+        doThrow(new IllegalStateException("boom")).when(task).run();
+        executor.execute(task);
+
+        assertThatThrownBy(clock::tick).isInstanceOf(IllegalStateException.class);
+        clock.tick();
+
+        verify(task, times(1)).run();
+    }
+
+    @Test
+    void aPeriodicTaskThatThrowsKeepsItsRate() {
+        doThrow(new IllegalStateException("boom")).when(task).run();
+        executor.scheduleAtFixedRate(Duration.ofSeconds(1), Duration.ofSeconds(1), task);
+
+        assertThatThrownBy(() -> clock.setTimeAndTick(Instant.ofEpochMilli(1000))).isInstanceOf(IllegalStateException.class);
+        clock.tick();
+        verify(task, times(1)).run();
+
+        assertThatThrownBy(() -> clock.setTimeAndTick(Instant.ofEpochMilli(2000))).isInstanceOf(IllegalStateException.class);
+        verify(task, times(2)).run();
     }
 
     @Test

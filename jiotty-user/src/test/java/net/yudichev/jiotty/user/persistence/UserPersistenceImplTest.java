@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.persistence;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -15,6 +16,7 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
 import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +36,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -42,8 +46,11 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Optional.of;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
-import static net.yudichev.jiotty.user.persistence.UserPersistence.UserChange;
+import static net.yudichev.jiotty.user.persistence.BaseUserChangeContractTest.IDENTITY;
+import static net.yudichev.jiotty.user.persistence.RecordingUserStateListener.Changed;
+import static net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolution;
 import static net.yudichev.jiotty.user.persistence.UserPersistence.UserCreationResult;
+import static net.yudichev.jiotty.user.persistence.UserPersistenceTestTimeouts.DELIVERY_TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
@@ -66,6 +73,7 @@ class UserPersistenceImplTest {
     /// The second instance's executor in the concurrent-creation test. A separate thread is the whole point: one instance's single-threaded executor serialises
     /// its own tasks, so a race can only be staged between two instances.
     private SingleThreadedSchedulingExecutor racingExecutor;
+    private RejectingSchedulingExecutor rejectingExecutor;
     private Provider<SchedulingExecutor> executorProvider;
     private PersistenceDomainServiceImpl domainService;
     private PersistenceDomain domain;
@@ -77,7 +85,8 @@ class UserPersistenceImplTest {
         dataSourceFactory = postgres.dataSourceFactory();
         executor = new SingleThreadedSchedulingExecutor("user-persistence-test");
         racingExecutor = new SingleThreadedSchedulingExecutor("user-persistence-test-racer");
-        executorProvider = () -> executor;
+        rejectingExecutor = new RejectingSchedulingExecutor(executor);
+        executorProvider = () -> rejectingExecutor;
         domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider, new ListenerBackedTaskExceptionHandlerRegistry());
         domain = new PersistenceDomain(DOMAIN_NAME);
         domainService.start();
@@ -85,8 +94,35 @@ class UserPersistenceImplTest {
 
     @AfterEach
     void tearDown() {
+        rejectingExecutor.emptyQueue();
         Closeable.closeIfNotNull(userPersistence == null ? null : userPersistence::stop, domainService == null ? null : domainService::stop,
                                  executor, racingExecutor);
+    }
+
+    @Test
+    void aRequestTheExecutorRejectsFailsItsFuture() {
+        startUserPersistence(dataSourceFactory, List.of());
+        rejectingExecutor.fillQueue();
+
+        CompletableFuture<List<UserProfile>> listing = userPersistence.listAllProfiles();
+
+        assertThat(listing).failsWithin(Duration.ZERO).withThrowableThat().havingRootCause().isInstanceOf(RejectedExecutionException.class);
+    }
+
+    @Test
+    void aSubscriptionTheExecutorRejectsThrowsTheRejection() {
+        startUserPersistence(dataSourceFactory, List.of());
+        rejectingExecutor.fillQueue();
+
+        assertThatThrownBy(() -> userPersistence.subscribe(new RecordingUserStateListener())).isInstanceOf(RejectedExecutionException.class);
+    }
+
+    @Test
+    void anIdentitySubscriptionTheExecutorRejectsThrowsTheRejection() {
+        startUserPersistence(dataSourceFactory, List.of());
+        rejectingExecutor.fillQueue();
+
+        assertThatThrownBy(() -> userPersistence.subscribe(IDENTITY, new RecordingIdentityListener())).isInstanceOf(RejectedExecutionException.class);
     }
 
     @Test
@@ -580,27 +616,127 @@ class UserPersistenceImplTest {
                 .hasRootCauseInstanceOf(IllegalStateException.class);
     }
 
-    /// Reading the state back is the one part of announcing a change that can fail after the write has already committed. The write must stand, the failure
-    /// must reach an operator, and the notification is lost — there is no state to announce and no transaction left to retry it in.
+    /// A soft-deleted user keeps the identities they had when their deletion was requested, and a user with no row has none to update.
     @Test
-    void reportsAndDropsTheNotificationWhenTheStateReadBackFails() throws Exception {
+    void refusesToUpdateTheIdentitiesOfASoftDeletedOrMissingUser() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        UserProfile createdProfile = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
+        userPersistence.softDelete(createdProfile.id()).get(5, SECONDS);
+        var googleIdentity = new UserIdentity("google.com", "uid-g");
+
+        assertThat(userPersistence.updateAllIdentities(createdProfile.id(), List.of(identity, googleIdentity)))
+                .failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingRootCause().isInstanceOf(IllegalStateException.class);
+        assertThat(userPersistence.updateAllIdentities("u-does-not-exist", List.of(identity)))
+                .failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingRootCause().isInstanceOf(IllegalStateException.class);
+    }
+
+    /// A soft delete or restore of a user with no row changes nothing, so it announces nothing.
+    @Test
+    void aWriteToAUserWithNoRowAnnouncesNothing() throws Exception {
+        startUserPersistence(dataSourceFactory, List.of());
+        var stateListener = new RecordingUserStateListener();
+        userPersistence.subscribe(stateListener);
+        stateListener.awaitImage();
+
+        userPersistence.softDelete("u-does-not-exist").get(5, SECONDS);
+        userPersistence.restore("u-does-not-exist").get(5, SECONDS);
+
+        assertThat(stateListener.changes()).isEmpty();
+    }
+
+    /// A soft delete that cannot read the state it leaves fails, leaves the user as they were, and announces nothing.
+    @Test
+    void aWriteWhoseResultingStateCannotBeReadFailsAndChangesNothing() throws Exception {
         var toggleableDataSource = new ToggleableDataSource(dataSource);
         startUserPersistence(() -> toggleableDataSource, List.of());
-        var created = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
-        var changes = Collections.synchronizedList(new ArrayList<UserChange>());
-        userPersistence.subscribeToChanges(changes::add);
-        var reportedFailures = Collections.synchronizedList(new ArrayList<String>());
-        Closeable failureSubscription = failureRegistry.addExceptionHandler((description, _) -> reportedFailures.add(description));
+        UserProfile createdProfile = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
+        var stateListener = new RecordingUserStateListener();
+        userPersistence.subscribe(stateListener);
+        stateListener.awaitImage();
         toggleableDataSource.setFailStatementsContaining("deleted_at FROM");
 
-        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        assertThat(userPersistence.softDelete(createdProfile.id())).failsWithin(DELIVERY_TIMEOUT)
+                                                                   .withThrowableThat()
+                                                                   .havingRootCause()
+                                                                   .withMessage(ToggleableDataSource.STATEMENT_FAILURE);
 
-        assertThat(changes).as("the notification is dropped: there is no state to carry").isEmpty();
-        assertThat(reportedFailures).contains("reading back a committed user change");
-        // The write itself stands, so the drop costs a notification rather than the deletion.
         toggleableDataSource.setFailStatementsContaining(null);
-        assertThat(userPersistence.getById(created.id()).get(5, SECONDS)).isEmpty();
-        failureSubscription.close();
+        assertThat(stateListener.changes()).isEmpty();
+        assertThat(userPersistence.getById(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT).isEqualTo(Optional.of(createdProfile));
+    }
+
+    /// A subscriber whose first delivery cannot be read is told so, and receives no change after it.
+    @Test
+    void aSubscriptionWhoseFirstDeliveryCannotBeReadIsToldSoAndReceivesNothingAfter() throws Exception {
+        var toggleableDataSource = new ToggleableDataSource(dataSource);
+        startUserPersistence(() -> toggleableDataSource, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        var stateListener = new RecordingUserStateListener();
+        var identityListener = new RecordingIdentityListener();
+        toggleableDataSource.setFailConnections(true);
+
+        userPersistence.subscribe(stateListener);
+        userPersistence.subscribe(identity, identityListener);
+
+        assertThat(stateListener.image()).failsWithin(DELIVERY_TIMEOUT).withThrowableThat().havingRootCause().isInstanceOf(SQLException.class);
+        assertThat(identityListener.firstResolution()).failsWithin(DELIVERY_TIMEOUT)
+                                                      .withThrowableThat()
+                                                      .havingRootCause()
+                                                      .isInstanceOf(SQLException.class);
+        toggleableDataSource.setFailConnections(false);
+        createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
+        assertThat(identityListener.resolutions()).isEmpty();
+    }
+
+    /// A commit can take effect on the server and still report a failure to the client, so what the database then holds is read afresh and announced to both
+    /// kinds of subscriber before the failure reaches the caller.
+    @Test
+    void aCommitReportingAFailureStillAnnouncesWhatTheDatabaseHolds() throws Exception {
+        var toggleableDataSource = new ToggleableDataSource(dataSource);
+        startUserPersistence(() -> toggleableDataSource, List.of());
+        var identity = new UserIdentity("firebase", "uid-1");
+        UserProfile createdProfile = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
+        var stateListener = new RecordingUserStateListener();
+        userPersistence.subscribe(stateListener);
+        var identityListener = new RecordingIdentityListener();
+        userPersistence.subscribe(identity, identityListener);
+        identityListener.awaitFirst();
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(true);
+
+        assertThat(userPersistence.softDelete(createdProfile.id())).failsWithin(DELIVERY_TIMEOUT)
+                                                                   .withThrowableThat()
+                                                                   .havingRootCause()
+                                                                   .withMessage(ToggleableDataSource.EFFECTIVE_COMMIT_FAILURE);
+
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(false);
+        assertThat(stateListener.changes()).singleElement()
+                                           .isInstanceOfSatisfying(Changed.class, changed -> assertThat(changed.user().deletedAt()).isPresent());
+        assertThat(identityListener.resolutions()).last().isInstanceOf(IdentityResolution.SoftDeleted.class);
+        assertThat(identityListener.failures()).isEmpty();
+    }
+
+    @Test
+    void reportsACommitReportingAFailureWhoseOutcomeCannotBeReadBack() throws Exception {
+        var toggleableDataSource = new ToggleableDataSource(dataSource);
+        startUserPersistence(() -> toggleableDataSource, List.of());
+        UserProfile createdProfile = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
+        var stateListener = new RecordingUserStateListener();
+        userPersistence.subscribe(stateListener);
+        // Synchronised: the persistence thread reports into it, and the test thread reads it.
+        var reportedFailures = Collections.synchronizedList(new ArrayList<String>());
+        try (Closeable _ = failureRegistry.addExceptionHandler((description, _) -> reportedFailures.add(description))) {
+            toggleableDataSource.setCommitsTakeEffectButReportFailure(true);
+            toggleableDataSource.setUnreachableOnceACommitReportsFailure(true);
+
+            assertThat(userPersistence.softDelete(createdProfile.id())).failsWithin(DELIVERY_TIMEOUT)
+                                                                       .withThrowableThat()
+                                                                       .havingRootCause()
+                                                                       .withMessage(ToggleableDataSource.EFFECTIVE_COMMIT_FAILURE);
+
+            assertThat(reportedFailures).contains(UserPersistenceImpl.FAILED_COMMIT_READ_BACK_TASK);
+            assertThat(stateListener.changes()).isEmpty();
+        }
     }
 
     /// A row starts current rather than at the epoch, so a selection by activity never returns a user who has simply not been touched yet — and it starts on
@@ -804,9 +940,18 @@ class UserPersistenceImplTest {
     }
 
     private static final class ToggleableDataSource implements CloseableDataSource {
+        static final String EFFECTIVE_COMMIT_FAILURE = "Simulated failure reported by a commit that took effect";
+        static final String STATEMENT_FAILURE = "Simulated statement failure";
+
         private final DataSource delegate;
+        /// Set by the test thread, read by the persistence thread each time it borrows a connection.
         private final AtomicBoolean failConnections = new AtomicBoolean();
+        /// Set by the test thread, read by the persistence thread as it prepares each statement.
         private final AtomicReference<String> failStatementsContaining = new AtomicReference<>();
+        /// Set by the test thread, read by the persistence thread at each commit.
+        private final AtomicBoolean commitsTakeEffectButReportFailure = new AtomicBoolean();
+        /// Set by the test thread, read by the persistence thread at a commit that reports failure, to fail every connection borrowed after it.
+        private final AtomicBoolean unreachableOnceACommitReportsFailure = new AtomicBoolean();
 
         private ToggleableDataSource(DataSource delegate) {
             this.delegate = checkNotNull(delegate, "delegate");
@@ -816,34 +961,52 @@ class UserPersistenceImplTest {
             this.failConnections.set(failConnections);
         }
 
-        /// Fails one statement on an otherwise working connection — the only way to reach a failure that happens *after* a write has committed, which failing
-        /// the connection outright cannot do.
-        private void setFailStatementsContaining(String sqlFragment) {
+        /// Fails one statement on an otherwise working connection, which reaches a failure in the middle of a transaction that failing the connection outright
+        /// cannot.
+        ///
+        /// @param sqlFragment fails every statement whose SQL contains it, or `null` to stop failing statements
+        private void setFailStatementsContaining(@Nullable String sqlFragment) {
             failStatementsContaining.set(sqlFragment);
         }
 
+        /// Makes each commit take effect and then throw, as a commit does when the connection drops after the server has committed.
+        private void setCommitsTakeEffectButReportFailure(boolean commitsTakeEffectButReportFailure) {
+            this.commitsTakeEffectButReportFailure.set(commitsTakeEffectButReportFailure);
+        }
+
+        /// Fails every connection from the moment a commit reports its failure, so nothing can read back what that commit left.
+        private void setUnreachableOnceACommitReportsFailure(boolean unreachableOnceACommitReportsFailure) {
+            this.unreachableOnceACommitReportsFailure.set(unreachableOnceACommitReportsFailure);
+        }
+
+        // The connection is handed to the caller, which closes it.
+        @SuppressWarnings("JDBCResourceOpenedButNotSafelyClosed")
         @Override
         public Connection getConnection() throws SQLException {
             if (failConnections.get()) {
                 throw new SQLException("Simulated connection failure");
             }
             Connection connection = delegate.getConnection();
-            String sqlFragment = failStatementsContaining.get();
-            return sqlFragment == null ? connection : failingOn(connection, sqlFragment);
-        }
-
-        private static Connection failingOn(Connection connection, String sqlFragment) {
             return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
                                                        new Class<?>[]{Connection.class},
                                                        (_, method, args) -> {
-                                                           if ("prepareStatement".equals(method.getName()) && ((String) args[0]).contains(sqlFragment)) {
-                                                               throw new SQLException("Simulated statement failure");
+                                                           String sqlFragment = failStatementsContaining.get();
+                                                           if (sqlFragment != null
+                                                               && "prepareStatement".equals(method.getName())
+                                                               && ((String) args[0]).contains(sqlFragment)) {
+                                                               throw new SQLException(STATEMENT_FAILURE);
                                                            }
+                                                           Object result;
                                                            try {
-                                                               return method.invoke(connection, args);
+                                                               result = method.invoke(connection, args);
                                                            } catch (InvocationTargetException e) {
                                                                throw e.getCause();
                                                            }
+                                                           if ("commit".equals(method.getName()) && commitsTakeEffectButReportFailure.get()) {
+                                                               failConnections.set(unreachableOnceACommitReportsFailure.get());
+                                                               throw new SQLException(EFFECTIVE_COMMIT_FAILURE);
+                                                           }
+                                                           return result;
                                                        });
         }
 

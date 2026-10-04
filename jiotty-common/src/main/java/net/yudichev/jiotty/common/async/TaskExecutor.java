@@ -6,12 +6,24 @@ import org.apache.logging.log4j.Logger;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+
+import static java.util.concurrent.CompletableFuture.failedFuture;
 
 public interface TaskExecutor extends Executor {
     <T> CompletableFuture<T> submit(Callable<? extends T> task);
 
     default CompletableFuture<Void> submit(Runnable command) {
         return submit(toCallable(command));
+    }
+
+    /// Submits `task` as [#submit(Callable)] does, except that a [RejectedExecutionException] fails the returned future instead of being thrown.
+    default <T> CompletableFuture<T> submitOrFail(Callable<? extends T> task) {
+        try {
+            return submit(task);
+        } catch (RejectedExecutionException e) {
+            return failedFuture(e);
+        }
     }
 
     @Override
@@ -25,11 +37,10 @@ public interface TaskExecutor extends Executor {
     /// task failures from, or lets it propagate to whoever drives this executor.
     void execute(String taskName, Runnable command);
 
-    /// Executes `command` as [#execute(String, Runnable)] does when this executor can take it, and discards it otherwise, reporting which happened. Use this
-    /// for work whose caller has established it is safe to drop — canonically a callback from a producer that outlives the caller, which can arrive once this
-    /// executor is closed. Work carrying a durability or compliance obligation goes through [#execute(String, Runnable)], which fails loudly.
+    /// Executes `command` as [#execute(String, Runnable)] does, unless this executor has shut down.
     ///
-    /// @return `true` if `command` was queued, `false` if it was discarded
+    /// @return `false` if this executor has shut down, so `command` was not queued
+    /// @throws RejectedExecutionException if this executor's queue is full
     default boolean tryExecute(String taskName, Runnable command) {
         execute(taskName, command);
         return true;

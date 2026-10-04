@@ -9,6 +9,7 @@ import jakarta.servlet.ServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
@@ -58,13 +59,13 @@ class SseChannelTest {
 
     private final TestAdminAlertService alertService = new TestAdminAlertService();
     private ProgrammableClock clock;
-    private SchedulingExecutor executor;
+    private RejectingSchedulingExecutor executor;
     private SseChannel channel;
 
     @BeforeEach
     void setUp() {
         clock = new ProgrammableClock();
-        executor = clock.createSingleThreadedSchedulingExecutor("test");
+        executor = new RejectingSchedulingExecutor(clock.createSingleThreadedSchedulingExecutor("test"));
         channel = createChannel(SseChannel.UNBOUNDED);
         clock.tick();
     }
@@ -503,6 +504,20 @@ class SseChannelTest {
         clock.tick();
 
         verify(capture.asyncContext).complete();
+        assertThat(channel.clientCount()).isZero();
+    }
+
+    @Test
+    void aStreamWhoseCloseTheExecutorRejectsIsClosedByTheNextHeartbeat() {
+        SseCapture capture = openClient();
+        executor.fillQueue();
+
+        capture.closeHandle.get().close();
+        clock.advanceTimeAndTick(SseChannel.HEARTBEAT_PERIOD);
+        executor.emptyQueue();
+
+        verify(capture.asyncContext).complete();
+        verify(capture.onStreamClosed).run();
         assertThat(channel.clientCount()).isZero();
     }
 

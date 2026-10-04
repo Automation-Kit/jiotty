@@ -134,7 +134,8 @@ public class Graph extends BaseIdempotentCloseable {
         return !nodesPendingTrigger.isEmpty();
     }
 
-    private void assertCallingThreadConsistent() {
+    /// Asserts that this graph is called on the same thread every time: the thread of its first call.
+    public void assertCallingThreadConsistent() {
         var currentThread = Thread.currentThread();
         boolean justAssignedThread = callerThread.compareAndSet(null, currentThread);
         assert justAssignedThread || callerThread.getOpaque() == currentThread

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.rest.RestClients;
@@ -72,7 +73,7 @@ class TeslaFleetImplTest {
                      .when(call).enqueue(any());
             return call;
         });
-        teslaFleet = new TeslaFleetImpl(tokenManager, "https://fleet.example.com/api/1", Optional.empty()) {
+        teslaFleet = new TeslaFleetImpl(tokenManager, "https://fleet.example.com/api/1", Optional.empty(), new ListenerBackedTaskExceptionHandlerRegistry()) {
             @Override
             OkHttpClient createHttpClient() {
                 return httpClient;

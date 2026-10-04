@@ -71,10 +71,6 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
         this(threadNameBase, threadNameBase, ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE, new ListenerBackedTaskExceptionHandlerRegistry(), null);
     }
 
-    SingleThreadedSchedulingExecutor(String threadNameBase, ListenerBackedTaskExceptionHandlerRegistry exceptionHandler) {
-        this(threadNameBase, threadNameBase, ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE, exceptionHandler, null);
-    }
-
     /// Matches [ExecutorFactory#createSingleThreadedSchedulingExecutor(String, String, int)] so a `SingleThreadedSchedulingExecutor::new` reference is itself
     /// an unmetered [ExecutorFactory]; each executor gets its own exception-handler registry.
     public SingleThreadedSchedulingExecutor(String name, String family, int maxQueueSize) {
@@ -96,15 +92,28 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
                                      ListenerBackedTaskExceptionHandlerRegistry exceptionHandler,
                                      @Nullable MeterRegistry meterRegistry,
                                      Duration shutdownTimeout) {
+        this(name, family, maxQueueSize, exceptionHandler, meterRegistry, shutdownTimeout, new ScheduledThreadPoolExecutor(1, new ThreadFactoryBuilder()
+                .setNameFormat(name + "-%s")
+                .setDaemon(true)
+                .build()));
+    }
+
+    /// @param delegatePool a one-thread pool, which this executor configures and owns
+    @VisibleForTesting
+    SingleThreadedSchedulingExecutor(String name,
+                                     String family,
+                                     int maxQueueSize,
+                                     ListenerBackedTaskExceptionHandlerRegistry exceptionHandler,
+                                     @Nullable MeterRegistry meterRegistry,
+                                     Duration shutdownTimeout,
+                                     ScheduledThreadPoolExecutor delegatePool) {
         checkArgument(maxQueueSize > 0, "maxQueueSize must be positive: %s", maxQueueSize);
         threadNameBase = checkNotNull(name, "name");
+        checkNotNull(family, "family");
         this.maxQueueSize = maxQueueSize;
         this.shutdownTimeout = checkNotNull(shutdownTimeout, "shutdownTimeout");
         taskExceptionHandler = checkNotNull(exceptionHandler, "exceptionHandler")::onTaskException;
-        delegatePool = new ScheduledThreadPoolExecutor(1, new ThreadFactoryBuilder()
-                .setNameFormat(name + "-%s")
-                .setDaemon(true)
-                .build());
+        this.delegatePool = checkNotNull(delegatePool, "delegatePool");
         // Evict a cancelled scheduled task from the queue at cancel time instead of holding it (and its captured graph) until its fire time — matters for
         // cancel-and-reschedule patterns like debounce. Set on the concrete pool because the ExecutorServiceMetrics wrapper does not expose these setters.
         delegatePool.setRemoveOnCancelPolicy(true);
@@ -146,8 +155,6 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
         reserveAndPost(taskName, command);
     }
 
-    /// Discards `command` once this executor is shutting down, and once its immediate-task bound is reached — the latter already counted by
-    /// `executor.rejected{reason="queue_full"}`, which alerts on any shedding, so a drop stays visible without an exception reaching the caller's thread.
     @Override
     public boolean tryExecute(String taskName, Runnable command) {
         if (delegatePool.isShutdown()) {
@@ -157,18 +164,37 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
             reserveAndPost(taskName, command);
             return true;
         } catch (RejectedExecutionException e) {
-            return false;
+            // A shutdown that begins after the check above makes the pool reject the post, and still means `false`.
+            if (delegatePool.isShutdown()) {
+                return false;
+            }
+            throw e;
         }
     }
 
     @Override
     public Closeable schedule(Duration delay, Runnable command) {
-        return register(executor.schedule(guard("scheduled task", command), delay.toNanos(), NANOSECONDS));
+        var handle = new ScheduledHandle();
+        scheduleHandles.add(handle);
+        try {
+            // The fired task releases its own handle, which nothing else would once the schedule has run.
+            handle.setFuture(executor.schedule(guard("scheduled task", () -> {
+                scheduleHandles.remove(handle);
+                command.run();
+            }), delay.toNanos(), NANOSECONDS));
+        } catch (RuntimeException e) {
+            scheduleHandles.remove(handle);
+            throw e;
+        }
+        return handle;
     }
 
     @Override
     public Closeable scheduleAtFixedRate(Duration initialDelay, Duration period, Runnable command) {
-        return register(executor.scheduleAtFixedRate(guard("scheduled task", command), initialDelay.toNanos(), period.toNanos(), NANOSECONDS));
+        var handle = new ScheduledHandle();
+        handle.setFuture(executor.scheduleAtFixedRate(guard("scheduled task", command), initialDelay.toNanos(), period.toNanos(), NANOSECONDS));
+        scheduleHandles.add(handle);
+        return handle;
     }
 
     @Override
@@ -229,6 +255,11 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
         Append.to(appendable, threadNameBase);
     }
 
+    @VisibleForTesting
+    int scheduledHandleCount() {
+        return scheduleHandles.size();
+    }
+
     /// Reserves a slot against the immediate-task (not scheduled) bound — rejecting loudly (so a wedged thread cannot silently grow the heap toward OOM) when
     /// full. Called before enqueue; the slot is released by [#runImmediate] when the task starts. Only immediate `execute`/`submit` tasks are counted;
     /// scheduled/periodic tasks share the underlying JDK queue but must not consume the bound.
@@ -274,28 +305,31 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
         return Runnables.guarded(task, command, taskExceptionHandler);
     }
 
-    private Closeable register(Future<?> scheduledFuture) {
-        var handle = new ScheduledHandle(scheduledFuture);
-        scheduleHandles.add(handle);
-        return handle;
-    }
-
+    /// A scheduled task's handle. Its future is set once the pool has taken the task, which a zero-delay task can outrun, so closing before then still cancels.
     private final class ScheduledHandle extends BaseIdempotentCloseable {
-        private final Future<?> scheduledFuture;
-
-        private ScheduledHandle(Future<?> scheduledFuture) {
-            this.scheduledFuture = scheduledFuture;
-        }
+        /// `null` until the pool hands the future back; a close before then leaves the cancel to [#setFuture]. Written by the thread that schedules the task
+        /// and read by the thread that closes the handle, which can be the pool's thread running the fired task.
+        private volatile @Nullable Future<?> scheduledFuture;
 
         @Override
         protected void doClose() {
-            scheduledFuture.cancel(false);
             scheduleHandles.remove(this);
+            Future<?> future = scheduledFuture;
+            if (future != null) {
+                future.cancel(false);
+            }
+        }
+
+        public void setFuture(Future<?> future) {
+            scheduledFuture = future;
+            if (isClosed()) {
+                future.cancel(false);
+            }
         }
 
         @Override
         public String toString() {
-            return scheduledFuture.toString();
+            return String.valueOf(scheduledFuture);
         }
     }
 }

@@ -19,6 +19,7 @@ public abstract class BaseServerNode extends BaseNode implements ServerNode {
     protected final Logger logger = LogManager.getLogger(getClass());
     protected final GraphRunner runner;
     private final String name;
+    private final String triggerTaskName;
 
     private final Map<Integer, Closeable> schedulesById = new HashMap<>();
     private int scheduleIdGenerator;
@@ -26,11 +27,13 @@ public abstract class BaseServerNode extends BaseNode implements ServerNode {
     protected BaseServerNode(GraphRunner runner) {
         this.runner = checkNotNull(runner);
         name = getClass().getSimpleName();
+        triggerTaskName = name + " trigger";
     }
 
     protected BaseServerNode(GraphRunner runner, String name) {
         this.runner = checkNotNull(runner);
         this.name = checkNotNull(name);
+        triggerTaskName = name + " trigger";
     }
 
     @Override
@@ -91,7 +94,7 @@ public abstract class BaseServerNode extends BaseNode implements ServerNode {
         if (checkGraphClosedOnTrigger(triggeredBy)) {
             return;
         }
-        runner.executor().execute(() -> {
+        runner.executor().execute(triggerTaskName, () -> {
             if (checkGraphClosedOnTrigger(triggeredBy)) {
                 return;
             }

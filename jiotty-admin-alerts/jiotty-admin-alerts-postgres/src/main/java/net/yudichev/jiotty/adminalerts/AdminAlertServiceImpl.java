@@ -162,8 +162,10 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
     @Override
     public String raise(AdminAlertData data) {
         checkNotNull(data, "data");
+        // Keyed on what the caller passed, before the framework labels are added, so the caller can derive the key again to resolve the alert, and one
+        // condition keeps one bundle across restarts.
+        String key = data.key();
         AdminAlertData effectiveData = augmentWithFrameworkLabels(data);
-        String key = effectiveData.key();
         try {
             raiseStarted(effectiveData, key);
         } catch (RuntimeException e) {
@@ -182,7 +184,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
             // Stamped on the calling thread: the write runs on the executor, which under a backlog lands later
             // than the event it describes, and both eviction orders sort on these instants.
             Instant raisedAt = timeProvider.currentInstant();
-            executor.submit(() -> doRaise(effectiveData, raisedAt))
+            executor.submit(() -> doRaise(effectiveData, key, raisedAt))
                     .whenComplete((_, error) -> {
                         if (error != null) {
                             // The lost thing is an alert, so the counter is what an operator is paged on; see workspace/resource-metrics.md.
@@ -202,7 +204,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         checkNotNull(note, "note");
         return whenStartedAndNotLifecycling(() -> {
             logger.info("SYSTEM RESOLVE ALERT {}: {}", key, note);
-            return executor.submit(() -> doResolve(key, note));
+            return executor.submitOrFail(() -> doResolve(key, note));
         });
     }
 
@@ -214,7 +216,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         return whenStartedAndNotLifecycling(() -> {
             // resolvedBy is the operator's email address; the resolved_by column keeps it in full for the audit trail.
             logger.info("ADMIN RESOLVE ALERT {} by {}{}", alertId, redacted(resolvedBy), note.map(n -> ": " + n).orElse(""));
-            return executor.submit(() -> doResolveById(alertId, resolvedBy, note));
+            return executor.submitOrFail(() -> doResolveById(alertId, resolvedBy, note));
         });
     }
 
@@ -222,7 +224,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
     public CompletableFuture<Integer> deleteResolvedOlderThan(Duration retention) {
         checkNotNull(retention, "retention");
         checkArgument(retention.isPositive(), "retention must be positive, was %s", retention);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doDeleteResolvedOlderThan(retention)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doDeleteResolvedOlderThan(retention)));
     }
 
     @Override
@@ -231,7 +233,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         checkNotNull(labelValue, "labelValue");
         checkArgument(!labelName.isBlank(), "labelName must not be blank");
         checkArgument(!labelValue.isBlank(), "labelValue must not be blank");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doDeleteByLabel(labelName, labelValue)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doDeleteByLabel(labelName, labelValue)));
     }
 
     @VisibleForTesting
@@ -248,17 +250,18 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         }
     }
 
-    /// `data` here is already augmented with framework labels (see `raise(...)`); we use it as-is.
-    private String doRaise(AdminAlertData data, Instant raisedAt) {
+    /// @param data carries the framework labels, which are stored with the bundle
+    /// @param key  the caller's key, derived before those labels were added
+    private String doRaise(AdminAlertData data, String key, Instant raisedAt) {
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
-                String existingId = findActiveBundleId(connection, data.key());
+                String existingId = findActiveBundleId(connection, key);
                 String bundleId;
                 if (existingId == null) {
-                    bundleId = insertNewBundle(connection, data, raisedAt);
+                    bundleId = insertNewBundle(connection, data, key, raisedAt);
                 } else {
-                    bumpExistingBundle(connection, data.key(), raisedAt);
+                    bumpExistingBundle(connection, key, raisedAt);
                     bundleId = existingId;
                 }
                 appendEvent(connection, bundleId, raisedAt, data.description());
@@ -266,12 +269,12 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
                 return bundleId;
             } catch (SQLException e) {
                 rollbackQuietly(connection);
-                throw new RuntimeException("Failed to raise alert with key " + data.key(), e);
+                throw new RuntimeException("Failed to raise alert with key " + key, e);
             } finally {
                 resetAutoCommit(connection);
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to raise alert with key " + data.key(), e);
+            throw new RuntimeException("Failed to raise alert with key " + key, e);
         }
     }
 
@@ -284,13 +287,13 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         }
     }
 
-    private String insertNewBundle(Connection connection, AdminAlertData data, Instant raisedAt) throws SQLException {
+    private String insertNewBundle(Connection connection, AdminAlertData data, String key, Instant raisedAt) throws SQLException {
         enforceBundleCap(connection);
         String newId = UniqueId.generate('a');
         String labelsJson = Json.stringify(data.labels());
         try (PreparedStatement stmt = connection.prepareStatement(insertBundleSql)) {
             stmt.setString(1, newId);
-            stmt.setString(2, data.key());
+            stmt.setString(2, key);
             stmt.setString(3, data.title());
             stmt.setString(4, data.severity().name());
             stmt.setString(5, labelsJson);
@@ -302,9 +305,9 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
             } catch (SQLException e) {
                 if (isUniqueViolation(e)) {
                     // Lost the race against a concurrent raise; fall back to bump path.
-                    String existingId = findActiveBundleId(connection, data.key());
-                    checkState(existingId != null, "raise: key %s collided then disappeared", data.key());
-                    bumpExistingBundle(connection, data.key(), raisedAt);
+                    String existingId = findActiveBundleId(connection, key);
+                    checkState(existingId != null, "raise: key %s collided then disappeared", key);
+                    bumpExistingBundle(connection, key, raisedAt);
                     return existingId;
                 }
                 throw e;

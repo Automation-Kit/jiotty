@@ -122,7 +122,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                                                           .setRandomizationFactor(connectBackoffRandomisationFactor)
                                                           .build());
         AsyncOperationRetry asyncOperationRetry = new AsyncOperationRetryImpl(AsyncOperationFailureHandler.forBackoff(backoff, logger));
-        executor.execute(() -> {
+        executor.execute("mqttConnect", () -> {
             client.setCallback(new ConnectionStatusCallback());
             CompletableFuture<Void> connectFuture = asyncOperationRetry
                     .withBackOffAndRetry("MQTT Connect to " + client.getServerURI(),
@@ -191,7 +191,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         checkStarted();
         BiConsumer<String, MqttMessage> callback = guardedCallback(new MessageToStringDataCallback(dataCallback));
         var subscription = new Subscription(qos, callback);
-        executor.execute(() -> {
+        executor.execute("mqttSubscribe", () -> {
             deliverImage(topicFilter, callback);
             Set<Subscription> subscriptions = subscriptionsByFilter.computeIfAbsent(topicFilter, _ -> new HashSet<>());
             boolean firstForFilter = subscriptions.isEmpty();
@@ -267,7 +267,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     private void doSubscribe(String topicFilter, int qos, BiConsumer<String, MqttMessage> callback) {
         asUnchecked(() -> client.subscribe(topicFilter, qos, (topic, message) -> {
             logger.trace("IN topic: {}, msg: {}", topic, message);
-            executor.execute(() -> {
+            executor.execute("mqttMessageArrived", () -> {
                 // Cache every received message so a later subscriber to the same filter gets the last value via deliverImage. This is the live dispatch
                 // path for every subscription (initial and restored on reconnect), so it sees retained messages the broker redelivers on subscribe.
                 lastReceivedMessageByTopic.put(topic, message);
@@ -318,10 +318,14 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         @Override
         public void connectComplete(boolean reconnect, String serverURI) {
             logger.info("{} completed connection to {}, reconnected={}", client.getClientId(), serverURI, reconnect);
-            executor.execute(() -> {
-                connectionStatusListeners.notify(connectionStatus = new Connected(reconnect));
-                if (reconnect) {
-                    restoreSubscriptions();
+            executor.execute("mqttConnectComplete", () -> {
+                // A listener that throws must not cost every topic its broker subscription.
+                try {
+                    connectionStatusListeners.notify(connectionStatus = new Connected(reconnect));
+                } finally {
+                    if (reconnect) {
+                        restoreSubscriptions();
+                    }
                 }
             });
         }
@@ -342,10 +346,13 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         @Override
         public void connectionLost(Throwable cause) {
             logger.info("{} lost connection to {}", client.getClientId(), client.getServerURI(), cause);
-            executor.execute(() -> {
-                connectionStatusListeners.notify(connectionStatus = new Disconnected(cause));
-                subRetryTimerHandle.close();
-                throttledErrorLogger.accept(cause);
+            executor.execute("mqttConnectionLost", () -> {
+                try {
+                    connectionStatusListeners.notify(connectionStatus = new Disconnected(cause));
+                } finally {
+                    subRetryTimerHandle.close();
+                    throttledErrorLogger.accept(cause);
+                }
             });
         }
 

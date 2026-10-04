@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.energy.octopus;
 
 import com.google.common.collect.ImmutableMap;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
@@ -498,7 +499,8 @@ class OctopusEnergyProviderServiceTest {
                                                 RetryableOperationExecutor.noRetries(),
                                                 octopusRegistry,
                                                 priceForecastRegistry,
-                                                cache);
+                                                cache,
+                                                new ListenerBackedTaskExceptionHandlerRegistry());
     }
 
     /// Runs a cache-backed query twice over the same range, draining the provider's executor after each so the futures complete deterministically.

@@ -50,7 +50,14 @@ class OctopusAgilePriceServiceRegistryTest {
                  .thenReturn(completedFuture(List.of()));
         // Hand-rolled Factory mirrors what Guice's FactoryModuleBuilder would inject — keeps the test free of Guice setup.
         OctopusAgilePriceService.Factory factory = (regionService, productCode, tariffCode) ->
-                new OctopusAgilePriceServiceImpl(() -> executor, clock, cache, jobScheduler, regionService, productCode, tariffCode);
+                new OctopusAgilePriceServiceImpl(() -> executor,
+                                                 clock,
+                                                 cache,
+                                                 jobScheduler,
+                                                 new ListenerBackedTaskExceptionHandlerRegistry(),
+                                                 regionService,
+                                                 productCode,
+                                                 tariffCode);
         registry = new OctopusAgilePriceServiceRegistry(octopusEnergy, factory);
         registry.start();
     }

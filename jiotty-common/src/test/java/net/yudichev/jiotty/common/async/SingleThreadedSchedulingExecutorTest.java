@@ -1,8 +1,10 @@
 package net.yudichev.jiotty.common.async;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import net.yudichev.jiotty.common.lang.Closeable;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,6 +14,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -29,7 +35,7 @@ class SingleThreadedSchedulingExecutorTest {
     @BeforeEach
     void setUp() {
         exceptionHandler = new ListenerBackedTaskExceptionHandlerRegistry();
-        executor = new SingleThreadedSchedulingExecutor("test", exceptionHandler);
+        executor = executorNamed("test");
     }
 
     @AfterEach
@@ -143,7 +149,7 @@ class SingleThreadedSchedulingExecutorTest {
     void drainsSelfFedImmediateBacklogOnClose() {
         var counter = new AtomicInteger();
         int chainLength = 5;
-        try (var selfFeedingExecutor = new SingleThreadedSchedulingExecutor("selffeed", exceptionHandler)) {
+        try (var selfFeedingExecutor = executorNamed("selffeed")) {
             CountDownLatch release = occupy(selfFeedingExecutor);
             // Each link runs during the drain and enqueues the next, so close() keeps draining until the chain is exhausted.
             var chain = new Runnable() {
@@ -164,7 +170,7 @@ class SingleThreadedSchedulingExecutorTest {
 
     @Test
     void doesNotAwaitTimersRearmedDuringShutdown() {
-        try (var timerExecutor = new SingleThreadedSchedulingExecutor("timers", exceptionHandler)) {
+        try (var timerExecutor = executorNamed("timers")) {
             CountDownLatch release = occupy(timerExecutor);
             timerExecutor.execute(() -> timerExecutor.schedule(Duration.ofHours(1), () -> {}));
 
@@ -247,24 +253,87 @@ class SingleThreadedSchedulingExecutorTest {
         assertThat(ran).as("a discarded task never runs").isNotDone();
     }
 
-    /// A producer's callback must not have an exception thrown at it when the bound is reached either, so the drop is reported the same way — and stays
-    /// visible through the rejection counter that the shedding alert watches.
+    /// Only a shut-down executor makes `tryExecute` return `false`; a full queue rejects the task as `execute` does, counted by the counter the alert watches.
     @Test
-    void tryExecuteDiscardsTheTaskAndCountsItWhenTheQueueIsFull() {
+    void tryExecuteThrowsAndCountsTheRejectionWhenTheQueueIsFull() {
         var registry = new SimpleMeterRegistry();
         try (var boundedExecutor = new SingleThreadedSchedulingExecutor("bounded", "fam", 1, exceptionHandler, registry)) {
             CountDownLatch release = occupy(boundedExecutor);
             boundedExecutor.execute(() -> {});   // fills the single queue slot behind the occupying task
 
-            boolean queued = boundedExecutor.tryExecute("test", () -> {});
+            assertThatThrownBy(() -> boundedExecutor.tryExecute("test", () -> {})).isInstanceOf(RejectedExecutionException.class);
 
-            assertThat(queued).isFalse();
             assertThat(registry.get("executor.rejected").tags("name", "bounded", "reason", "queue_full").counter().count()).isEqualTo(1.0);
             assertThat(registry.get("executor.queued.immediate").tags("name", "bounded").gauge().value())
-                    .as("the discarded task released the slot it reserved")
+                    .as("the rejected task released the slot it reserved")
                     .isEqualTo(1.0);
             release.countDown();
         }
+    }
+
+    @Test
+    void aFiredOneShotScheduleReleasesItsHandle() {
+        var ran = new CompletableFuture<Void>();
+
+        executor.schedule(Duration.ZERO, () -> ran.complete(null));
+
+        assertThat(ran).succeedsWithin(Duration.ofSeconds(10));
+        assertThat(executor.scheduledHandleCount()).isZero();
+    }
+
+    @Test
+    void aClosedPeriodicScheduleReleasesItsHandle() {
+        var firstRun = new CompletableFuture<Void>();
+        Closeable schedule = executor.scheduleAtFixedRate(Duration.ZERO, Duration.ofHours(1), () -> firstRun.complete(null));
+        assertThat(firstRun).succeedsWithin(Duration.ofSeconds(10));
+
+        schedule.close();
+
+        assertThat(executor.scheduledHandleCount()).isZero();
+    }
+
+    @Test
+    void aClosedScheduleReleasesItsHandle() {
+        Closeable schedule = executor.schedule(Duration.ofHours(1), () -> {});
+
+        schedule.close();
+
+        assertThat(executor.scheduledHandleCount()).isZero();
+    }
+
+    @Test
+    void aScheduleRejectedByAShutDownExecutorLeavesNoHandle() {
+        executor.close();
+
+        assertThatThrownBy(() -> executor.schedule(Duration.ofHours(1), () -> {})).isInstanceOf(RejectedExecutionException.class);
+        assertThat(executor.scheduledHandleCount()).isZero();
+    }
+
+    @Test
+    void aScheduleWhoseHandleCloseRacesAheadOfItsFutureNeverRuns() {
+        var pool = new PausingPool();
+        var raceExecutor = new SingleThreadedSchedulingExecutor("race", "race", 100, exceptionHandler, null, Duration.ofSeconds(10), pool);
+        CountDownLatch releaseBlocker = occupy(raceExecutor);
+        var ran = new AtomicBoolean();
+        var schedulingThread = new Thread(() -> raceExecutor.schedule(Duration.ZERO, () -> ran.set(true)), "test-schedule");
+        pool.pauseSchedulingOn(schedulingThread);
+        schedulingThread.start();
+        await(pool.scheduled, "the task was queued and its future not yet handed back");
+
+        var closeThread = new Thread(raceExecutor::close, "test-close");
+        closeThread.start();
+        // close() closes every handle before it parks in its drain behind the blocker, so the handle is closed while its future is still unset.
+        awaitBlocked(closeThread);
+        pool.resumeScheduling.countDown();
+        join(schedulingThread);
+        releaseBlocker.countDown();
+        join(closeThread);
+
+        assertThat(ran).isFalse();
+    }
+
+    private SingleThreadedSchedulingExecutor executorNamed(String name) {
+        return new SingleThreadedSchedulingExecutor(name, name, ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE, exceptionHandler, null);
     }
 
     /// Occupies the executor's single thread until the returned latch is counted down, so any task submitted afterwards queues behind it.
@@ -302,6 +371,10 @@ class SingleThreadedSchedulingExecutorTest {
         return Duration.ofNanos(System.nanoTime() - releaseNanoTime);
     }
 
+    private static void join(Thread thread) {
+        assertThat(getAsUnchecked(() -> thread.join(Duration.ofSeconds(10)))).as("thread '%s' finished", thread.getName()).isTrue();
+    }
+
     private static void awaitBlocked(Thread thread) {
         long deadlineNanoTime = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         while (System.nanoTime() < deadlineNanoTime) {
@@ -312,5 +385,36 @@ class SingleThreadedSchedulingExecutorTest {
             Thread.onSpinWait();
         }
         throw new AssertionError("thread '" + thread.getName() + "' did not reach a waiting state, was " + thread.getState());
+    }
+
+    /// Holds one thread's [#schedule(Runnable, long, TimeUnit)] call after the task is queued and before its future is returned, which is the window the
+    /// handle's guard covers.
+    private static final class PausingPool extends ScheduledThreadPoolExecutor {
+        final CountDownLatch scheduled = new CountDownLatch(1);
+        final CountDownLatch resumeScheduling = new CountDownLatch(1);
+        /// The thread whose scheduling is held; `null` holds none.
+        private volatile @Nullable Thread pausedThread;
+
+        PausingPool() {
+            super(1, runnable -> {
+                var thread = new Thread(runnable, "race-pool");
+                thread.setDaemon(true);
+                return thread;
+            });
+        }
+
+        void pauseSchedulingOn(Thread thread) {
+            pausedThread = thread;
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            ScheduledFuture<?> future = super.schedule(command, delay, unit);
+            if (Thread.currentThread() == pausedThread) {
+                scheduled.countDown();
+                await(resumeScheduling, "the scheduling thread was resumed");
+            }
+            return future;
+        }
     }
 }

@@ -55,7 +55,14 @@ class OctopusAgilePriceServiceImplTest {
         var jobScheduler = new JobSchedulerImpl(clock, clock, ZoneOffset.UTC, new ListenerBackedTaskExceptionHandlerRegistry());
         var executor = clock.createSingleThreadedSchedulingExecutor("thread");
         var cache = new InMemoryTimeSeriesCache();
-        service = new OctopusAgilePriceServiceImpl(() -> executor, clock, cache, jobScheduler, regionService, PRODUCT_CODE, TARIFF_CODE);
+        service = new OctopusAgilePriceServiceImpl(() -> executor,
+                                                   clock,
+                                                   cache,
+                                                   jobScheduler,
+                                                   new ListenerBackedTaskExceptionHandlerRegistry(),
+                                                   regionService,
+                                                   PRODUCT_CODE,
+                                                   TARIFF_CODE);
 
         lenient().when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any()))
                  .thenReturn(completedFuture(prices(time(1, 14, 0), time(1, 23, 00))));

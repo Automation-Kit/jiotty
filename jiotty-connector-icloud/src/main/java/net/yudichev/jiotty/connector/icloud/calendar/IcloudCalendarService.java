@@ -10,6 +10,7 @@ import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ObservableValue;
@@ -65,13 +66,17 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
 
     private final Provider<SchedulingExecutor> executorProvider;
     private final Supplier<CloseableHttpClient> httpClientFactory;
-    private final ObservableValue<AuthState> apiKeyState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"));
+    private final ObservableValue<AuthState> apiKeyState;
     private SchedulingExecutor executor;
 
     @Inject
     public IcloudCalendarService(@Dependency Provider<SchedulingExecutor> executorProvider,
                                  @Username String username,
-                                 @Password String password) {
+                                 @Password String password,
+                                 TaskFailureReporter taskFailureReporter) {
+        checkNotNull(taskFailureReporter);
+        apiKeyState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"),
+                                                 e -> taskFailureReporter.onTaskException("Delivering the iCloud Calendar authentication state", e));
         this.executorProvider = checkNotNull(executorProvider);
         var credentialsProvider = new BasicCredentialsProvider();
         credentialsProvider.setCredentials(AuthScope.ANY, new UsernamePasswordCredentials(checkNotNull(username), checkNotNull(password)));

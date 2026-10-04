@@ -6,9 +6,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
+import java.util.concurrent.CompletionStage;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 /// Persistence gateway for user profiles and identities.
@@ -16,10 +15,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// - Acts as the golden source for user profile data.
 /// - Uses soft deletes; reads exclude deleted users and identities.
 /// - Supports multiple provider identities per user.
-///
-/// TODO the change subscription here is an eventing bolt-on — no image on subscribe and no filter, so every subscriber
-///  re-derives what this store already knew. It is to be merged with car-engine's `AdminUserDirectory`, which delivers
-///  an image on subscribe and then deltas. See `workspace/USER-DIRECTORY-MERGE.md`.
+/// - Publishes its state as an image followed by each committed change, in commit order and serialised with its writes.
 public interface UserPersistence {
     /// Returns an existing user for `identity`, or creates a new user atomically with `profile`.
     ///
@@ -120,46 +116,64 @@ public interface UserPersistence {
     /// read the identities of a user that has been soft-deleted ([#softDelete]) but not yet hard-deleted ([#hardDelete]).
     CompletableFuture<List<UserIdentityRecord>> listIdentitiesIgnoringDeletion(String userId);
 
-    /// Soft-deletes the user and all linked identities. Idempotent: a no-op if the user is already soft-deleted.
+    /// Soft-deletes the user and all linked identities. Idempotent: a no-op if the user is already soft-deleted, though the user's state is delivered to
+    /// subscribers on every call, so a retry repeats a delivery that a failed commit lost.
     ///
     /// @param userId internal user id
     CompletableFuture<Void> softDelete(String userId);
 
     /// Permanently removes the user and all their identity rows in one transaction. Intended for the erasure cascade after the grace period. Idempotent:
-    /// completes normally even if the rows are already gone.
+    /// completes normally even if the rows are already gone, and delivers the removal to subscribers again.
     ///
     /// @param userId internal user id
+    /// @return completes once the rows are gone and every [UserStateListener] registered at the commit has applied the removal
     CompletableFuture<Void> hardDelete(String userId);
 
     /// Reverses [#softDelete]: clears the deletion mark on the user and on the identities that were soft-deleted together with it (matched by the shared
-    /// deletion timestamp), reviving the account during the grace period. No-op if the user is not currently soft-deleted.
+    /// deletion timestamp), reviving the account during the grace period. No-op if the user is not currently soft-deleted, though the user's state is
+    /// delivered to subscribers on every call.
     ///
     /// @param userId internal user id
     CompletableFuture<Void> restore(String userId);
 
-    /// Calls the listener once a committed change has altered a user's profile, identity set or deletion state. Activity recorded by [#touchLastActive] is
-    /// excluded, along with any statement that altered no row.
-    ///
-    /// **Late-joiner contract: no image is delivered on subscribe by design.** This is a delta stream whose image is [#listAllProfilesIgnoringDeletion], and
-    /// registration is not atomic with that read: a change committing between the two is delivered before the image that already contains it, so a
-    /// subscriber holds arriving changes until it has applied the image, then applies them.
+    /// Delivers every user's state, soft-deleted users included, then each committed change to it, one at a time and in commit order. **A listener must
+    /// return without blocking**, because the writes wait for it.
     ///
     /// @return a handle that unsubscribes the listener
-    Closeable subscribeToChanges(Consumer<? super UserChange> listener);
+    Closeable subscribe(UserStateListener listener);
 
-    /// A committed change to one user's record.
+    /// Delivers what `identity` resolves to, as [#resolveByIdentity] answers it, then each committed change to that answer, one at a time and in commit
+    /// order. **A listener must return without blocking**, as for [#subscribe(UserStateListener)].
     ///
-    /// @param userId internal user id of the user whose record changed
-    /// @param state  the user's state as it was read back after the commit: present with an empty [UserProfileWithDeletion#deletedAt()] when active, present
-    ///               with one when soft-deleted, and empty once the user is hard-deleted. A second change committing in between is read here instead, so this
-    ///               is the state after the change rather than the state the change produced. It carries no identity data, so a change to the identity set
-    ///               alone arrives with a `state` equal to the previous one; read [#listIdentities] to see what changed.
-    record UserChange(String userId, Optional<UserProfileWithDeletion> state) {
-        public UserChange {
-            checkNotNull(userId, "userId");
-            checkArgument(!userId.isBlank(), "userId must not be blank");
-            checkNotNull(state, "state");
-        }
+    /// @return a handle that unsubscribes the listener
+    Closeable subscribe(UserIdentity identity, IdentityResolutionListener listener);
+
+    /// Receives [#subscribe(UserStateListener)]'s deliveries.
+    interface UserStateListener {
+        /// Every user when the subscription started, delivered once and before any change.
+        void onImage(List<UserProfileWithDeletion> users);
+
+        /// A user created, changed, soft-deleted or restored, as the committing write left them. A repeated deletion or restore delivers the state it
+        /// found unchanged, so the same state can arrive twice.
+        void onChanged(UserProfileWithDeletion user);
+
+        /// A user hard-deleted, including by a repeated [#hardDelete] of a user already gone.
+        ///
+        /// @return the stage [#hardDelete] waits for
+        /// @implSpec The returned stage must complete once the removal has been applied.
+        CompletionStage<?> onRemoved(String userId);
+
+        /// The subscription has ended, and nothing further arrives: the image could not be read, or this listener threw on a delivery and so missed a change.
+        void onSubscriptionFailed(Throwable failure);
+    }
+
+    /// Receives [#subscribe(UserIdentity, IdentityResolutionListener)]'s deliveries.
+    interface IdentityResolutionListener {
+        /// What the identity resolves to: first its resolution when the subscription started, then each different one after it.
+        void onResolution(IdentityResolution resolution);
+
+        /// The subscription has ended, and nothing further arrives: the first resolution could not be read, or this listener threw on a delivery.
+        void onSubscriptionFailed(Throwable failure);
     }
 
     /// The outcome of [#getOrCreateByIdentity].
@@ -188,6 +202,13 @@ public interface UserPersistence {
 
     /// The outcome of [#resolveByIdentity].
     sealed interface IdentityResolution permits IdentityResolution.Active, IdentityResolution.SoftDeleted, IdentityResolution.Absent {
+        /// The resolution of an identity linked to `profile`'s user.
+        ///
+        /// @param softDeleted whether that user is soft-deleted
+        static IdentityResolution createLinked(UserProfile profile, boolean softDeleted) {
+            return softDeleted ? new SoftDeleted(profile) : new Active(profile);
+        }
+
         /// The identity links to an active (not soft-deleted) user.
         record Active(UserProfile profile) implements IdentityResolution {
             public Active {

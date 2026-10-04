@@ -3,8 +3,12 @@ package net.yudichev.jiotty.adminalerts;
 import com.google.common.collect.ImmutableMap;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
+import java.util.Optional;
 import java.util.function.BiConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,6 +60,18 @@ class AdminAlertServiceTest {
         consumer.accept("result", null);
 
         assertThat(service.activeAlertsById()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource(nullValues = "-", value = {"the wave failed, the wave failed", "-, ''", "'   ', ''"})
+    void raise_withNoFailure_isDescribedByTheDescriptionAlone(@Nullable String description, String expectedDescription) {
+        service.raise(AdminAlertSeverity.ERROR, "Server panic", logger, Optional.ofNullable(description), Optional.empty());
+
+        assertThat(service.activeAlertsById().values())
+                .singleElement()
+                .satisfies(alert -> assertThat(service.eventsByAlertId(alert.id()))
+                        .singleElement()
+                        .satisfies(event -> assertThat(event.description()).isEqualTo(expectedDescription)));
     }
 
     /// The labels are the point of this overload: they let a caller find the alert again — or delete it — once the subject it names is gone, which a title

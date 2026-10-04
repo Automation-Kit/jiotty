@@ -4,6 +4,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
@@ -66,14 +67,17 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
     private final String listVehiclesUrl;
     private final String telemetryConfigCreateUrl;
     private final @Nullable SslCustomisation sslCustomisation;
-    private final ObservableValue<AuthState> accessTokenObservable = ObservableValue.concurrent(INITIAL_STATE);
+    private final ObservableValue<AuthState> accessTokenObservable;
     private OkHttpClient httpClient;
     private @Nullable Closeable tokenSubscription;
 
     @Inject
     public TeslaFleetImpl(@Dependency OAuth2TokenManager tokenManager,
                           @BaseUrl String baseUrl,
-                          @Dependency Optional<SslCustomisation> sslCustomisation) {
+                          @Dependency Optional<SslCustomisation> sslCustomisation,
+                          TaskFailureReporter taskFailureReporter) {
+        checkNotNull(taskFailureReporter);
+        accessTokenObservable = ObservableValue.concurrent(INITIAL_STATE, e -> taskFailureReporter.onTaskException("Delivering the Tesla access token", e));
         this.tokenManager = checkNotNull(tokenManager);
         this.baseUrl = Objects.requireNonNull(baseUrl);
         this.sslCustomisation = sslCustomisation.orElse(null);
@@ -124,8 +128,7 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
                     .get()
                     .build();
 
-            int requestId = requestIdGenerator.incrementAndGet();
-            logger.debug("[{}] executing GET {}", requestId, listVehiclesUrl);
+            int requestId = startLoggedRequest("GET", listVehiclesUrl);
             // https://developer.tesla.com/docs/fleet-api/endpoints/vehicle-endpoints#list
             // Ignoring pagination
             return call(httpClient.newCall(request), LIST_VEHICLES_RESPONSE_TYPE, 0)
@@ -177,8 +180,7 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
                                                .header("Authorization", "Bearer " + accessToken)
                                                .get()
                                                .build();
-            int requestId = requestIdGenerator.incrementAndGet();
-            logger.debug("[{}] executing {}", requestId, url);
+            int requestId = startLoggedRequest("GET", url);
             return callAndAllow408(requestId, httpClient.newCall(request), responseType)
                     .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
                     .thenApply(wrapperOptional -> wrapperOptional.map(TeslaHttp.unwrapOrFail()));
@@ -259,12 +261,18 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
                                                    .header("Authorization", "Bearer " + accessToken)
                                                    .delete()
                                                    .build();
-            int requestId = requestIdGenerator.incrementAndGet();
-            logger.debug("[{}] executing DELETE {}", requestId, url);
+            int requestId = startLoggedRequest("DELETE", url);
             return call(httpClient.newCall(request), responseType, 0, true)
                     .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
                     .thenApply(TeslaHttp.unwrapOrFail());
         });
+    }
+
+    /// @return the id the request's later log lines carry
+    private int startLoggedRequest(String method, String url) {
+        int requestId = requestIdGenerator.incrementAndGet();
+        logger.debug("[{}] executing {} {}", requestId, method, url);
+        return requestId;
     }
 
     @BindingAnnotation

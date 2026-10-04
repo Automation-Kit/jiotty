@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.async.backoff;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.MutableReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,7 +12,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Supplier;
 
 import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
@@ -92,7 +94,7 @@ class RetryableOperationExecutorImplTest {
         clock.tick(); // run the first attempt
 
         assertThat(attempts.get()).isEqualTo(1);
-        assertThatThrownBy(result::join).isInstanceOf(CompletionException.class).hasCause(permanent);
+        assertThat(result).failsWithin(Duration.ZERO).withThrowableOfType(ExecutionException.class).withCause(permanent);
     }
 
     @Test
@@ -103,7 +105,37 @@ class RetryableOperationExecutorImplTest {
         var result = executor.withBackOffAndRetry("op", () -> failure(new RuntimeException("transient")));
         clock.tick(); // run the first attempt
 
-        assertThatThrownBy(result::join).isInstanceOf(CompletionException.class).hasCause(giveUp);
+        assertThat(result).failsWithin(Duration.ZERO).withThrowableOfType(ExecutionException.class).withCause(giveUp);
+    }
+
+    @Test
+    void aBackoffEventConsumerThatThrowsDoesNotCostTheRetry() {
+        when(exceptionHandler.handle(any(), any())).thenReturn(Optional.of(BACKOFF.toMillis()));
+        var attempts = new MutableReference<>(0);
+        Supplier<CompletableFuture<String>> action = () -> {
+            attempts.set(attempts.get() + 1);
+            return attempts.get() == 1 ? failure(new RuntimeException("transient")) : CompletableFuture.completedFuture("ok");
+        };
+
+        var result = executor.withBackOffAndRetry("op", action, (_, _) -> {throw new RejectedExecutionException("queue full");});
+        assertThatThrownBy(clock::tick).isInstanceOf(RejectedExecutionException.class);
+        clock.advanceTimeAndTick(BACKOFF);
+
+        assertThat(result).isCompletedWithValue("ok");
+    }
+
+    @Test
+    void anAttemptOutcomeTheRetryExecutorRejectsFailsTheResult() {
+        var rejectingExecutor = new RejectingSchedulingExecutor(clock.createSingleThreadedSchedulingExecutor("rejecting"));
+        var rejectingRetries = new RetryableOperationExecutorImpl(() -> exceptionHandler, () -> rejectingExecutor);
+        var attempt = new CompletableFuture<String>();
+        var result = rejectingRetries.withBackOffAndRetry("op", () -> attempt);
+        clock.tick();
+
+        rejectingExecutor.fillQueue();
+        attempt.complete("ok");
+
+        assertThat(result).failsWithin(Duration.ZERO).withThrowableOfType(ExecutionException.class).withCauseInstanceOf(RejectedExecutionException.class);
     }
 
     @Test

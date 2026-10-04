@@ -30,6 +30,7 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -210,7 +211,7 @@ public final class SseChannel extends BaseIdempotentCloseable {
                 }
 
                 private void removeClient() {
-                    executor.tryExecute("closeSseClient", () -> closeAndRemoveClient(client));
+                    client.close();
                 }
             });
         } catch (RuntimeException e) {
@@ -272,7 +273,11 @@ public final class SseChannel extends BaseIdempotentCloseable {
         var ping = new PingFrame(currentDateTimeProvider.currentInstant());
         // Over a copy: a client whose write fails drops itself from the connected set as part of that failure.
         for (SseClient client : ImmutableList.copyOf(sseClients)) {
-            client.sendEvent("ping", ping);
+            if (client.closeRejected) {
+                closeAndRemoveClient(client);
+            } else {
+                client.sendEvent("ping", ping);
+            }
         }
     }
 
@@ -305,6 +310,8 @@ public final class SseChannel extends BaseIdempotentCloseable {
         private final String clientId;
         private final Closeable onStreamClosed;
         private boolean closed;
+        /// Set from any thread when a close could not be queued, so [#sendHeartbeat()] ends the stream instead.
+        private volatile boolean closeRejected;
 
         SseClient(AsyncContext asyncContext, String clientId, int clientIdSeqNum, Closeable onStreamClosed) throws IOException {
             this.asyncContext = checkNotNull(asyncContext);
@@ -320,10 +327,16 @@ public final class SseChannel extends BaseIdempotentCloseable {
             executor.tryExecute("sendSseEvent", () -> sendEvent(eventName, data));
         }
 
-        /// Ends the stream on the channel executor.
+        /// Ends the stream on the channel executor, or on the next heartbeat when the executor's queue is full: the heartbeat is scheduled rather than
+        /// queued, so it still runs, and a stream past its authorisation is closed within one [#HEARTBEAT_PERIOD].
         @Override
         public void close() {
-            executor.tryExecute("closeSseClient", () -> closeAndRemoveClient(this));
+            try {
+                executor.tryExecute("closeSseClient", () -> closeAndRemoveClient(this));
+            } catch (RejectedExecutionException e) {
+                logger.debug("[SSE {}] close deferred to the next heartbeat: {}", clientId, humanReadableMessageFormattable(e));
+                closeRejected = true;
+            }
         }
 
         private void init() {

@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.Preconditions.checkState;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
@@ -21,6 +22,14 @@ public final class InMemoryVarStore implements PrefixClearableVarStore {
     private static final ObjectMapper mapper = VarStoreJson.INDENTED;
 
     private final Map<String, String> serialisedValuesByKey = new ConcurrentHashMap<>();
+    /// Atomic for the reason the map is concurrent: integration tests share this store across executor threads, and the hook is read and cleared in one step.
+    private final AtomicReference<RuntimeException> nextClearFailure = new AtomicReference<>();
+
+    /// Makes the next [#clearValue] of any key, through this store or a user's view of it, throw `failure` and leave the value stored, as a store that cannot
+    /// reach its database does.
+    public void failNextClearWith(RuntimeException failure) {
+        nextClearFailure.set(failure);
+    }
 
     @Override
     public void saveValue(String key, Object value) {
@@ -35,6 +44,10 @@ public final class InMemoryVarStore implements PrefixClearableVarStore {
 
     @Override
     public void clearValue(String key) {
+        RuntimeException failure = nextClearFailure.getAndSet(null);
+        if (failure != null) {
+            throw failure;
+        }
         serialisedValuesByKey.remove(key);
     }
 

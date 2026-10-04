@@ -12,8 +12,10 @@ import java.util.function.Consumer;
 /// 3. When the observer is unsubscribed, it stops receiving further notifications.
 public interface ObservableValue<T> extends Consumer<T>, Observable<T> {
     /// Creates [ConcurrentObservableValue]
-    static <T> ObservableValue<T> concurrent(T initialValue) {
-        return new ConcurrentObservableValue<>(initialValue);
+    ///
+    /// @param listenerFailureHandler see [ConcurrentObservableValue#ConcurrentObservableValue(Object, Consumer)]
+    static <T> ObservableValue<T> concurrent(T initialValue, Consumer<? super RuntimeException> listenerFailureHandler) {
+        return new ConcurrentObservableValue<>(initialValue, listenerFailureHandler);
     }
 
     static <T> ObservableValue<T> simple(T initialValue) {

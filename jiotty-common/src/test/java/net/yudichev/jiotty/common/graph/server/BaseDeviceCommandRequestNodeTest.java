@@ -242,19 +242,12 @@ class BaseDeviceCommandRequestNodeTest {
         }
 
         @Override
-        public void scheduleNewWave(String triggeredBy) {
-            if (graph().inWave()) {
-                return;
-            }
-            executor().execute(triggeredBy, () -> {
-                if (!isClosed()) {
-                    graph().runWaves();
-                }
-            });
+        protected void doRunWaves(String triggeredBy) {
+            graph().runWaves();
         }
 
         @Override
-        public void panic(@Nullable String message, @Nullable Throwable cause) {
+        protected void onPanic(@Nullable String message, @Nullable Throwable cause) {
             fail(message != null ? message : String.valueOf(cause), cause);
         }
     }

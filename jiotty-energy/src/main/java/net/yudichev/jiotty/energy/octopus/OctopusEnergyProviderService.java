@@ -5,6 +5,7 @@ import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -82,12 +83,12 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     /// past slot is fetched from Octopus at most once across every caller and process restart.
     private final TimeSeriesCache cache;
     /// The latest price-or-failure result, empty until the first one is produced. New price subscribers receive the present value immediately.
-    private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult = ObservableValue.concurrent(Optional.empty());
+    private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult;
     /// Mirrors the Agile delegate's expectation: the forecast fills slots beyond the real prices but never makes the real ones reach further. Confined to
     /// [#executor], as is every touch of it including subscription.
     private final ObservableValue<@Nullable Instant> nextRefreshTime = ObservableValue.simple(null);
     /// The latest account-fetch outcome, empty until the first one is produced. New account-details subscribers receive the present value immediately.
-    private final ObservableValue<Optional<AccountFetchResult>> accountResult = ObservableValue.concurrent(Optional.empty());
+    private final ObservableValue<Optional<AccountFetchResult>> accountResult;
 
     private SchedulingExecutor executor;
     private OctopusAccountService accountService;
@@ -112,7 +113,11 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
                                         @PollRetry RetryableOperationExecutor retryExecutor,
                                         OctopusAgilePriceServiceRegistry octopusRegistry,
                                         PriceForecastServiceRegistry priceForecastRegistry,
-                                        TimeSeriesCache cache) {
+                                        TimeSeriesCache cache,
+                                        TaskFailureReporter taskFailureReporter) {
+        checkNotNull(taskFailureReporter);
+        priceResult = ObservableValue.concurrent(Optional.empty(), e -> taskFailureReporter.onTaskException("Delivering the Octopus prices", e));
+        accountResult = ObservableValue.concurrent(Optional.empty(), e -> taskFailureReporter.onTaskException("Delivering the Octopus account details", e));
         this.executorProvider = checkNotNull(executorProvider);
         this.timeProvider = checkNotNull(timeProvider);
         this.octopusEnergy = checkNotNull(octopusEnergy);

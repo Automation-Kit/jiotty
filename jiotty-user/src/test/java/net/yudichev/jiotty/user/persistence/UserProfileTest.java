@@ -36,18 +36,22 @@ class UserProfileTest {
                            .doesNotContain("Alexey,");
     }
 
-    /// A change notification carries a whole profile, and the records that wrap it render it through this redaction rather than around it — so a change that
-    /// reaches a log line, an alert or an exception message carries no address.
-    @Test
-    void aChangeNotificationCarryingAProfileRendersItRedacted() {
+    /// [UserPersistence]'s subscriptions deliver whole profiles, and the records that wrap one render it through this redaction, so a delivery that reaches a
+    /// log line, an alert or an exception message carries no address.
+    @ParameterizedTest
+    @MethodSource
+    void aDeliveryCarryingAProfileRendersItRedacted(Object delivery) {
+        assertThat(delivery).asString()
+                            .contains("email=ale…", "displayName=Ale…")
+                            .doesNotContain("alexey@example.com")
+                            .doesNotContain("Alexey]", "Alexey,");
+    }
+
+    static Stream<Arguments> aDeliveryCarryingAProfileRendersItRedacted() {
         var profile = new UserProfile("u1", "alexey@example.com", Optional.of("Alexey"), ZoneId.of("UTC"), CREATED_AT, UPDATED_AT);
-
-        var change = new UserPersistence.UserChange("u1", Optional.of(new UserProfileWithDeletion(profile, Optional.of(UPDATED_AT))));
-
-        assertThat(change).asString()
-                          .contains("email=ale…", "displayName=Ale…")
-                          .doesNotContain("alexey@example.com")
-                          .doesNotContain("Alexey]", "Alexey,");
+        return Stream.of(arguments(new UserProfileWithDeletion(profile, Optional.of(UPDATED_AT))),
+                         arguments(new UserPersistence.IdentityResolution.Active(profile)),
+                         arguments(new UserPersistence.IdentityResolution.SoftDeleted(profile)));
     }
 
     @Test

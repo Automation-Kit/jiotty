@@ -2,8 +2,9 @@ package net.yudichev.jiotty.user.persistence.testing;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.lang.SerialisedListeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.user.persistence.ConditionalSoftDeleteOutcome;
 import net.yudichev.jiotty.user.persistence.UserIdentity;
@@ -12,19 +13,21 @@ import net.yudichev.jiotty.user.persistence.UserPersistence;
 import net.yudichev.jiotty.user.persistence.UserProfile;
 import net.yudichev.jiotty.user.persistence.UserProfileInput;
 import net.yudichev.jiotty.user.persistence.UserProfileWithDeletion;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import net.yudichev.jiotty.user.persistence.UserStatePublisher;
+import net.yudichev.jiotty.user.persistence.UserStatePublisher.IdentitySubscription;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -32,16 +35,21 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
 public final class FakeUserPersistence implements UserPersistence {
-    private static final Logger logger = LogManager.getLogger(FakeUserPersistence.class);
-
     private final Object lock = new Object();
     private final CurrentDateTimeProvider timeProvider;
     private final Map<String, StoredUser> usersById = new LinkedHashMap<>();
     private final Map<UserIdentity, String> activeUserIdsByIdentity = new HashMap<>();
-    private final Listeners<UserChange> changeListeners = new Listeners<>();
+    private final UserStatePublisher publisher = new UserStatePublisher(command -> {
+        synchronized (lock) {
+            command.run();
+        }
+    });
+
+    private final List<UserStatePublisher.IdentitySubscription> identitySubscriptions = new ArrayList<>();
 
     private int nextUserNumber = 1;
-    private @Nullable CompletableFuture<Void> nextResolveByIdentityGate;
+    private @Nullable RuntimeException identitySubscriptionFailure;
+    private @Nullable CompletableFuture<Void> nextIdentityUpdateAnswer;
 
     public FakeUserPersistence(CurrentDateTimeProvider timeProvider) {
         this.timeProvider = checkNotNull(timeProvider, "timeProvider");
@@ -74,7 +82,7 @@ public final class FakeUserPersistence implements UserPersistence {
             storedUser.replaceActiveIdentities(List.of(identity), timestamp);
             usersById.put(userId, storedUser);
             activeUserIdsByIdentity.put(identity, userId);
-            notifyChanged(userId, storedUser);
+            announceChanged(storedUser, List.of(identity), List.of());
             return completedFuture(new UserCreationResult.Resolved(createdProfile, true));
         }
     }
@@ -90,20 +98,7 @@ public final class FakeUserPersistence implements UserPersistence {
     public CompletableFuture<IdentityResolution> resolveByIdentity(UserIdentity identity) {
         synchronized (lock) {
             checkNotNull(identity, "identity");
-            IdentityResolution resolution = resolveByIdentityLocked(identity);
-            CompletableFuture<Void> gate = nextResolveByIdentityGate;
-            nextResolveByIdentityGate = null;
-            return gate == null ? completedFuture(resolution) : gate.thenApply(_ -> resolution);
-        }
-    }
-
-    /// Holds the next [#resolveByIdentity] call's result until the returned gate is completed, so a test can keep an identity resolution in flight while it
-    /// delivers other events. One-shot: only the next call is held, and its resolution is still computed from the store state at the time of that call.
-    public CompletableFuture<Void> deferNextResolveByIdentity() {
-        synchronized (lock) {
-            var gate = new CompletableFuture<Void>();
-            nextResolveByIdentityGate = gate;
-            return gate;
+            return completedFuture(resolveByIdentityLocked(identity));
         }
     }
 
@@ -153,9 +148,7 @@ public final class FakeUserPersistence implements UserPersistence {
     @Override
     public CompletableFuture<List<UserProfileWithDeletion>> listAllProfilesIgnoringDeletion() {
         synchronized (lock) {
-            var profiles = ImmutableList.<UserProfileWithDeletion>builder();
-            usersById.values().forEach(user -> profiles.add(new UserProfileWithDeletion(user.profile(), user.deletedAt())));
-            return completedFuture(profiles.build());
+            return completedFuture(listAllProfilesIgnoringDeletionLocked());
         }
     }
 
@@ -233,7 +226,7 @@ public final class FakeUserPersistence implements UserPersistence {
                                                  storedUser.profile().createdAt(),
                                                  timestamp);
             storedUser.updateProfile(updatedProfile);
-            notifyChanged(userId, storedUser);
+            announceChanged(storedUser, List.of(), List.of());
             return completedFuture(updatedProfile);
         }
     }
@@ -242,6 +235,11 @@ public final class FakeUserPersistence implements UserPersistence {
     public CompletableFuture<Void> updateAllIdentities(String userId, List<UserIdentity> identities) {
         synchronized (lock) {
             checkNotNull(identities, "identities");
+            if (nextIdentityUpdateAnswer != null) {
+                CompletableFuture<Void> answer = nextIdentityUpdateAnswer;
+                nextIdentityUpdateAnswer = null;
+                return answer;
+            }
             StoredUser storedUser = getActiveUser(userId);
             var identitiesByProvider = LinkedHashMap.<String, UserIdentity>newLinkedHashMap(identities.size());
             for (UserIdentity identity : identities) {
@@ -253,17 +251,18 @@ public final class FakeUserPersistence implements UserPersistence {
             }
             // The real store writes an identity row where one is new, changed or dropped, and announces nothing when none of those applies. It looks each
             // provider up on its own, so the order the caller supplies them in makes no difference — hence the set comparison.
-            List<UserIdentity> previousIdentities = storedUser.activeIdentities();
-            boolean anyIdentityWritten = !ImmutableSet.copyOf(previousIdentities).equals(ImmutableSet.copyOf(identitiesByProvider.values()));
+            Set<UserIdentity> previousIdentities = ImmutableSet.copyOf(storedUser.activeIdentities());
+            Set<UserIdentity> newIdentities = ImmutableSet.copyOf(identitiesByProvider.values());
             for (UserIdentity oldIdentity : previousIdentities) {
                 String removedUserId = activeUserIdsByIdentity.remove(oldIdentity);
                 assert userId.equals(removedUserId);
             }
             Instant timestamp = currentInstant();
-            storedUser.replaceActiveIdentities(identitiesByProvider.values(), timestamp);
-            identitiesByProvider.values().forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
-            if (anyIdentityWritten) {
-                notifyChanged(userId, storedUser);
+            storedUser.replaceActiveIdentities(newIdentities, timestamp);
+            newIdentities.forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
+            if (!previousIdentities.equals(newIdentities)) {
+                // This fake forgets a dropped identity outright, so it resolves to nobody here.
+                announceChanged(storedUser, Sets.difference(newIdentities, previousIdentities), Sets.difference(previousIdentities, newIdentities));
             }
             return completedFuture(null);
         }
@@ -292,10 +291,13 @@ public final class FakeUserPersistence implements UserPersistence {
         synchronized (lock) {
             checkNotNull(userId, "userId");
             StoredUser storedUser = usersById.get(userId);
-            if (storedUser == null || !storedUser.active()) {
-                return completedFuture(null); // idempotent: already soft-deleted (or unknown) — no-op
+            if (storedUser != null) {
+                if (storedUser.active()) {
+                    softDeleteLocked(userId, storedUser);
+                } else {
+                    announceChanged(storedUser, List.of(), List.of());
+                }
             }
-            softDeleteLocked(userId, storedUser);
             return completedFuture(null);
         }
     }
@@ -306,19 +308,17 @@ public final class FakeUserPersistence implements UserPersistence {
             assert userId.equals(removedUserId);
         }
         storedUser.softDelete(currentInstant());
-        notifyChanged(userId, storedUser);
+        announceChanged(storedUser, List.of(), List.of());
     }
 
     @Override
     public CompletableFuture<Void> hardDelete(String userId) {
         synchronized (lock) {
             checkNotNull(userId, "userId");
-            StoredUser removed = usersById.remove(userId);
-            if (removed != null) {
+            if (usersById.remove(userId) != null) {
                 activeUserIdsByIdentity.values().removeIf(userId::equals);
-                notifyChanged(userId, null);
             }
-            return completedFuture(null);
+            return publisher.publishRemoved(userId);
         }
     }
 
@@ -327,33 +327,83 @@ public final class FakeUserPersistence implements UserPersistence {
         synchronized (lock) {
             checkNotNull(userId, "userId");
             StoredUser storedUser = usersById.get(userId);
-            if (storedUser != null && !storedUser.active()) {
-                storedUser.restore(currentInstant());
-                storedUser.activeIdentities().forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
-                notifyChanged(userId, storedUser);
+            if (storedUser != null) {
+                if (!storedUser.active()) {
+                    storedUser.restore(currentInstant());
+                    storedUser.activeIdentities().forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
+                }
+                announceChanged(storedUser, List.of(), List.of());
             }
             return completedFuture(null);
         }
     }
 
-    /// Notifies on the calling thread inside this fake's reentrant lock, matching the real store, which notifies on the thread that performed the write.
+    /// Delivers the image at once, on the calling thread inside this fake's lock, where the real implementation delivers it from a task of its own; each later
+    /// change is delivered on the thread that made it, as the real implementation's are.
     @Override
-    public Closeable subscribeToChanges(Consumer<? super UserChange> listener) {
-        return changeListeners.addListener(checkNotNull(listener, "listener"));
+    public Closeable subscribe(UserStateListener listener) {
+        synchronized (lock) {
+            SerialisedListeners<UserStateListener>.Subscription subscription = publisher.newSubscription(listener);
+            publisher.activate(subscription, listAllProfilesIgnoringDeletionLocked());
+            return subscription;
+        }
     }
 
-    /// Announces a change to the subscribers of [#subscribeToChanges], carrying the user's state as this fake holds it once the change has been applied. A
-    /// listener's failure is contained here as the real store contains it, so one throwing subscriber cannot fail the mutation that is already applied.
-    ///
-    /// @param storedUser the user as it now stands, or `null` once erased
-    private void notifyChanged(String userId, @Nullable StoredUser storedUser) {
-        try {
-            changeListeners.notify(new UserChange(userId,
-                                                  Optional.ofNullable(storedUser)
-                                                          .map(user -> new UserProfileWithDeletion(user.profile(), user.deletedAt()))));
-        } catch (RuntimeException e) {
-            logger.info("[{}] User-change listener failed", userId, e);
+    private List<UserProfileWithDeletion> listAllProfilesIgnoringDeletionLocked() {
+        var profiles = ImmutableList.<UserProfileWithDeletion>builderWithExpectedSize(usersById.size());
+        usersById.values().forEach(user -> profiles.add(user.createProfileWithDeletion()));
+        return profiles.build();
+    }
+
+    /// Delivers the first resolution as [#subscribe(UserStateListener)] delivers the image.
+    @Override
+    public Closeable subscribe(UserIdentity identity, IdentityResolutionListener listener) {
+        synchronized (lock) {
+            IdentitySubscription subscription = publisher.newSubscription(identity, listener);
+            identitySubscriptions.add(subscription);
+            if (identitySubscriptionFailure == null) {
+                publisher.activate(subscription, resolveByIdentityLocked(identity));
+            } else {
+                listener.onSubscriptionFailed(identitySubscriptionFailure);
+            }
+            return subscription;
         }
+    }
+
+    /// Makes every later identity subscription fail with `failure`, as the real implementation's does when it cannot read the first resolution.
+    public void failIdentitySubscriptionsWith(RuntimeException failure) {
+        synchronized (lock) {
+            identitySubscriptionFailure = checkNotNull(failure, "failure");
+        }
+    }
+
+    /// Lets later identity subscriptions succeed again.
+    public void stopFailingIdentitySubscriptions() {
+        synchronized (lock) {
+            identitySubscriptionFailure = null;
+        }
+    }
+
+    /// Answers the next [#updateAllIdentities] with `answer` and applies nothing, so a test can fail that write or hold it in flight.
+    public void answerNextIdentityUpdateWith(CompletableFuture<Void> answer) {
+        synchronized (lock) {
+            nextIdentityUpdateAnswer = checkNotNull(answer, "answer");
+        }
+    }
+
+    /// How many identity subscriptions this fake has handed out that their holders have not closed, failed ones included.
+    public int openIdentitySubscriptionCount() {
+        synchronized (lock) {
+            return (int) identitySubscriptions.stream().filter(subscription -> !subscription.isClosed()).count();
+        }
+    }
+
+    /// Announces a write that left `storedUser` in this fake, as it stands once the write has been applied.
+    ///
+    /// @param linkedIdentities   identities the write made resolve to the user
+    /// @param unlinkedIdentities identities the write made resolve to nobody
+    private void announceChanged(StoredUser storedUser, Collection<UserIdentity> linkedIdentities, Collection<UserIdentity> unlinkedIdentities) {
+        publisher.publishChanged(storedUser.createProfileWithDeletion(), linkedIdentities, unlinkedIdentities);
     }
 
     public Optional<UserProfile> findActiveProfileByIdentity(UserIdentity identity) {
@@ -437,6 +487,10 @@ public final class FakeUserPersistence implements UserPersistence {
 
         public UserProfile profile() {
             return profile;
+        }
+
+        public UserProfileWithDeletion createProfileWithDeletion() {
+            return new UserProfileWithDeletion(profile, deletedAt());
         }
 
         public List<UserIdentity> activeIdentities() {

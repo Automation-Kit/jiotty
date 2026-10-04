@@ -32,10 +32,16 @@ public interface AdminAlertService {
     /// humanReadableMessage(e)` when `description` is non-null and non-blank; otherwise the bare `humanReadableMessage(e)`. Also logs the failure at the
     /// severity-matching level.
     default String raise(AdminAlertSeverity severity, String title, Logger logger, @Nullable String description, Throwable e) {
-        var noDescription = description == null || description.isBlank();
-        String combined = noDescription ? humanReadableMessage(e) : description + ": " + humanReadableMessage(e);
-        logger.log(logLevelOf(severity), "{}{}", title, noDescription ? "" : ": " + description, e);
-        return raise(severity, title, combined);
+        return raise(severity, title, logger, Optional.ofNullable(description), Optional.of(e));
+    }
+
+    /// Raises and logs an alert described by `description` and `cause`'s message, joined by `": "` when both are present, by whichever is present
+    /// otherwise, and by nothing with neither. The log line is at the severity-matching level and carries `cause`.
+    default String raise(AdminAlertSeverity severity, String title, Logger logger, Optional<String> description, Optional<Throwable> cause) {
+        Optional<String> prefix = description.filter(text -> !text.isBlank());
+        String alertDescription = cause.map(e -> prefix.map(text -> text + ": ").orElse("") + humanReadableMessage(e)).orElse(prefix.orElse(""));
+        logger.log(logLevelOf(severity), "{}{}", title, prefix.map(text -> ": " + text).orElse(""), cause.orElse(null));
+        return raise(severity, title, alertDescription);
     }
 
     /// The log level an alert of this severity is logged at, so a raise and its log line can never disagree.

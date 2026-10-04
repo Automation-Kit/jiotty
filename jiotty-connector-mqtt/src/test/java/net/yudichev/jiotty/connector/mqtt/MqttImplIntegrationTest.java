@@ -3,6 +3,7 @@ package net.yudichev.jiotty.connector.mqtt;
 import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.throttling.ThresholdThrottlingConsumerFactory;
 import org.eclipse.paho.client.mqttv3.IMqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
@@ -135,9 +136,49 @@ class MqttImplIntegrationTest {
         assertThat(subscriberB).succeedsWithin(AWAIT_TIMEOUT).isEqualTo("after-reconnect");
     }
 
+    @Test
+    void restoresSubscriptionsAfterReconnectEvenWhenAConnectionStatusListenerThrows() throws Exception {
+        String topic = uniqueTopic();
+        MqttImpl client = newConnectedClient();
+
+        var reconnected = new CompletableFuture<Void>();
+        subscriptions.add(client.subscribeToConnectionStatus(status -> {
+            if (status instanceof Mqtt.Connected(boolean reconnect) && reconnect) {
+                reconnected.complete(null);
+                throw new IllegalStateException("listener failed");
+            }
+        }));
+        CompletableFuture<String> afterReconnect = subscribeAwaitingPayload(client, topic);
+
+        broker.restart();
+        assertThat(reconnected).succeedsWithin(AWAIT_TIMEOUT);
+
+        publishRetained(topic, "after-reconnect");
+        assertThat(afterReconnect).succeedsWithin(AWAIT_TIMEOUT).isEqualTo("after-reconnect");
+    }
+
+    @Test
+    void reportsALostConnectionEvenWhenAConnectionStatusListenerThrows() throws Exception {
+        var reportedLoss = new CompletableFuture<Throwable>();
+        MqttImpl client = newConnectedClient((_, _, _) -> reportedLoss::complete);
+        subscriptions.add(client.subscribeToConnectionStatus(status -> {
+            if (status instanceof Mqtt.Disconnected) {
+                throw new IllegalStateException("listener failed");
+            }
+        }));
+
+        broker.restart();
+
+        assertThat(reportedLoss).succeedsWithin(AWAIT_TIMEOUT);
+    }
+
     private MqttImpl newConnectedClient() throws Exception {
+        return newConnectedClient((_, _, _) -> _ -> {});
+    }
+
+    private MqttImpl newConnectedClient(ThresholdThrottlingConsumerFactory<Throwable> throttledLoggerFactory) throws Exception {
         IMqttAsyncClient pahoClient = new MqttAsyncClient(broker.serverUri(), "client-" + UUID.randomUUID(), new MemoryPersistence());
-        MqttImpl client = new MqttImpl(pahoClient, executorFactory, (_, _, _) -> _ -> {}, _ -> {}, new ListenerBackedTaskExceptionHandlerRegistry(),
+        MqttImpl client = new MqttImpl(pahoClient, executorFactory, throttledLoggerFactory, _ -> {}, new ListenerBackedTaskExceptionHandlerRegistry(),
                                        System::nanoTime, 0.0);
         client.start();
         startedClients.add(client);

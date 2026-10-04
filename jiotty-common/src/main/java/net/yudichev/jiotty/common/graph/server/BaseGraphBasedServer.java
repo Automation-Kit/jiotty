@@ -54,13 +54,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     protected final void doStart() {
         executor = executorProvider.get();
         doStart0();
-        executor.execute(() -> ifNotStopped(() -> {
-            try {
-                createGraph();
-            } catch (RuntimeException e) {
-                panic(e);
-            }
-        }));
+        executor.execute(() -> ifNotStopped(this::createGraphOrPanic));
     }
 
     protected final SchedulingExecutor executor() {
@@ -120,16 +114,8 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
         graphRunner = new GraphRunner(graph, executor) {
 
             @Override
-            public void scheduleNewWave(String triggeredBy) {
-                if (graph().inWave()) {
-                    logger.debug("Not scheduling new wave triggered by '{}' because already in wave", triggeredBy);
-                    return;
-                }
-                if (isClosedPlain()) {
-                    logger.debug("Not scheduling anything as closed");
-                    return;
-                }
-                executor().execute(() -> ifNotStopped(() -> {
+            protected void doRunWaves(String triggeredBy) {
+                ifNotStopped(() -> {
                     if (isClosed()) {
                         logger.debug("Not starting new wave as closed");
                         return;
@@ -149,11 +135,11 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
                     if (panicReason != null) {
                         reinitBackoff.reset();
                     }
-                }));
+                });
             }
 
             @Override
-            public void panic(@Nullable String message, @Nullable Throwable cause) {
+            protected void onPanic(@Nullable String message, @Nullable Throwable cause) {
                 BaseGraphBasedServer.this.panic(message, cause);
             }
         };
@@ -164,6 +150,14 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
         nodes.forEach(ServerNode::registerInGraph);
         logger.debug("{} node(s) registered in graph", nodes.size());
         graphRunner.scheduleNewWave("Nodes registered");
+    }
+
+    private void createGraphOrPanic() {
+        try {
+            createGraph();
+        } catch (RuntimeException e) {
+            panic(e);
+        }
     }
 
     private <T extends ServerNode> T addNode(T node) {
@@ -232,7 +226,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
         logger.info("Will re-init after {}", delay);
         executor.schedule(delay, () -> ifNotStopped(() -> {
             panicReason = null;
-            createGraph();
+            createGraphOrPanic();
         }));
     }
 

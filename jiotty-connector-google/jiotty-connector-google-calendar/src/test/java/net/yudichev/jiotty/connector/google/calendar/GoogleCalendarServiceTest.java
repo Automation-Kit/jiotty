@@ -6,6 +6,7 @@ import com.google.api.client.http.LowLevelHttpResponse;
 import com.google.api.client.testing.http.MockHttpTransport;
 import com.google.api.client.testing.http.MockLowLevelHttpRequest;
 import com.google.api.client.testing.http.MockLowLevelHttpResponse;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.security.AuthState;
@@ -179,8 +180,14 @@ class GoogleCalendarServiceTest {
     @Test
     void start_withFreshAuthCode_exchangesItViaTokenManager(@Mock OAuth2TokenManager mockTokenManager) {
         when(mockTokenManager.subscribeToAccessTokenState(any())).thenReturn(Closeable.noop());
-        service = new GoogleCalendarService(clock, mockTokenManager, "the-redirect", Optional.of("the-code"), Optional.of("the-verifier"),
-                                            Duration.ofSeconds(30), "test-user") {
+        service = new GoogleCalendarService(clock,
+                                            mockTokenManager,
+                                            "the-redirect",
+                                            Optional.of("the-code"),
+                                            Optional.of("the-verifier"),
+                                            Duration.ofSeconds(30),
+                                            "test-user",
+                                            new ListenerBackedTaskExceptionHandlerRegistry()) {
             @Override
             HttpTransport createHttpTransport() {
                 return new MockHttpTransport();
@@ -233,7 +240,14 @@ class GoogleCalendarServiceTest {
         // never a successful empty list, which callers would trust as "the account has no calendars" — leaving the credential untouched.
         var requestCount = new AtomicInteger();
         tokenManager = new FakeOAuth2TokenManager(new AuthState.TransientFailure("Initialising"));
-        service = new GoogleCalendarService(clock, tokenManager, "redirect", Optional.empty(), Optional.empty(), Duration.ofSeconds(30), "test-user") {
+        service = new GoogleCalendarService(clock,
+                                            tokenManager,
+                                            "redirect",
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            Duration.ofSeconds(30),
+                                            "test-user",
+                                            new ListenerBackedTaskExceptionHandlerRegistry()) {
             @Override
             HttpTransport createHttpTransport() {
                 return new MockHttpTransport() {
@@ -325,7 +339,14 @@ class GoogleCalendarServiceTest {
 
     private void startService(HttpTransport transport) {
         tokenManager = new FakeOAuth2TokenManager(new AuthState.Success("access-token"));
-        service = new GoogleCalendarService(clock, tokenManager, "redirect", Optional.empty(), Optional.empty(), Duration.ofSeconds(30), "test-user") {
+        service = new GoogleCalendarService(clock,
+                                            tokenManager,
+                                            "redirect",
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            Duration.ofSeconds(30),
+                                            "test-user",
+                                            new ListenerBackedTaskExceptionHandlerRegistry()) {
             @Override
             HttpTransport createHttpTransport() {
                 return transport;

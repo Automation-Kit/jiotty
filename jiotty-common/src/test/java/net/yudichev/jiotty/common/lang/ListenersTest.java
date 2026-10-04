@@ -1,15 +1,18 @@
 package net.yudichev.jiotty.common.lang;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
@@ -69,5 +72,15 @@ class ListenersTest {
         executor.close();
 
         assertThatCode(handle::close).doesNotThrowAnyException();
+    }
+
+    @Test
+    void givenExecutorQueueFull_whenHandleClosed_thenTheRejectionIsThrown(@Mock Consumer<Integer> consumer) {
+        var executor = new RejectingSchedulingExecutor(clock.createSingleThreadedSchedulingExecutor("test"));
+        Closeable handle = listeners.addListener(executor, () -> Optional.of(0), consumer);
+        clock.tick();
+        executor.fillQueue();
+
+        assertThatThrownBy(handle::close).hasRootCauseInstanceOf(RejectedExecutionException.class);
     }
 }

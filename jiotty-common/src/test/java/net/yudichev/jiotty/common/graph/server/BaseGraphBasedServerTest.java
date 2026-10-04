@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -121,10 +122,25 @@ class BaseGraphBasedServerTest {
         assertThat(server.panicReason).isEqualTo("legacy reason");
     }
 
+    @Test
+    void aRebuildThatFailsIsRetried() {
+        var nodeCreationFailure = new IllegalStateException("queue is full");
+        server.nextNodeCreationFailure = nodeCreationFailure;
+
+        server.runner().panic("trigger", null);
+        clock.advanceTimeAndTick(Duration.ofMinutes(1));
+
+        assertThat(server.handlePanicCalls).extracting(HandlePanicCall::cause).containsExactly(null, nodeCreationFailure);
+        assertThat(server.createNodesCalls).isEqualTo(3);
+        assertThat(server.graphIsActive()).isTrue();
+    }
+
     private final class TestServer extends BaseGraphBasedServer {
         final List<HandlePanicCall> handlePanicCalls = new ArrayList<>();
         int createNodesCalls;
         int recordStateCalls;
+        /// Thrown by the next node creation, then cleared; `null` lets node creation succeed.
+        @Nullable RuntimeException nextNodeCreationFailure;
         private @Nullable GraphRunner capturedRunner;
 
         TestServer() {
@@ -142,6 +158,11 @@ class BaseGraphBasedServerTest {
         @Override
         protected void createNodes(GraphRunner graphRunner, NodeRegistrator registrator) {
             createNodesCalls++;
+            RuntimeException failure = nextNodeCreationFailure;
+            if (failure != null) {
+                nextNodeCreationFailure = null;
+                throw failure;
+            }
             capturedRunner = graphRunner;
         }
 

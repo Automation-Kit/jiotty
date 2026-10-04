@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.octopusenergy;
 
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.backoff.RecordingRetryableOperationExecutor;
 import net.yudichev.jiotty.common.misc.RecordingUpstreamHealthHandler;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
@@ -57,7 +58,7 @@ class OctopusEnergyImplTest {
             String body = stubbedResponses.get(url);
             return body == null ? null : response(request, stubbedStatuses.getOrDefault(url, OK_200), body);
         });
-        octopusEnergy = new OctopusEnergyImpl(healthHandler, retryExecutor) {
+        octopusEnergy = new OctopusEnergyImpl(healthHandler, retryExecutor, new ListenerBackedTaskExceptionHandlerRegistry()) {
             @Override
             OkHttpClient createHttpClient() {
                 return httpClient;

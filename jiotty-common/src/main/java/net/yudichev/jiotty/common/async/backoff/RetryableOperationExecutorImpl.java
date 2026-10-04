@@ -14,6 +14,7 @@ import java.lang.annotation.Target;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
@@ -73,10 +74,10 @@ final class RetryableOperationExecutorImpl implements RetryableOperationExecutor
             logger.debug("Executing operation '{}' with retries using handler {}", operationName, exceptionHandler);
             result.whenComplete((_, _) -> {
                 if (result.isCancelled()) {
-                    executor.execute(() -> closeSafelyIfNotNull(logger, pendingCancellable));
+                    executor.execute("cancelRetry", () -> closeSafelyIfNotNull(logger, pendingCancellable));
                 }
             });
-            executor.execute(this::attempt);
+            executor.execute("retryAttempt", this::attempt);
             return result;
         }
 
@@ -93,7 +94,14 @@ final class RetryableOperationExecutorImpl implements RetryableOperationExecutor
             }
             pendingCancellable = Closeable.idempotent(() -> attemptFuture.cancel(true));
             // The action's future may complete on any thread; hop back onto the retry executor before touching any bookkeeping.
-            attemptFuture.whenComplete((value, exception) -> executor.execute(() -> onAttemptComplete(value, exception)));
+            attemptFuture.whenComplete((value, exception) -> {
+                try {
+                    executor.execute("retryAttemptComplete", () -> onAttemptComplete(value, exception));
+                } catch (RejectedExecutionException e) {
+                    // Nothing else would ever complete the result, so the caller is told the operation failed.
+                    result.completeExceptionally(e);
+                }
+            });
         }
 
         private void onAttemptComplete(@Nullable T value, @Nullable Throwable exception) {
@@ -118,8 +126,9 @@ final class RetryableOperationExecutorImpl implements RetryableOperationExecutor
             }
             long delayMs = backoffDelayMs.orElseThrow();
             logger.debug("Retrying operation '{}' with backoff {}ms", operationName, delayMs);
-            backoffEventConsumer.accept(delayMs, exception);
+            // Scheduled first, so a consumer that throws cannot cost the operation its retry.
             pendingCancellable = executor.schedule(Duration.ofMillis(delayMs), this::attempt);
+            backoffEventConsumer.accept(delayMs, exception);
         }
     }
 

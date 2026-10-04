@@ -2,13 +2,14 @@ package net.yudichev.jiotty.user.persistence;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.lang.SerialisedListeners;
 import net.yudichev.jiotty.common.misc.UniqueId;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
@@ -17,6 +18,7 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainService;
+import net.yudichev.jiotty.user.persistence.UserStatePublisher.IdentitySubscription;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
@@ -36,6 +38,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -54,9 +57,9 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     /// cannot end up with differently-shaped indexes. The `deleted_at IS NULL` matches what [#listInactiveSince] scans.
     static final String LAST_ACTIVE_AT_INDEX_DDL =
             "CREATE INDEX IF NOT EXISTS %DOMAIN_PREFIX%user_last_active_at_idx ON %DOMAIN_PREFIX%user (last_active_at) WHERE deleted_at IS NULL;";
-
+    @VisibleForTesting
+    static final String FAILED_COMMIT_READ_BACK_TASK = "reading back a user whose commit reported a failure";
     private static final Logger logger = LogManager.getLogger(UserPersistenceImpl.class);
-
     private static final String UNIQUE_VIOLATION_SQL_STATE = "23505";
     private static final List<String> BASE_INIT_STATEMENTS = ImmutableList.of(
             """
@@ -97,7 +100,6 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     private final String selectAllUsersSql;
     private final String selectAllUsersIgnoringDeletionSql;
     private final String selectUserByIdWithDeletionSql;
-    private final String userExistsSql;
     private final String userExistsIgnoringDeletionSql;
     private final String selectIdentityByUserAndProviderSql;
     private final String selectIdentityByProviderUserIdSql;
@@ -120,7 +122,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     private final String selectInactiveSinceSql;
     private final String softDeleteUserIfInactiveSql;
 
-    private final Listeners<UserChange> changeListeners = new Listeners<>();
+    private final UserStatePublisher publisher;
     private final TaskFailureReporter taskFailureReporter;
 
     private SchedulingExecutor executor;
@@ -137,6 +139,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                                @Migrator PersistenceDomainMigrator migrator,
                                TaskFailureReporter taskFailureReporter) {
         this.taskFailureReporter = checkNotNull(taskFailureReporter, "taskFailureReporter");
+        publisher = new UserStatePublisher(command -> executor.tryExecute("unsubscribe from user changes", command));
         this.dataSourceFactory = checkNotNull(dataSourceFactory, "dataSourceFactory");
         this.executorProvider = checkNotNull(executorProvider, "executorProvider");
         this.persistenceDomainService = checkNotNull(persistenceDomainService, "persistenceDomainService");
@@ -165,7 +168,6 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                             " WHERE deleted_at IS NULL";
         selectAllUsersIgnoringDeletionSql = "SELECT id, email, display_name, timezone, created_at, updated_at, deleted_at FROM " + userTable;
         selectUserByIdWithDeletionSql = selectAllUsersIgnoringDeletionSql + " WHERE id=?";
-        userExistsSql = "SELECT 1 FROM " + userTable + " WHERE id=? AND deleted_at IS NULL";
         userExistsIgnoringDeletionSql = "SELECT 1 FROM " + userTable + " WHERE id=?";
         selectIdentityByUserAndProviderSql =
                 "SELECT provider_user_id, deleted_at FROM " + identityTable + " WHERE user_id=? AND provider=?";
@@ -223,25 +225,25 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     public CompletableFuture<UserCreationResult> getOrCreateByIdentity(UserIdentity identity, UserProfileInput profile) {
         checkNotNull(identity, "identity");
         checkNotNull(profile, "profile");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doGetOrCreateByIdentity(identity, profile)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doGetOrCreateByIdentity(identity, profile)));
     }
 
     @Override
     public CompletableFuture<Optional<UserProfile>> getByIdentity(UserIdentity identity) {
         checkNotNull(identity, "identity");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> Optional.ofNullable(doGetByIdentity(identity))));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> Optional.ofNullable(doGetByIdentity(identity))));
     }
 
     @Override
     public CompletableFuture<IdentityResolution> resolveByIdentity(UserIdentity identity) {
         checkNotNull(identity, "identity");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doResolveByIdentity(identity)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doResolveByIdentity(identity)));
     }
 
     @Override
     public CompletableFuture<Optional<UserProfile>> getById(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> Optional.ofNullable(doGetById(userId))));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> Optional.ofNullable(doGetById(userId))));
     }
 
     /// Never completes once this component has stopped, rather than throwing at the caller: a long-running caller still reading through here while the process
@@ -250,52 +252,52 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     public CompletableFuture<Optional<UserProfile>> getByIdIgnoringDeletion(String userId) {
         validateUserId(userId);
         return whenNotLifecycling(() -> isStartedPlain()
-                                        ? executor.submit(() -> Optional.ofNullable(doGetByIdIgnoringDeletion(userId)))
+                                        ? executor.submitOrFail(() -> Optional.ofNullable(doGetByIdIgnoringDeletion(userId)))
                                         : new CompletableFuture<>());
     }
 
     @Override
     public CompletableFuture<List<UserProfile>> listAllProfiles() {
-        return whenStartedAndNotLifecycling(() -> executor.submit(this::doListAllProfiles));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(this::doListAllProfiles));
     }
 
     @Override
     public CompletableFuture<List<UserProfileWithDeletion>> listAllProfilesIgnoringDeletion() {
-        return whenStartedAndNotLifecycling(() -> executor.submit(this::doListAllProfilesIgnoringDeletion));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(this::doListAllProfilesIgnoringDeletion));
     }
 
     @Override
     public CompletableFuture<Boolean> existsIgnoringDeletion(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doExistsIgnoringDeletion(userId)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doExistsIgnoringDeletion(userId)));
     }
 
     @Override
     public CompletableFuture<Boolean> touchLastActive(String userId, Instant activeAt) {
         validateUserId(userId);
         checkNotNull(activeAt, "activeAt");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doTouchLastActive(userId, activeAt)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doTouchLastActive(userId, activeAt)));
     }
 
     @Override
     public CompletableFuture<List<UserProfile>> listInactiveSince(Instant cutoff, int limit) {
         checkNotNull(cutoff, "cutoff");
         checkArgument(limit > 0, "limit must be positive, got %s", limit);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doListInactiveSince(cutoff, limit)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doListInactiveSince(cutoff, limit)));
     }
 
     @Override
     public CompletableFuture<ConditionalSoftDeleteOutcome> softDeleteIfInactiveSince(String userId, Instant cutoff) {
         validateUserId(userId);
         checkNotNull(cutoff, "cutoff");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doSoftDeleteIfInactiveSince(userId, cutoff)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doSoftDeleteIfInactiveSince(userId, cutoff)));
     }
 
     @Override
     public CompletableFuture<UserProfile> updateProfile(String userId, UserProfileInput profile) {
         validateUserId(userId);
         checkNotNull(profile, "profile");
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doUpdateProfile(userId, profile)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doUpdateProfile(userId, profile)));
     }
 
     @Override
@@ -303,7 +305,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         validateUserId(userId);
         var identitiesCopy = ImmutableList.copyOf(checkNotNull(identities, "identities"));
         validateDistinctIdentityProviders(identitiesCopy);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> {
             doUpdateAllIdentities(userId, identitiesCopy);
             return null;
         }));
@@ -312,19 +314,19 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     @Override
     public CompletableFuture<List<UserIdentityRecord>> listIdentities(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doListIdentities(listIdentitiesSql, userId)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doListIdentities(listIdentitiesSql, userId)));
     }
 
     @Override
     public CompletableFuture<List<UserIdentityRecord>> listIdentitiesIgnoringDeletion(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> doListIdentities(listIdentitiesIgnoringDeletionSql, userId)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doListIdentities(listIdentitiesIgnoringDeletionSql, userId)));
     }
 
     @Override
     public CompletableFuture<Void> softDelete(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> {
             doSoftDelete(userId);
             return null;
         }));
@@ -333,26 +335,59 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     @Override
     public CompletableFuture<Void> hardDelete(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
-            doHardDelete(userId);
-            return null;
-        }));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doHardDelete(userId)).thenCompose(removal -> removal));
     }
 
     @Override
     public CompletableFuture<Void> restore(String userId) {
         validateUserId(userId);
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> {
             doRestore(userId);
             return null;
         }));
     }
 
-    /// Notifies on this store's own single thread, which every read and write is dispatched onto, so a listener that blocks blocks every one of them.
-    /// Registration runs on the caller's thread, which [Listeners] supports directly — it holds its listeners in a concurrent set.
     @Override
-    public Closeable subscribeToChanges(Consumer<? super UserChange> listener) {
-        return changeListeners.addListener(checkNotNull(listener, "listener"));
+    public Closeable subscribe(UserStateListener listener) {
+        return whenStartedAndNotLifecycling(() -> {
+            SerialisedListeners<UserStateListener>.Subscription subscription = publisher.newSubscription(listener);
+            activateOnExecutor("subscribe to user states",
+                               this::doListAllProfilesIgnoringDeletion,
+                               image -> publisher.activate(subscription, image),
+                               listener::onSubscriptionFailed);
+            return subscription;
+        });
+    }
+
+    @Override
+    public Closeable subscribe(UserIdentity identity, IdentityResolutionListener listener) {
+        return whenStartedAndNotLifecycling(() -> {
+            IdentitySubscription subscription = publisher.newSubscription(identity, listener);
+            activateOnExecutor("subscribe to an identity",
+                               () -> doResolveByIdentity(identity),
+                               resolution -> publisher.activate(subscription, resolution),
+                               listener::onSubscriptionFailed);
+            return subscription;
+        });
+    }
+
+    /// Reads a subscription's first delivery and activates the subscription with it in one task, so no write can fall between the two.
+    ///
+    /// @param failureHandler told when the read fails, which activates nothing
+    private <T> void activateOnExecutor(String taskName,
+                                        Supplier<? extends T> firstDeliveryReader,
+                                        Consumer<? super T> activation,
+                                        Consumer<Throwable> failureHandler) {
+        executor.execute(taskName, () -> {
+            T firstDelivery;
+            try {
+                firstDelivery = firstDeliveryReader.get();
+            } catch (RuntimeException e) {
+                failureHandler.accept(e);
+                return;
+            }
+            activation.accept(firstDelivery);
+        });
     }
 
     private UserCreationResult doGetOrCreateByIdentity(UserIdentity identity, UserProfileInput profile) {
@@ -372,10 +407,11 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                     String userId = UniqueId.generate('u');
                     insertUser(connection, userId, profile, now);
                     insertIdentity(connection, userId, identity, now);
-                    connection.commit();
-                    notifyChanged(connection, userId);
-                    return new UserCreationResult.Resolved(new UserProfile(userId, profile.email(), profile.displayName(), profile.timezone(), now, now),
-                                                           true);
+                    var createdProfile = new UserProfile(userId, profile.email(), profile.displayName(), profile.timezone(), now, now);
+                    List<UserIdentity> linkedIdentities = ImmutableList.of(identity);
+                    commit(connection, userId, linkedIdentities);
+                    publisher.publishChanged(new UserProfileWithDeletion(createdProfile, Optional.empty()), linkedIdentities, ImmutableList.of());
+                    return new UserCreationResult.Resolved(createdProfile, true);
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     if (!isUniqueViolation(e)) {
@@ -491,8 +527,8 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                     });
                     UserProfile updated = selectUserById(connection, userId);
                     checkState(updated != null, "User %s not found after update", userId);
-                    connection.commit();
-                    notifyChanged(connection, userId);
+                    commit(connection, userId, ImmutableList.of());
+                    publisher.publishChanged(new UserProfileWithDeletion(updated, Optional.empty()), ImmutableList.of(), ImmutableList.of());
                     return updated;
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
@@ -511,32 +547,46 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
-                    checkState(userExists(connection, userId), "User %s not found or deleted", userId);
+                    UserProfileWithDeletion user = selectUserByIdWithDeletion(connection, userId);
+                    checkState(user != null && user.deletedAt().isEmpty(), "User %s not found or deleted", userId);
                     Instant now = persistenceNow();
                     var identitiesByProvider = LinkedHashMap.<String, UserIdentity>newLinkedHashMap(identities.size());
                     identities.forEach(identity -> identitiesByProvider.put(identity.provider(), identity));
                     boolean anyIdentityWritten = false;
+                    var linkedIdentitiesBuilder = ImmutableList.<UserIdentity>builderWithExpectedSize(identitiesByProvider.size());
+                    var unlinkedIdentitiesBuilder = ImmutableList.<UserIdentity>builderWithExpectedSize(identitiesByProvider.size());
                     for (UserIdentity identity : identitiesByProvider.values()) {
                         String existingUserId = selectIdentityByProviderUserId(connection, identity);
                         checkState(existingUserId == null || existingUserId.equals(userId), "%s already linked to another user", identity);
                         IdentityLinkRecord identityByProvider = selectIdentityByUserAndProvider(connection, userId, identity.provider());
                         if (identityByProvider == null) {
                             insertIdentity(connection, userId, identity, now);
+                            linkedIdentitiesBuilder.add(identity);
                             anyIdentityWritten = true;
-                        } else if (!identityByProvider.providerUserId().equals(identity.providerUserId()) || !identityByProvider.active()) {
-                            updateIdentity(connection, userId, identity, now);
-                            anyIdentityWritten = true;
+                        } else {
+                            boolean repointed = !identityByProvider.providerUserId().equals(identity.providerUserId());
+                            if (repointed || !identityByProvider.active()) {
+                                updateIdentity(connection, userId, identity, now);
+                                anyIdentityWritten = true;
+                                if (repointed) {
+                                    unlinkedIdentitiesBuilder.add(new UserIdentity(identity.provider(), identityByProvider.providerUserId()));
+                                    linkedIdentitiesBuilder.add(identity);
+                                }
+                            }
                         }
                     }
+                    // A dropped provider's row keeps resolving to this user through resolveUserByIdentitySql, which ignores its deletion mark.
                     for (String existingProvider : selectActiveIdentityProvidersByUser(connection, userId)) {
                         if (!identitiesByProvider.containsKey(existingProvider)) {
                             updateIdentityDeletedAt(connection, userId, existingProvider, now, now);
                             anyIdentityWritten = true;
                         }
                     }
-                    connection.commit();
+                    List<UserIdentity> linkedIdentities = linkedIdentitiesBuilder.build();
+                    List<UserIdentity> unlinkedIdentities = unlinkedIdentitiesBuilder.build();
+                    commit(connection, userId, Iterables.concat(linkedIdentities, unlinkedIdentities));
                     if (anyIdentityWritten) {
-                        notifyChanged(connection, userId);
+                        publisher.publishChanged(user, linkedIdentities, unlinkedIdentities);
                     }
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
@@ -645,11 +695,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                                  stmt.setTimestamp(2, Timestamp.from(now));
                                  stmt.setString(3, userId);
                              });
-                    connection.commit();
-                    // An unconditional delete of an already-soft-deleted user matches no row and changes nothing, so it announces nothing.
-                    if (userRows > 0) {
-                        notifyChanged(connection, userId);
-                    }
+                    commitAndPublishState(connection, userId);
                     return ConditionalSoftDeleteOutcome.SOFT_DELETED;
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
@@ -679,20 +725,18 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         }
     }
 
-    private void doHardDelete(String userId) {
+    /// @return completes once every state subscriber has applied the removal
+    private CompletableFuture<Void> doHardDelete(String userId) {
         try {
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
                     int identityRows = doUpdate(connection, hardDeleteIdentitiesSql, -1, stmt -> stmt.setString(1, userId));
                     int userRows = doUpdate(connection, hardDeleteUserSql, -1, stmt -> stmt.setString(1, userId));
+                    // If this commit reports a failure, the caller's retry delivers the removal again whatever the commit did.
                     connection.commit();
-                    // A repeated erasure of a user already gone matches no row and changes nothing, so it announces nothing. Identity rows cannot outlive the
-                    // user row they reference, so the user row's count answers for both.
-                    if (userRows > 0) {
-                        notifyChanged(connection, userId);
-                    }
                     logger.info("Hard-deleted user {}: {} identity row(s), {} user row(s)", userId, identityRows, userRows);
+                    return publisher.publishRemoved(userId);
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     throw new RuntimeException("Failed hard-deleting user " + userId, e);
@@ -710,24 +754,25 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
             try (Connection connection = dataSource.getConnection()) {
                 connection.setAutoCommit(false);
                 try {
-                    Timestamp deletedAt = selectUserDeletedAt(connection, userId);
-                    if (deletedAt == null) {
-                        connection.commit(); // not soft-deleted: nothing to restore
-                        return;
+                    UserProfileWithDeletion existingUser = selectUserByIdWithDeletion(connection, userId);
+                    Optional<Instant> deletedAt = existingUser == null ? Optional.empty() : existingUser.deletedAt();
+                    if (deletedAt.isPresent()) {
+                        Instant now = persistenceNow();
+                        doUpdate(connection, restoreUserSql, 1, stmt -> {
+                            stmt.setTimestamp(1, Timestamp.from(now));
+                            stmt.setString(2, userId);
+                        });
+                        // Only revive the identities soft-deleted as part of this account deletion (same timestamp as the user), not ones removed earlier.
+                        doUpdate(connection, restoreIdentitiesSql, -1, stmt -> {
+                            stmt.setTimestamp(1, Timestamp.from(now));
+                            stmt.setString(2, userId);
+                            stmt.setTimestamp(3, Timestamp.from(deletedAt.get()));
+                        });
+                        commitAndPublishState(connection, userId);
+                    } else {
+                        // Nothing was written, so the row read above is what the transaction leaves.
+                        commitAndPublish(connection, userId, existingUser);
                     }
-                    Instant now = persistenceNow();
-                    doUpdate(connection, restoreUserSql, 1, stmt -> {
-                        stmt.setTimestamp(1, Timestamp.from(now));
-                        stmt.setString(2, userId);
-                    });
-                    // Only revive the identities soft-deleted as part of this account deletion (same timestamp as the user), not ones removed earlier.
-                    doUpdate(connection, restoreIdentitiesSql, -1, stmt -> {
-                        stmt.setTimestamp(1, Timestamp.from(now));
-                        stmt.setString(2, userId);
-                        stmt.setTimestamp(3, deletedAt);
-                    });
-                    connection.commit();
-                    notifyChanged(connection, userId);
                 } catch (SQLException e) {
                     rollbackQuietly(connection);
                     throw new RuntimeException("Failed to restore user " + userId, e);
@@ -740,37 +785,47 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         }
     }
 
-    /// Announces a committed change to the subscribers of [#subscribeToChanges], reading the user's post-commit state back on `connection` and handing it to
-    /// each subscriber. The write being announced has already committed, so neither the read nor a subscriber can be allowed to fail the caller's operation.
-    private void notifyChanged(Connection connection, String userId) {
-        if (changeListeners.isEmpty()) {
-            return;
-        }
-        UserChange change;
+    /// Commits a write that changed only `userId`'s deletion state, and publishes the user as the write left them, or nothing when no row is left.
+    private void commitAndPublishState(Connection connection, String userId) throws SQLException {
+        commitAndPublish(connection, userId, selectUserByIdWithDeletion(connection, userId));
+    }
+
+    /// @param user the user as this transaction leaves them, or `null` when no row is left
+    private void commitAndPublish(Connection connection, String userId, @Nullable UserProfileWithDeletion user) throws SQLException {
+        commit(connection, userId, ImmutableList.of());
+        publishState(user);
+    }
+
+    /// Commits a write to `userId`. A commit that reports a failure may still have taken effect, so what the database holds is then read afresh and published
+    /// before the failure propagates.
+    ///
+    /// @param touchedIdentities the identities the write links to the user or unlinks from them
+    private void commit(Connection connection, String userId, Iterable<UserIdentity> touchedIdentities) throws SQLException {
         try {
-            change = new UserChange(userId, Optional.ofNullable(selectUserByIdWithDeletion(connection, userId)));
-            // Ends the transaction the read opened, so the fan-out runs with this connection outside any transaction.
             connection.commit();
         } catch (SQLException e) {
-            rollbackQuietly(connection);
-            // The id stays out of the report: it reaches an unlabelled admin alert, which the erasure cascade purges by label and so would never reach.
-            logger.info("[{}] Failed reading back a committed user change", userId, e);
-            taskFailureReporter.onTaskException("reading back a committed user change", e);
-            return;
-        }
-        try {
-            changeListeners.notify(change);
-        } catch (RuntimeException e) {
-            logger.info("[{}] User-change listener failed", userId, e);
+            publishAfterFailedCommit(userId, touchedIdentities);
+            throw e;
         }
     }
 
-    private @Nullable Timestamp selectUserDeletedAt(Connection connection, String userId) throws SQLException {
-        try (PreparedStatement stmt = connection.prepareStatement(selectUserDeletedAtSql)) {
-            stmt.setString(1, userId);
-            try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? rs.getTimestamp("deleted_at") : null;
+    private void publishAfterFailedCommit(String userId, Iterable<UserIdentity> touchedIdentities) {
+        try (Connection connection = dataSource.getConnection()) {
+            publishState(selectUserByIdWithDeletion(connection, userId));
+            for (UserIdentity identity : publisher.subscribedIdentities(userId, touchedIdentities)) {
+                publisher.publishResolution(identity, resolveUserByIdentity(connection, identity));
             }
+        } catch (SQLException e) {
+            // The id stays out of the report: it reaches an unlabelled admin alert, which the erasure cascade purges by label and so would never reach.
+            logger.info("[{}] Failed reading back a user whose commit reported a failure", userId, e);
+            taskFailureReporter.onTaskException(FAILED_COMMIT_READ_BACK_TASK, e);
+        }
+    }
+
+    /// @param user the user as a write left them, or `null` when it left no row, which publishes nothing
+    private void publishState(@Nullable UserProfileWithDeletion user) {
+        if (user != null) {
+            publisher.publishChanged(user, ImmutableList.of(), ImmutableList.of());
         }
     }
 
@@ -792,10 +847,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                 if (!rs.next()) {
                     return IdentityResolution.Absent.INSTANCE;
                 }
-                UserProfile profile = mapUserProfile(rs);
-                return rs.getTimestamp("deleted_at") == null
-                       ? new IdentityResolution.Active(profile)
-                       : new IdentityResolution.SoftDeleted(profile);
+                return IdentityResolution.createLinked(mapUserProfile(rs), rs.getTimestamp("deleted_at") != null);
             }
         }
     }
@@ -823,15 +875,6 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
             stmt.setString(1, userId);
             try (ResultSet rs = stmt.executeQuery()) {
                 return rs.next() ? rowMapper.apply(rs) : null;
-            }
-        }
-    }
-
-    private boolean userExists(Connection connection, String userId) throws SQLException {
-        try (PreparedStatement stmt = connection.prepareStatement(userExistsSql)) {
-            stmt.setString(1, userId);
-            try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next();
             }
         }
     }

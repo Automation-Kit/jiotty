@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
@@ -50,6 +52,7 @@ class AdminAlertServiceImplTest {
     private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
     private ProgrammableClock clock;
     private SingleThreadedSchedulingExecutor executor;
+    private RejectingSchedulingExecutor rejectingExecutor;
     private PersistenceDomainServiceImpl domainService;
     private DataSourceFactory dataSourceFactory;
     private AdminAlertServiceImpl service;
@@ -69,7 +72,8 @@ class AdminAlertServiceImplTest {
         clock = new ProgrammableClock();
         clock.setTime(T0);
         executor = new SingleThreadedSchedulingExecutor("admin-alerts-test");
-        Provider<SchedulingExecutor> executorProvider = () -> executor;
+        rejectingExecutor = new RejectingSchedulingExecutor(executor);
+        Provider<SchedulingExecutor> executorProvider = () -> rejectingExecutor;
         dataSourceFactory = postgres.dataSourceFactory();
         domainService = new PersistenceDomainServiceImpl(dataSourceFactory, executorProvider, new ListenerBackedTaskExceptionHandlerRegistry());
         domainService.start();
@@ -155,6 +159,34 @@ class AdminAlertServiceImplTest {
 
         AdminAlert alert = service.findByKey(key).orElseThrow();
         assertThat(alert.labels()).containsEntry("pid", CURRENT_PID);
+    }
+
+    /// A caller can resolve an alert by the [AdminAlertKeys#derive] of the title, severity and labels it raised the alert with.
+    @Test
+    void resolve_byTheKeyDerivedFromTheCallersOwnLabels_resolvesTheAlert() {
+        String title = "MQTT down";
+        Map<String, String> labels = Map.of("category", "mqtt");
+        service.raise(data(title, "d", AdminAlertSeverity.ERROR, labels));
+        flush();
+        String derivedKey = AdminAlertKeys.derive(title, AdminAlertSeverity.ERROR, labels);
+        String raisedId = service.findByKey(derivedKey).orElseThrow().id();
+
+        assertThat(service.resolve(derivedKey, "cleared")).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(Optional.of(raisedId));
+    }
+
+    /// A request whose task the full executor rejects fails its future.
+    @Test
+    void requestsTheExecutorRejectsFailTheirFutures() {
+        rejectingExecutor.fillQueue();
+
+        assertThat(List.of(service.resolve("auto:key", "cleared"),
+                           service.resolveById("a1", "admin@example.com", Optional.empty()),
+                           service.deleteResolvedOlderThan(Duration.ofDays(1)),
+                           service.deleteByLabel("userId", "u1")))
+                .allSatisfy(future -> assertThat(future).failsWithin(Duration.ZERO)
+                                                        .withThrowableThat()
+                                                        .havingRootCause()
+                                                        .isInstanceOf(RejectedExecutionException.class));
     }
 
     @Test

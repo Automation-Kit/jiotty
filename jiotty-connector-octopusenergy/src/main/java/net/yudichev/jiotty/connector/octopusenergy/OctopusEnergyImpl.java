@@ -4,6 +4,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
@@ -73,13 +74,17 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
     private final UpstreamHealthHandler healthHandler;
     /// Retries the shared-outage failures of every call, so only a sustained outage reaches [#healthHandler].
     private final RetryableOperationExecutor retryableOperationExecutor;
+    private final TaskFailureReporter taskFailureReporter;
 
     private OkHttpClient client;
 
     @Inject
-    public OctopusEnergyImpl(@Dependency UpstreamHealthHandler healthHandler, @Dependency RetryableOperationExecutor retryableOperationExecutor) {
+    public OctopusEnergyImpl(@Dependency UpstreamHealthHandler healthHandler,
+                             @Dependency RetryableOperationExecutor retryableOperationExecutor,
+                             TaskFailureReporter taskFailureReporter) {
         this.healthHandler = checkNotNull(healthHandler);
         this.retryableOperationExecutor = checkNotNull(retryableOperationExecutor);
+        this.taskFailureReporter = checkNotNull(taskFailureReporter);
     }
 
     @Override
@@ -222,7 +227,9 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
 
     private final class AccountServiceImpl extends BaseIdempotentCloseable implements OctopusAccountService {
         private final AccountKey key;
-        private final ObservableValue<AuthState> authState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"));
+        private final ObservableValue<AuthState> authState = ObservableValue.concurrent(
+                new AuthState.TransientFailure("Initialising"),
+                e -> taskFailureReporter.onTaskException("Delivering the Octopus account authentication state", e));
         /// Forwards into [#authState] only on a *type-level* transition — [AuthState.Success] → [AuthState.Success] and [AuthState.PermanentFailure] →
         /// [AuthState.PermanentFailure] are deduped so subscribers aren't spammed by every successful authenticated call. The CAS inside
         /// [ConcurrentDeduplicatingConsumer] also makes the concurrent case (two [CompletableFuture#whenComplete] callbacks landing on different dispatcher

@@ -118,8 +118,12 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
         Task task = new Task(executor, immediate) {
             @Override
             public void doRun() {
-                command.run();
-                unSchedule(); // one-time task
+                // One-time: dropped even when it throws, as a live executor drops it.
+                try {
+                    command.run();
+                } finally {
+                    unSchedule();
+                }
             }
 
             @Override
@@ -135,12 +139,16 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
         Task task = new Task(executor, false) {
             @Override
             public void doRun() {
-                command.run();
-                Instant wasDue = unSchedule();
-                if (wasDue != null) {
-                    schedule(wasDue.plus(period));
-                } else {
-                    // task closed itself
+                // Rescheduled even when it throws, as a live executor keeps a periodic task's rate.
+                try {
+                    command.run();
+                } finally {
+                    Instant wasDue = unSchedule();
+                    if (wasDue != null) {
+                        schedule(wasDue.plus(period));
+                    } else {
+                        // task closed itself
+                    }
                 }
             }
 

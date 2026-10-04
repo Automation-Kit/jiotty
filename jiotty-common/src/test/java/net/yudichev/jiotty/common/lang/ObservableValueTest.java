@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.lang;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -8,11 +9,14 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.ArrayList;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
@@ -136,7 +140,39 @@ class ObservableValueTest {
         assertThatCode(subscription::close).doesNotThrowAnyException();
     }
 
+    @Test
+    void givenExecutorQueueFull_whenSubscriptionClosed_thenTheRejectionIsThrown(@Mock Consumer<Integer> consumer) {
+        var clock = new ProgrammableClock();
+        var executor = new RejectingSchedulingExecutor(clock.createSingleThreadedSchedulingExecutor("test"));
+        ObservableValue<Integer> value = ObservableValue.simple(0);
+        Closeable subscription = value.subscribe(executor, consumer);
+        clock.tick();
+        executor.fillQueue();
+
+        assertThatThrownBy(subscription::close).hasRootCauseInstanceOf(RejectedExecutionException.class);
+    }
+
+    @Test
+    void aConcurrentValueHandsWhatAnObserverThrowsToTheHandlerAndKeepsDelivering(@Mock Consumer<Integer> consumer) {
+        var failures = new ArrayList<RuntimeException>();
+        ObservableValue<Integer> value = ObservableValue.concurrent(0, failures::add);
+        var rejection = new RejectedExecutionException("queue full");
+        value.subscribe(newValue -> {
+            if (newValue == 1) {
+                throw rejection;
+            }
+        });
+        value.subscribe(consumer);
+
+        value.accept(1);
+        value.accept(2);
+
+        assertThat(failures).containsExactly(rejection);
+        verify(consumer).accept(1);
+        verify(consumer).accept(2);
+    }
+
     public static Stream<ObservableValue<Integer>> impls() {
-        return Stream.of(ObservableValue.simple(0), ObservableValue.concurrent(0));
+        return Stream.of(ObservableValue.simple(0), TestObservableValues.concurrent(0));
     }
 }

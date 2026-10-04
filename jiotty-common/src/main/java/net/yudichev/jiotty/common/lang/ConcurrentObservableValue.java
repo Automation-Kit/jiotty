@@ -6,6 +6,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.CompositeException.runForAll;
 
 /// Thread-safe [ObservableValue] implementation. All methods are safe to call from any thread.
@@ -17,17 +18,23 @@ import static net.yudichev.jiotty.common.lang.CompositeException.runForAll;
 /// Actions are serialised through one queue drained by whichever thread finds it idle, so a [#subscribe(Consumer)] landing while another thread is delivering
 /// is completed by that thread: the new observer gets the current value promptly, and can get it after [#subscribe(Consumer)] has returned. This is guarantee
 /// 1 of [ObservableValue] — read that for what a caller may assume.
+///
+/// What an observer throws goes to the `listenerFailureHandler`, and delivery to every observer, that one included, carries on.
 public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
 
     private final ConcurrentLinkedQueue<Runnable> actionQueue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger wip = new AtomicInteger();
+    private final Consumer<? super RuntimeException> listenerFailureHandler;
 
     @SuppressWarnings("FieldAccessedSynchronizedAndUnsynchronized")
     private volatile T value;
     private volatile LinkedHashSet<Consumer<? super T>> listeners = new LinkedHashSet<>();
 
-    public ConcurrentObservableValue(T initialValue) {
+    /// @param listenerFailureHandler told of what an observer throws, on whichever thread is delivering at the time — any caller of [#accept],
+    ///                               [#subscribe(Consumer)] or a subscription's [Closeable#close()]; must not throw
+    public ConcurrentObservableValue(T initialValue, Consumer<? super RuntimeException> listenerFailureHandler) {
         value = initialValue;
+        this.listenerFailureHandler = checkNotNull(listenerFailureHandler, "listenerFailureHandler");
     }
 
     @Override
@@ -77,7 +84,12 @@ public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
         do {
             Runnable action;
             while ((action = actionQueue.poll()) != null) {
-                action.run();
+                // Caught per action, so the actions other threads queued behind it still run and wip returns to zero.
+                try {
+                    action.run();
+                } catch (RuntimeException e) {
+                    listenerFailureHandler.accept(e);
+                }
             }
         } while (wip.decrementAndGet() != 0);
     }

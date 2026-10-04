@@ -7,6 +7,7 @@ import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.JobScheduler;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
@@ -67,7 +68,7 @@ public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent i
     private final String tariffCode;
     private final JobScheduler jobScheduler;
     /// The latest price-or-failure result, empty until the first one is produced. New subscribers receive the present value immediately.
-    private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult = ObservableValue.concurrent(Optional.empty());
+    private final ObservableValue<Optional<Either<Prices, Failure>>> priceResult;
     /// When the profile is next expected to reach further than it does now; `null` until the first retrieval settles. Confined to [#executor], as is every
     /// touch of it including subscription.
     private final ObservableValue<@Nullable Instant> nextRefreshTime = ObservableValue.simple(null);
@@ -83,9 +84,12 @@ public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent i
                                         CurrentDateTimeProvider timeProvider,
                                         TimeSeriesCache cache,
                                         JobScheduler jobScheduler,
+                                        TaskFailureReporter taskFailureReporter,
                                         @Assisted OctopusRegionService regionService,
                                         @Assisted("productCode") String productCode,
                                         @Assisted("tariffCode") String tariffCode) {
+        checkNotNull(taskFailureReporter);
+        priceResult = ObservableValue.concurrent(Optional.empty(), e -> taskFailureReporter.onTaskException("Delivering the Agile prices", e));
         this.executorProvider = checkNotNull(executorProvider);
         this.timeProvider = checkNotNull(timeProvider);
         checkNotNull(cache, "cache");
