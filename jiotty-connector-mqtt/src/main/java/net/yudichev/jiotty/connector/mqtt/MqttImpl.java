@@ -312,6 +312,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                 .setInitialIntervalMillis(10)
                 .setMaxIntervalMillis(10_000)
                 .setMultiplier(2)
+                .setNanoClock(nanoClock)
                 .build();
         private Closeable subRetryTimerHandle = noop();
 
@@ -324,6 +325,8 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                     connectionStatusListeners.notify(connectionStatus = new Connected(reconnect));
                 } finally {
                     if (reconnect) {
+                        // each reconnect restores the subscriptions with a retry streak of its own, whatever became of the previous connection's streak
+                        backOff.reset();
                         restoreSubscriptions();
                     }
                 }
@@ -338,8 +341,13 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
                 backOff.reset();
             } catch (RuntimeException e) {
                 long nextRetryInMs = backOff.nextBackOffMillis();
-                logger.info("Re-subscription failed, will re-try in {}ms", nextRetryInMs, e);
-                subRetryTimerHandle = executor.schedule(Duration.ofMillis(nextRetryInMs), this::restoreSubscriptions);
+                if (nextRetryInMs == BackOff.STOP) {
+                    logger.info("Re-subscription failed for over {}ms, giving up until the next reconnect", backOff.getMaxElapsedTimeMillis(), e);
+                    taskFailureReporter.onTaskException("restoring MQTT subscriptions after reconnecting to " + client.getServerURI(), e);
+                } else {
+                    logger.info("Re-subscription failed, will re-try in {}ms", nextRetryInMs, e);
+                    subRetryTimerHandle = executor.schedule(Duration.ofMillis(nextRetryInMs), this::restoreSubscriptions);
+                }
             }
         }
 

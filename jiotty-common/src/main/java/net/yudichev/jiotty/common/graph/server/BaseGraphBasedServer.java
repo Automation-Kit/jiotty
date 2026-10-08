@@ -1,11 +1,13 @@
 package net.yudichev.jiotty.common.graph.server;
 
+import com.google.common.annotations.VisibleForTesting;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.graph.Graph;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.EvenMoreObjects;
+import net.yudichev.jiotty.common.lang.backoff.BackOff;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import org.apache.logging.log4j.LogManager;
@@ -19,11 +21,22 @@ import java.util.List;
 import java.util.function.DoubleSupplier;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.concurrent.TimeUnit.DAYS;
 import static net.yudichev.jiotty.common.lang.Closeable.closeIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 
 public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
+    @VisibleForTesting
+    static final Duration INITIAL_REINIT_DELAY = Duration.ofMillis(500);
+    /// How long a created graph must go without panicking before the re-init delay drops back to [#INITIAL_REINIT_DELAY]; a panic sooner, in a wave or
+    /// outside one, takes the next, longer delay.
+    @VisibleForTesting
+    static final Duration HEALTHY_PERIOD_BEFORE_BACKOFF_RESET = Duration.ofMinutes(1);
+    /// How long a graph may keep panicking, with no [#HEALTHY_PERIOD_BEFORE_BACKOFF_RESET] in between, before re-initialising stops; roughly the time an
+    /// administrator is guaranteed to have reacted to the panic alerts.
+    @VisibleForTesting
+    static final long MAX_PANICKING_PERIOD_MILLIS = DAYS.toMillis(3);
     private static final int PANIC_COUNT_BEFORE_ALERT = 10;
 
     protected final CurrentDateTimeProvider timeProvider;
@@ -36,16 +49,18 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     protected @Nullable String panicReason;
     private SchedulingExecutor executor;
     private Closeable panicResetSchedule;
+    private @Nullable Closeable backoffResetSchedule;
     private @Nullable GraphRunner graphRunner;
 
     protected BaseGraphBasedServer(Provider<SchedulingExecutor> executorProvider, CurrentDateTimeProvider timeProvider, DoubleSupplier backoffRng) {
         this.executorProvider = checkNotNull(executorProvider);
         this.timeProvider = checkNotNull(timeProvider);
         reinitBackoff = new ExponentialBackOff.Builder()
-                .setInitialIntervalMillis(5_000)
+                .setInitialIntervalMillis(INITIAL_REINIT_DELAY.toMillis())
                 .setMultiplier(1.5)
                 .setMaxIntervalMillis(30_000)
-                .setMaxElapsedTimeMillis(Integer.MAX_VALUE)
+                .setMaxElapsedTimeMillis(MAX_PANICKING_PERIOD_MILLIS)
+                .setNanoClock(timeProvider)
                 .setRng(backoffRng)
                 .build();
     }
@@ -54,7 +69,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     protected final void doStart() {
         executor = executorProvider.get();
         doStart0();
-        executor.execute(() -> ifNotStopped(this::createGraphOrPanic));
+        executor.execute("create graph", () -> ifNotStopped(this::createGraphOrPanic));
     }
 
     protected final SchedulingExecutor executor() {
@@ -79,8 +94,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
             closeSafelyIfNotNull(logger, nodes.reversed());
             // Cleared so a repeat call closes nothing twice: an owner that both stops and closes this server runs this method more than once.
             nodes.clear();
-            closeSafelyIfNotNull(logger, graphRunner);
-            graphRunner = null;
+            closeGraphRunner();
         } catch (RuntimeException e) {
             logger.warn("Failed closing graph", e);
         }
@@ -110,6 +124,12 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
 
     private void createGraph() {
         logger.info("Creating graph");
+        // Armed first so that a panic anywhere below, including one raised synchronously while scheduling the first wave, cancels it in reset().
+        backoffResetSchedule = executor.schedule(HEALTHY_PERIOD_BEFORE_BACKOFF_RESET, () -> {
+            logger.debug("{} without panic - resetting re-init backoff", HEALTHY_PERIOD_BEFORE_BACKOFF_RESET);
+            backoffResetSchedule = null;
+            reinitBackoff.reset();
+        });
         var graph = new Graph(timeProvider, this::panic);
         graphRunner = new GraphRunner(graph, executor) {
 
@@ -130,10 +150,6 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
                         recordState();
                     } catch (RuntimeException e) {
                         panic("Failed to record state", e);
-                    }
-
-                    if (panicReason != null) {
-                        reinitBackoff.reset();
                     }
                 });
             }
@@ -218,16 +234,28 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
 
     private void reset() {
         logger.debug("Closing graph");
-        closeSafelyIfNotNull(logger, graphRunner);
+        closeGraphRunner();
         nodes.clear();
-        graphRunner = null;
 
-        var delay = Duration.ofMillis(reinitBackoff.nextBackOffMillis());
+        long delayMillis = reinitBackoff.nextBackOffMillis();
+        if (delayMillis == BackOff.STOP) {
+            logger.info("Panicked for over {} without staying up for {} - giving up re-initialising, last panic: {}",
+                        Duration.ofMillis(MAX_PANICKING_PERIOD_MILLIS), HEALTHY_PERIOD_BEFORE_BACKOFF_RESET, panicReason);
+            return;
+        }
+        var delay = Duration.ofMillis(delayMillis);
         logger.info("Will re-init after {}", delay);
         executor.schedule(delay, () -> ifNotStopped(() -> {
             panicReason = null;
             createGraphOrPanic();
         }));
+    }
+
+    /// Closes the graph runner and the backoff-reset timer armed with it, in reverse creation order, and forgets both so a repeat call closes neither twice.
+    private void closeGraphRunner() {
+        closeSafelyIfNotNull(logger, graphRunner, backoffResetSchedule);
+        graphRunner = null;
+        backoffResetSchedule = null;
     }
 
     protected interface NodeRegistrator {

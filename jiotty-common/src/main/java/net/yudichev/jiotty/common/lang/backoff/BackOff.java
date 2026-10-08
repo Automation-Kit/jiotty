@@ -40,7 +40,7 @@ public interface BackOff {
 
     /// Returns the maximum elapsed time in milliseconds.
     ///
-    /// If the time elapsed since this instance is created or [reset][#reset()] goes past the this value then the method [#nextBackOffMillis()] starts returning
-    /// [BackOff#STOP].
+    /// If the time elapsed since the first [#nextBackOffMillis()] after creation or [reset][#reset()] goes past this value then [#nextBackOffMillis()] starts
+    /// returning [BackOff#STOP].
     long getMaxElapsedTimeMillis();
 }

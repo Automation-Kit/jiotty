@@ -1,26 +1,30 @@
 package net.yudichev.jiotty.common.graph.server;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
-import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+import static net.yudichev.jiotty.common.graph.server.BaseGraphBasedServer.HEALTHY_PERIOD_BEFORE_BACKOFF_RESET;
+import static net.yudichev.jiotty.common.graph.server.BaseGraphBasedServer.INITIAL_REINIT_DELAY;
+import static net.yudichev.jiotty.common.graph.server.BaseGraphBasedServer.MAX_PANICKING_PERIOD_MILLIS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class BaseGraphBasedServerTest {
     private ProgrammableClock clock;
-    private SchedulingExecutor executor;
+    private RejectingSchedulingExecutor executor;
     private TestServer server;
 
     @BeforeEach
     void setUp() {
         clock = new ProgrammableClock();
-        executor = clock.createSingleThreadedSchedulingExecutor("test");
+        executor = new RejectingSchedulingExecutor(clock.createSingleThreadedSchedulingExecutor("test"));
         server = new TestServer();
         server.start();
         clock.tick();
@@ -57,7 +61,7 @@ class BaseGraphBasedServerTest {
 
         clock.tick();
 
-        assertThat(stoppedBeforeCreation.createNodesCalls).as("the queued graph creation returns without running").isZero();
+        assertThat(stoppedBeforeCreation.createNodesTimes).as("the queued graph creation returns without running").isEmpty();
     }
 
     @Test
@@ -128,19 +132,109 @@ class BaseGraphBasedServerTest {
         server.nextNodeCreationFailure = nodeCreationFailure;
 
         server.runner().panic("trigger", null);
-        clock.advanceTimeAndTick(Duration.ofMinutes(1));
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY.multipliedBy(3));
 
         assertThat(server.handlePanicCalls).extracting(HandlePanicCall::cause).containsExactly(null, nodeCreationFailure);
-        assertThat(server.createNodesCalls).isEqualTo(3);
+        assertThat(server.createNodesTimes).hasSize(3);
         assertThat(server.graphIsActive()).isTrue();
+    }
+
+    @Test
+    void aPanickedGraphIsRebuiltAfterTheInitialReinitDelay() {
+        server.runner().panic("trigger", null);
+        clock.tick();
+
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY.minusMillis(1));
+        assertThat(server.graphIsActive()).isFalse();
+
+        clock.advanceTimeAndTick(Duration.ofMillis(1));
+        assertThat(server.createNodesTimes).hasSize(2);
+        assertThat(server.graphIsActive()).isTrue();
+    }
+
+    @Test
+    void aGraphThatPanicsInEveryWaveIsRebuiltAtGrowingIntervals() {
+        server.recordStateFailure = new IllegalStateException("store unavailable");
+        server.runner().scheduleNewWave("test");
+        clock.tick();
+
+        // the rebuilt graph's first wave panics too, so the next rebuild waits longer than the first one did
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY);
+        assertThat(server.createNodesTimes).hasSize(2);
+
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY);
+        assertThat(server.createNodesTimes).hasSize(2);
+
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY);
+        assertThat(server.createNodesTimes).hasSize(3);
+    }
+
+    @Test
+    void aGraphThatPanicsOutsideAWaveSoonAfterEveryRebuildIsRebuiltAtGrowingIntervals() {
+        server.runner().panic("trigger", null);
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY);
+        assertThat(server.createNodesTimes).hasSize(2);
+
+        // the rebuilt graph's first wave is clean, and the panic comes well inside HEALTHY_PERIOD_BEFORE_BACKOFF_RESET
+        server.runner().panic("trigger", null);
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY);
+        assertThat(server.createNodesTimes).hasSize(2);
+
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY);
+        assertThat(server.createNodesTimes).hasSize(3);
+    }
+
+    @Test
+    void aGraphThatStaysHealthyForTheHealthyPeriodIsRebuiltAfterTheInitialDelayOnItsNextPanic() {
+        server.runner().panic("trigger", null);
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY);
+        clock.advanceTimeAndTick(HEALTHY_PERIOD_BEFORE_BACKOFF_RESET);
+
+        server.runner().panic("trigger", null);
+        clock.advanceTimeAndTick(INITIAL_REINIT_DELAY);
+
+        assertThat(server.createNodesTimes).hasSize(3);
+    }
+
+    @Test
+    void aGraphWhoseFirstWaveCannotBeQueuedIsRebuiltAtGrowingIntervals() {
+        executor.fillQueue();
+        server.runner().panic("trigger", null);
+
+        // every rebuild panics while queueing its first wave, so none stays up for HEALTHY_PERIOD_BEFORE_BACKOFF_RESET, the gaps grow, and none is shorter
+        // than the one before it
+        clock.advanceTimeAndTick(HEALTHY_PERIOD_BEFORE_BACKOFF_RESET.multipliedBy(5));
+
+        List<Duration> gapsBetweenRebuilds = new ArrayList<>();
+        for (int i = 1; i < server.createNodesTimes.size(); i++) {
+            gapsBetweenRebuilds.add(Duration.between(server.createNodesTimes.get(i - 1), server.createNodesTimes.get(i)));
+        }
+        assertThat(gapsBetweenRebuilds).hasSizeGreaterThan(5).isSorted();
+        assertThat(gapsBetweenRebuilds.getLast()).isGreaterThan(gapsBetweenRebuilds.getFirst());
+    }
+
+    @Test
+    void aGraphThatKeepsPanickingForTheMaxPanickingPeriodIsNotReinitialisedAgain() {
+        server.recordStateFailure = new IllegalStateException("store unavailable");
+        server.runner().scheduleNewWave("test");
+        clock.advanceTimeAndTick(Duration.ofMillis(MAX_PANICKING_PERIOD_MILLIS).plus(HEALTHY_PERIOD_BEFORE_BACKOFF_RESET));
+        int rebuildsWhenGivenUp = server.createNodesTimes.size();
+
+        clock.advanceTimeAndTick(Duration.ofDays(1));
+
+        assertThat(server.createNodesTimes).hasSize(rebuildsWhenGivenUp);
+        assertThat(server.graphIsActive()).isFalse();
+        assertThat(server.panicReason).contains("store unavailable");
     }
 
     private final class TestServer extends BaseGraphBasedServer {
         final List<HandlePanicCall> handlePanicCalls = new ArrayList<>();
-        int createNodesCalls;
+        final List<Instant> createNodesTimes = new ArrayList<>();
         int recordStateCalls;
         /// Thrown by the next node creation, then cleared; `null` lets node creation succeed.
         @Nullable RuntimeException nextNodeCreationFailure;
+        /// Thrown by every [#recordState()] call while set, which panics every wave; `null` lets state recording succeed.
+        @Nullable RuntimeException recordStateFailure;
         private @Nullable GraphRunner capturedRunner;
 
         TestServer() {
@@ -157,7 +251,7 @@ class BaseGraphBasedServerTest {
 
         @Override
         protected void createNodes(GraphRunner graphRunner, NodeRegistrator registrator) {
-            createNodesCalls++;
+            createNodesTimes.add(clock.currentInstant());
             RuntimeException failure = nextNodeCreationFailure;
             if (failure != null) {
                 nextNodeCreationFailure = null;
@@ -169,6 +263,9 @@ class BaseGraphBasedServerTest {
         @Override
         protected void recordState() {
             recordStateCalls++;
+            if (recordStateFailure != null) {
+                throw recordStateFailure;
+            }
         }
 
         @Override

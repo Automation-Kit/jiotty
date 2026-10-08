@@ -36,8 +36,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
 ///
 /// **Note:** max_interval caps the retry_interval and not the randomized_interval.
 ///
-/// If the time elapsed since an [ExponentialBackOff] instance is created goes past the max_elapsed_time then the method [#nextBackOffMillis()] starts returning
-/// [BackOff#STOP]. The elapsed time can be reset by calling [#reset()].
+/// The elapsed time starts at the first [#nextBackOffMillis()] after creation or [#reset()], that is, at the first failure of a streak, so a long-lived
+/// instance reset on every success measures only its current streak. Once it goes past the max_elapsed_time, [#nextBackOffMillis()] returns [BackOff#STOP].
 ///
 /// Example: The default retry_interval is .5 seconds, default randomization_factor is 0.5, default multiplier is 1.5 and the default max_interval is 1 minute.
 /// For 10 tries the sequence will be (values in seconds) and assuming we go over the max_elapsed_time on the 10th try:
@@ -86,12 +86,14 @@ public class ExponentialBackOff implements BackOff, StringFormattable {
     private final double multiplier;
     /// The maximum value of the back off period in milliseconds. Once the retry interval reaches this value it stops increasing.
     private final long maxIntervalMillis;
-    /// The maximum elapsed time after instantiating [ExponentialBackOff] or calling [#reset()] after which [#nextBackOffMillis()] returns [BackOff#STOP].
+    /// The maximum elapsed time since the first [#nextBackOffMillis()] after creation or [#reset()] after which [#nextBackOffMillis()] returns
+    /// [BackOff#STOP].
     private final long maxElapsedTimeMillis;
     /// Nano clock.
     private final NanoClock nanoClock;
-    /// The system time in nanoseconds. It is calculated when an ExponentialBackOffPolicy instance is created and is reset when [#reset()] is called.
+    /// The [#nanoClock] time of the first [#nextBackOffMillis()] since creation or [#reset()]; meaningful only while [#timerStarted].
     private long startTimeNanos;
+    private boolean timerStarted;
     /// The current retry interval in milliseconds.
     private double currentIntervalMillis;
 
@@ -126,11 +128,11 @@ public class ExponentialBackOff implements BackOff, StringFormattable {
         reset();
     }
 
-    /// Sets the interval back to the initial retry interval and restarts the timer.
+    /// Sets the interval back to the initial retry interval and stops the timer until the next [#nextBackOffMillis()].
     @Override
     public final void reset() {
         currentIntervalMillis = initialIntervalMillis;
-        startTimeNanos = nanoClock.nanoTime();
+        timerStarted = false;
     }
 
     /// {@inheritDoc}
@@ -140,8 +142,10 @@ public class ExponentialBackOff implements BackOff, StringFormattable {
     /// Subclasses may override if a different algorithm is required.
     @Override
     public long nextBackOffMillis() {
-        // Make sure we have not gone over the maximum elapsed time.
-        if (getElapsedTimeMillis() > maxElapsedTimeMillis) {
+        if (!timerStarted) {
+            startTimeNanos = nanoClock.nanoTime();
+            timerStarted = true;
+        } else if (getElapsedTimeMillis() > maxElapsedTimeMillis) {
             return STOP;
         }
         long randomizedInterval =
@@ -183,11 +187,11 @@ public class ExponentialBackOff implements BackOff, StringFormattable {
         return maxElapsedTimeMillis;
     }
 
-    /// Returns the elapsed time in milliseconds since an [ExponentialBackOff] instance is created and is reset when [#reset()] is called.
+    /// Returns the elapsed time in milliseconds since the first [#nextBackOffMillis()] after creation or [#reset()], or `0` before that call.
     ///
-    /// The elapsed time is computed using [System#nanoTime()].
+    /// The elapsed time is computed using the builder's [NanoClock], [NanoClock#SYSTEM] by default.
     public final long getElapsedTimeMillis() {
-        return (nanoClock.nanoTime() - startTimeNanos) / 1000000;
+        return timerStarted ? (nanoClock.nanoTime() - startTimeNanos) / 1000000 : 0;
     }
 
     /// Returns a random value from the interval `[randomizationFactor*currentInterval, randomizationFactor * currentInterval]`.
@@ -230,6 +234,8 @@ public class ExponentialBackOff implements BackOff, StringFormattable {
         Append.to(appendable, maxIntervalMillis);
         Append.to(appendable, ", maxElapsedTimeMillis=");
         Append.to(appendable, maxElapsedTimeMillis);
+        Append.to(appendable, ", timerStarted=");
+        Append.to(appendable, timerStarted);
         Append.to(appendable, ", startTimeNanos=");
         Append.to(appendable, startTimeNanos);
         Append.to(appendable, ", currentIntervalMillis=");
@@ -257,8 +263,8 @@ public class ExponentialBackOff implements BackOff, StringFormattable {
         /// The maximum value of the back off period in milliseconds. Once the retry interval reaches this value it stops increasing.
         private long maxIntervalMillis = DEFAULT_MAX_INTERVAL_MILLIS;
 
-        /// The maximum elapsed time in milliseconds after instantiating [ExponentialBackOff] or calling [#reset()] after which [#nextBackOffMillis()] returns
-        /// [BackOff#STOP].
+        /// The maximum elapsed time in milliseconds since the first [ExponentialBackOff#nextBackOffMillis()] after creation or [ExponentialBackOff#reset()]
+        /// after which [ExponentialBackOff#nextBackOffMillis()] returns [BackOff#STOP].
         private long maxElapsedTimeMillis = DEFAULT_MAX_ELAPSED_TIME_MILLIS;
 
         /// Nano clock.
@@ -352,16 +358,17 @@ public class ExponentialBackOff implements BackOff, StringFormattable {
 
         /// Returns the maximum elapsed time in milliseconds. The default value is [#DEFAULT_MAX_ELAPSED_TIME_MILLIS].
         ///
-        /// If the time elapsed since an [ExponentialBackOff] instance is created goes past the max_elapsed_time then the method [#nextBackOffMillis()] starts
-        /// returning [BackOff#STOP]. The elapsed time can be reset by calling [#reset()].
+        /// If the time elapsed since the first [ExponentialBackOff#nextBackOffMillis()] after creation or [ExponentialBackOff#reset()] goes past the
+        /// max_elapsed_time then [ExponentialBackOff#nextBackOffMillis()] starts returning [BackOff#STOP].
         public final long getMaxElapsedTimeMillis() {
             return maxElapsedTimeMillis;
         }
 
         /// Sets the maximum elapsed time in milliseconds. The default value is [#DEFAULT_MAX_ELAPSED_TIME_MILLIS]. Must be `> 0`.
         ///
-        /// If the time elapsed since an [ExponentialBackOff] instance is created goes past the max_elapsed_time then the method [#nextBackOffMillis()] starts
-        /// returning [BackOff#STOP]. The elapsed time can be reset by calling [#reset()].
+        /// If the time elapsed since the first [ExponentialBackOff#nextBackOffMillis()] after creation or [ExponentialBackOff#reset()] goes past the
+        /// max_elapsed_time then [ExponentialBackOff#nextBackOffMillis()] starts returning [BackOff#STOP]. The duration of the attempt whose failure made
+        /// that first call does not count towards it.
         ///
         /// Overriding is only supported for the purpose of calling the super implementation and changing the return type, but nothing else.
         public Builder setMaxElapsedTimeMillis(long maxElapsedTimeMillis) {
