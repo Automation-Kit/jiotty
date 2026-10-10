@@ -5,7 +5,9 @@ import com.google.inject.Injector;
 import com.google.inject.Module;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.app.Application;
+import net.yudichev.jiotty.common.app.ApplicationLifecycleControl;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
+import net.yudichev.jiotty.process.Bindings.ProcessApplication;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -20,12 +22,16 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 final class AppManager extends BaseLifecycleComponent {
     private final Function<Injector, Module> appModuleFactory;
     private final Injector injector;
+    private final ApplicationLifecycleControl processLifecycleControl;
     private Application application;
 
     @Inject
-    public AppManager(@Dependency Function<Injector, Module> appModuleFactory, Injector injector) {
+    public AppManager(@Dependency Function<Injector, Module> appModuleFactory,
+                      Injector injector,
+                      @ProcessApplication ApplicationLifecycleControl processLifecycleControl) {
         this.appModuleFactory = checkNotNull(appModuleFactory);
         this.injector = checkNotNull(injector);
+        this.processLifecycleControl = checkNotNull(processLifecycleControl);
     }
 
     @Override
@@ -34,6 +40,7 @@ final class AppManager extends BaseLifecycleComponent {
                                  .setName("app")
                                  .addModule(() -> appModuleFactory.apply(injector))
                                  .withParentInjector(injector)
+                                 .withPanicHandler(processLifecycleControl::panic)
                                  .build();
         try {
             try {

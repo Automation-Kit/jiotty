@@ -44,6 +44,18 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
         this.taskFailureReporter = checkNotNull(taskFailureReporter);
     }
 
+    /// Creates the shared scheduler while the application owning this component starts, so that application owns it, and a full queue on it panics that
+    /// application.
+    @Override
+    protected void doStart() {
+        sharedScheduler = executorFactory.createSingleThreadedSchedulingExecutor("job-scheduler");
+    }
+
+    @Override
+    protected void doStop() {
+        closeIfNotNull(sharedScheduler);
+    }
+
     @SuppressWarnings("ReturnOfInnerClass") // we are a singleton
     @Override
     public Closeable monthly(String jobName, int dayOfMonth, Runnable task) {
@@ -75,17 +87,7 @@ public final class JobSchedulerImpl extends BaseLifecycleComponent implements Jo
     }
 
     private Scheduler getSharedScheduler() {
-        return whenStartedAndNotLifecycling(() -> {
-            if (sharedScheduler == null) {
-                sharedScheduler = executorFactory.createSingleThreadedSchedulingExecutor("job-scheduler");
-            }
-            return sharedScheduler;
-        });
-    }
-
-    @Override
-    protected void doStop() {
-        closeIfNotNull(sharedScheduler);
+        return whenStartedAndNotLifecycling(() -> sharedScheduler);
     }
 
     @BindingAnnotation

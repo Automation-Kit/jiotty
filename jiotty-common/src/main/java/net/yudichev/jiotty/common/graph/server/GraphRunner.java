@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.graph.server;
 
 import com.google.common.annotations.VisibleForTesting;
+import net.yudichev.jiotty.common.async.QueueFullException;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.graph.Graph;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
@@ -59,7 +60,10 @@ public abstract class GraphRunner extends BaseIdempotentCloseable {
             });
         } catch (RejectedExecutionException e) {
             waveScheduled = false;
-            panic(WAVE_REJECTED_PANIC_REASON, e);
+            // A rejection that panicked the executor's owning application takes this graph down with that application.
+            if (!(e instanceof QueueFullException queueFull && queueFull.ownerPanicked())) {
+                panic(WAVE_REJECTED_PANIC_REASON, e);
+            }
         }
     }
 

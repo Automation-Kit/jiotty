@@ -39,6 +39,10 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 /// **not** scheduled) is bounded: a submit beyond `maxQueueSize` is rejected with [RejectedExecutionException] rather than piling up unbounded and
 /// pushing the shared JVM toward OOM while the single thread is blocked. Scheduled/periodic tasks (`schedule*`) do not count against the bound.
 ///
+/// An executor constructed while an [ExecutorOwner] is [current][ExecutorOwner#CURRENT] reports a full queue to that owner before throwing the
+/// [QueueFullException], and lets the owner discard its backlog: the immediate tasks queued until then are skipped, and the future of a skipped
+/// [#submit(Callable)] never completes.
+///
 /// When a [MeterRegistry] is supplied, the standard [ExecutorServiceMetrics] meters (queue depth, active, pool, execution + queue-wait timers, completed)
 /// plus a custom `executor.queued.immediate` gauge and `executor.rejected` counter are published tagged `name`/`family`, and removed when the executor closes.
 /// (Micrometer's dot-separated names expose to Prometheus with underscores — e.g. `executor.queued.immediate` → `executor_queued_immediate`.)
@@ -55,6 +59,7 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
     /// Pending immediate — `execute`/`submit`, not scheduled — tasks not yet started; the value the bound is enforced against. Scheduled/periodic tasks share
     /// the underlying JDK queue but are deliberately excluded, so a handful of long-lived periodic schedules never eat into the immediate-task headroom.
     private final AtomicInteger pendingImmediateTasks = new AtomicInteger();
+    private final @Nullable ExecutorOwner owner;
     /// The submission view: the metering wrapper when a registry is supplied, otherwise [#delegatePool] itself.
     private final ScheduledExecutorService executor;
     /// The concrete pool. [#close()] submits the drain barrier and terminates the pool through it.
@@ -66,6 +71,9 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
     private final Counter rejectedCounter;
     private final Runnable meterCleanup;
     private final Duration shutdownTimeout;
+    /// Advanced by each [#discardBacklog()]; a task queued under an earlier generation is skipped. Plain rather than volatile, so that queuing and running a
+    /// task cost no access beyond the counter's own: the counter's read-modify-writes order every read of this field after the discard it must observe.
+    private int backlogGeneration;
 
     public SingleThreadedSchedulingExecutor(String threadNameBase) {
         this(threadNameBase, threadNameBase, ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE, new ListenerBackedTaskExceptionHandlerRegistry(), null);
@@ -134,6 +142,11 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
                  .tags("name", name, "family", family)
                  .register(meterRegistry);
             meterCleanup = () -> removeMeters(meterRegistry, name, family);
+        }
+        owner = ExecutorOwner.CURRENT.isBound() ? ExecutorOwner.CURRENT.get() : null;
+        // Last, so the owner cannot discard the backlog of an executor still being constructed.
+        if (owner != null) {
+            owner.addBacklogDiscarder(this::discardBacklog);
         }
     }
 
@@ -272,7 +285,18 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
             if (rejectedCounter != null) {
                 rejectedCounter.increment();
             }
-            throw new RejectedExecutionException("Executor '" + threadNameBase + "' rejected a task: queue is full (" + maxQueueSize + ')');
+            // A closed executor panics nothing: what reaches it then is a producer outliving its consumer, not work the owner has fallen behind on.
+            ExecutorOwner ownerToPanic = isClosed() ? null : owner;
+            var rejection = new QueueFullException("Executor '" + threadNameBase + "' rejected a task: queue is full (" + maxQueueSize + ')');
+            if (ownerToPanic != null) {
+                try {
+                    ownerToPanic.onQueueFull(threadNameBase, rejection);
+                } catch (RuntimeException e) {
+                    // Reported to the task exception handler, so the caller receives the rejection itself.
+                    taskExceptionHandler.accept("panicking the owner of " + threadNameBase, e);
+                }
+            }
+            throw rejection;
         }
     }
 
@@ -280,19 +304,33 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
     /// what the pool holds. Reservation throws once the immediate-task bound is reached; the post throws once the pool has shut down.
     private void reserveAndPost(String taskName, Runnable command) {
         reserveImmediateSlot();
+        // Read after the reservation's read-modify-write, so a task queued after a discard carries the discard's generation.
+        int generation = backlogGeneration;
         try {
-            executor.execute(() -> runImmediate(taskName, command));
+            executor.execute(() -> runImmediate(generation, taskName, command));
         } catch (RuntimeException e) {
             pendingImmediateTasks.decrementAndGet();
             throw e;
         }
     }
 
-    /// Runs one reserved immediate task on the executor thread: releases its bound slot, then runs `command` under the exception guard — applied
-    /// allocation-free via [Runnables#runGuarded], so an immediate submit wraps `command` in a single object rather than a guard wrapper plus a slot wrapper.
-    private void runImmediate(String taskName, Runnable command) {
+    /// Runs one reserved immediate task on the executor thread: releases its bound slot, then, unless a discard has passed it, runs `command` under the
+    /// exception guard — applied allocation-free via [Runnables#runGuarded], so an immediate submit wraps `command` in a single object rather than a guard
+    /// wrapper plus a slot wrapper.
+    private void runImmediate(int generation, String taskName, Runnable command) {
         pendingImmediateTasks.decrementAndGet();
-        Runnables.runGuarded(taskName, command, taskExceptionHandler);
+        // Read after the slot's read-modify-write, so a task that starts after a discard sees that discard's generation.
+        if (generation == backlogGeneration) {
+            Runnables.runGuarded(taskName, command, taskExceptionHandler);
+        }
+    }
+
+    /// Skips every immediate task queued so far; each still holds its slot until the executor's thread reaches it. The owner calls it, never concurrently,
+    /// and a task queued while it runs may be skipped or run.
+    private void discardBacklog() {
+        backlogGeneration++;
+        // Publishes the new generation: a task queued or started after this read-modify-write orders its own on the same counter after it.
+        pendingImmediateTasks.getAndAdd(0);
     }
 
     private static void removeMeters(MeterRegistry meterRegistry, String name, String family) {

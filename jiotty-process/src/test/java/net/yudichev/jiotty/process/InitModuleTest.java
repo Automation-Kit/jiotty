@@ -12,6 +12,7 @@ import net.yudichev.jiotty.logging.LoggingLevelConfigurator;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.db.DbConnectionConfig;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import net.yudichev.jiotty.process.Bindings.ProcessApplication;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -27,6 +28,8 @@ class InitModuleTest {
         protected void configure() {
             // Provided by Application at runtime; MetricsModule's lifecycle components need it bound.
             bind(ApplicationLifecycleControl.class).toInstance(ApplicationLifecycleControl.NOOP);
+            // Bound by AppStarter for the process's own application; AppManager escalates the app's panic to it.
+            bind(ApplicationLifecycleControl.class).annotatedWith(ProcessApplication.class).toInstance(ApplicationLifecycleControl.NOOP);
         }
     };
 
@@ -38,7 +41,7 @@ class InitModuleTest {
         if (fileBackedVarStore) {
             builder.withVarStorePath(literally(Paths.get(".")));
         }
-        Injector injector = Guice.createInjector(builder.build());
+        Injector injector = Guice.createInjector(builder.build(), LIFECYCLE_CONTROL);
         assertThat(injector.findBindingsByType(new TypeLiteral<VarStore>() {})).isNotEmpty();
         assertThat(injector.findBindingsByType(new TypeLiteral<DataSourceFactory>() {})).isNotEmpty();
         assertThat(injector.findBindingsByType(new TypeLiteral<KeyStoreAccess>() {})).isNotEmpty();

@@ -69,6 +69,16 @@ class GraphRunnerTest {
         assertThat(events).containsExactly("panic: " + WAVE_REJECTED_PANIC_REASON);
     }
 
+    /// The application owning the executor is restarting, which takes the graph down with it.
+    @Test
+    void aWaveRejectedByAnExecutorWhoseOwnerPanickedLeavesTheGraphAlone() {
+        executor.fillQueueOfPanickedOwner();
+
+        runner.scheduleNewWave("trigger");
+
+        assertThat(events).isEmpty();
+    }
+
     @Test
     void aWaveRequestedAfterARejectedOneIsQueued() {
         executor.fillQueue();

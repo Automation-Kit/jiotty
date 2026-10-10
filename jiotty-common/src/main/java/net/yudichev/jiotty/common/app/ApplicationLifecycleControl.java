@@ -14,6 +14,10 @@ public interface ApplicationLifecycleControl {
         public boolean restarting() {
             return false;
         }
+
+        @Override
+        public void panic(String reason, Throwable cause) {
+        }
     };
 
     void initiateShutdown();
@@ -22,4 +26,8 @@ public interface ApplicationLifecycleControl {
 
     /// @return whether the application restart has been [initiated](#initiateRestart())
     boolean restarting();
+
+    /// Panics the application as a full queue on one of its own executors does: its executors' queued tasks are discarded and its [PanicHandler] runs, once
+    /// per start. Safe to call from any thread, and does not block.
+    void panic(String reason, Throwable cause);
 }

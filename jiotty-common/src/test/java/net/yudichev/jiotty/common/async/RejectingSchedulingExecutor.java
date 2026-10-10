@@ -15,6 +15,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 public final class RejectingSchedulingExecutor extends BaseIdempotentCloseable implements SchedulingExecutor {
     private final SchedulingExecutor delegate;
     private boolean queueFull;
+    private boolean ownerPanicked;
 
     public RejectingSchedulingExecutor(SchedulingExecutor delegate) {
         this.delegate = checkNotNull(delegate, "delegate");
@@ -28,6 +29,12 @@ public final class RejectingSchedulingExecutor extends BaseIdempotentCloseable i
     /// Rejects immediate tasks from now on, as an executor whose queue is full does; delayed tasks are still taken.
     public void fillQueue() {
         queueFull = true;
+    }
+
+    /// As [#fillQueue()], for an executor whose rejection has panicked the application that owns it.
+    public void fillQueueOfPanickedOwner() {
+        queueFull = true;
+        ownerPanicked = true;
     }
 
     /// Takes immediate tasks again, as an executor whose queue has emptied does.
@@ -73,9 +80,15 @@ public final class RejectingSchedulingExecutor extends BaseIdempotentCloseable i
     }
 
     private void checkTaken(String taskName) {
-        boolean closed = isClosed();
-        if (closed || queueFull) {
-            throw new RejectedExecutionException("Rejected " + taskName + (closed ? ": shut down" : ": queue is full"));
+        if (isClosed()) {
+            throw new RejectedExecutionException("Rejected " + taskName + ": shut down");
+        }
+        if (queueFull) {
+            var rejection = new QueueFullException("Rejected " + taskName + ": queue is full");
+            if (ownerPanicked) {
+                rejection.markOwnerPanicked();
+            }
+            throw rejection;
         }
     }
 }

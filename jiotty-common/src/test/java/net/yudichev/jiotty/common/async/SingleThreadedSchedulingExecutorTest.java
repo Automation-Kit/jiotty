@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -272,6 +273,127 @@ class SingleThreadedSchedulingExecutorTest {
     }
 
     @Test
+    void aFullQueuePanicsTheOwnerTheExecutorWasCreatedUnder() {
+        var owner = new RecordingOwner();
+        try (SingleThreadedSchedulingExecutor ownedExecutor = ownedExecutor(owner, "owned", Duration.ofSeconds(10))) {
+            CountDownLatch release = occupy(ownedExecutor);
+            ownedExecutor.execute("queued", () -> {});
+
+            assertThatThrownBy(() -> ownedExecutor.execute("rejected", () -> {}))
+                    .isInstanceOfSatisfying(QueueFullException.class, rejection -> assertThat(rejection.ownerPanicked()).isTrue());
+            assertThat(owner.panickedExecutorNames).containsExactly("owned");
+            release.countDown();
+        }
+    }
+
+    @Test
+    void aFullQueueOfAnExecutorCreatedOutsideAnyOwnerPanicsNothing() {
+        try (var unownedExecutor = new SingleThreadedSchedulingExecutor("unowned", "unowned", 1, exceptionHandler, null)) {
+            CountDownLatch release = occupy(unownedExecutor);
+            unownedExecutor.execute("queued", () -> {});
+
+            assertThatThrownBy(() -> unownedExecutor.execute("rejected", () -> {}))
+                    .isInstanceOfSatisfying(QueueFullException.class, rejection -> assertThat(rejection.ownerPanicked()).isFalse());
+            release.countDown();
+        }
+    }
+
+    /// The panic leaves the queue empty for the owner's teardown, and the tasks queued before it never run.
+    @Test
+    void aDiscardSkipsTheTasksQueuedBeforeItAndRunsThoseQueuedAfter() {
+        var owner = new RecordingOwner();
+        try (SingleThreadedSchedulingExecutor ownedExecutor = ownedExecutor(owner, "owned", 2, Duration.ofSeconds(10))) {
+            CountDownLatch release = occupy(ownedExecutor);
+            var discardedTaskRan = new AtomicBoolean();
+            ownedExecutor.execute("discarded", () -> discardedTaskRan.set(true));
+
+            owner.discardBacklogs();
+            var teardownRan = new CompletableFuture<Void>();
+            ownedExecutor.execute("teardown", () -> teardownRan.complete(null));
+            release.countDown();
+
+            assertThat(teardownRan).succeedsWithin(Duration.ofSeconds(10));
+            assertThat(discardedTaskRan).isFalse();
+        }
+    }
+
+    @Test
+    void aDiscardedSubmitLeavesItsFutureIncomplete() {
+        var owner = new RecordingOwner();
+        try (SingleThreadedSchedulingExecutor ownedExecutor = ownedExecutor(owner, "owned", 2, Duration.ofSeconds(10))) {
+            CountDownLatch release = occupy(ownedExecutor);
+            CompletableFuture<Integer> discardedResult = ownedExecutor.submit(() -> 1);
+
+            owner.discardBacklogs();
+            var afterDiscardRan = new CompletableFuture<Void>();
+            ownedExecutor.execute("after discard", () -> afterDiscardRan.complete(null));
+            release.countDown();
+
+            assertThat(afterDiscardRan).succeedsWithin(Duration.ofSeconds(10));
+            assertThat(discardedResult).isNotDone();
+        }
+    }
+
+    /// A discarded task's slot is held until the executor's thread reaches and skips it, and released then like any other.
+    @Test
+    void aDiscardedTaskReleasesItsSlotOnceSkipped() {
+        var owner = new RecordingOwner();
+        try (SingleThreadedSchedulingExecutor ownedExecutor = ownedExecutor(owner, "owned", Duration.ofSeconds(10))) {
+            CountDownLatch release = occupy(ownedExecutor);
+            ownedExecutor.execute("discarded", () -> {});
+            owner.discardBacklogs();
+            assertThatThrownBy(() -> ownedExecutor.execute("rejected", () -> {})).isInstanceOf(QueueFullException.class);
+            // Scheduled, so it takes no slot, and it runs once the skipped task ahead of it has released its own.
+            var skippedTaskPassed = new CompletableFuture<Void>();
+            ownedExecutor.schedule(Duration.ZERO, () -> skippedTaskPassed.complete(null));
+            release.countDown();
+            assertThat(skippedTaskPassed).succeedsWithin(Duration.ofSeconds(10));
+
+            var ran = new CompletableFuture<Void>();
+            ownedExecutor.execute("after the skipped task", () -> ran.complete(null));
+
+            assertThat(ran).succeedsWithin(Duration.ofSeconds(10));
+        }
+    }
+
+    /// A rejection after close comes from a producer that outlived its consumer, not from work the owner has fallen behind on.
+    @Test
+    void aClosedExecutorPanicsNoOwner() {
+        var owner = new RecordingOwner();
+        SingleThreadedSchedulingExecutor stuckExecutor = ownedExecutor(owner, "stuck", Duration.ofMillis(300));
+        CountDownLatch release = occupy(stuckExecutor);
+        stuckExecutor.execute("stranded", () -> {});
+        // The backlog cannot drain, so the close is forced and leaves the stranded task counted against the bound.
+        stuckExecutor.close();
+
+        assertThatThrownBy(() -> stuckExecutor.execute("late", () -> {}))
+                .isInstanceOfSatisfying(QueueFullException.class, rejection -> assertThat(rejection.ownerPanicked()).isFalse());
+        assertThat(owner.panickedExecutorNames).isEmpty();
+        release.countDown();
+    }
+
+    @Test
+    void anOwnerFailingToPanicIsReportedAndTheRejectionStillThrown() {
+        var reportedTaskName = new CompletableFuture<String>();
+        exceptionHandler.addExceptionHandler((taskName, _) -> reportedTaskName.complete(taskName));
+        ExecutorOwner failingOwner = new RecordingOwner() {
+            @Override
+            public void onQueueFull(String executorName, QueueFullException rejection) {
+                throw new IllegalStateException("cannot panic");
+            }
+        };
+        try (SingleThreadedSchedulingExecutor ownedExecutor = ownedExecutor(failingOwner, "owned", Duration.ofSeconds(10))) {
+            CountDownLatch release = occupy(ownedExecutor);
+            ownedExecutor.execute("queued", () -> {});
+
+            assertThatThrownBy(() -> ownedExecutor.execute("rejected", () -> {}))
+                    .isInstanceOfSatisfying(QueueFullException.class, rejection -> assertThat(rejection.ownerPanicked()).isFalse());
+            assertThat(reportedTaskName).succeedsWithin(Duration.ofSeconds(10)).isEqualTo("panicking the owner of owned");
+            release.countDown();
+        }
+    }
+
+    @Test
     void aFiredOneShotScheduleReleasesItsHandle() {
         var ran = new CompletableFuture<Void>();
 
@@ -336,6 +458,16 @@ class SingleThreadedSchedulingExecutorTest {
         return new SingleThreadedSchedulingExecutor(name, name, ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE, exceptionHandler, null);
     }
 
+    /// An executor bounded at one queued task, constructed while `owner` is bound.
+    private SingleThreadedSchedulingExecutor ownedExecutor(ExecutorOwner owner, String name, Duration shutdownTimeout) {
+        return ownedExecutor(owner, name, 1, shutdownTimeout);
+    }
+
+    private SingleThreadedSchedulingExecutor ownedExecutor(ExecutorOwner owner, String name, int maxQueueSize, Duration shutdownTimeout) {
+        return ScopedValue.where(ExecutorOwner.CURRENT, owner)
+                          .call(() -> new SingleThreadedSchedulingExecutor(name, name, maxQueueSize, exceptionHandler, null, shutdownTimeout));
+    }
+
     /// Occupies the executor's single thread until the returned latch is counted down, so any task submitted afterwards queues behind it.
     private static CountDownLatch occupy(SingleThreadedSchedulingExecutor executor) {
         var running = new CountDownLatch(1);
@@ -385,6 +517,28 @@ class SingleThreadedSchedulingExecutorTest {
             Thread.onSpinWait();
         }
         throw new AssertionError("thread '" + thread.getName() + "' did not reach a waiting state, was " + thread.getState());
+    }
+
+    /// Records the names of the executors that report a full queue, and discards the owned executors' backlogs when told to.
+    private static class RecordingOwner implements ExecutorOwner {
+        final List<String> panickedExecutorNames = new CopyOnWriteArrayList<>();
+        private final List<Runnable> backlogDiscarders = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void addBacklogDiscarder(Runnable backlogDiscarder) {
+            backlogDiscarders.add(backlogDiscarder);
+        }
+
+        @Override
+        public void onQueueFull(String executorName, QueueFullException rejection) {
+            rejection.markOwnerPanicked();
+            panickedExecutorNames.add(executorName);
+        }
+
+        /// Discards the backlogs of the owned executors, as a panic of the owner does.
+        void discardBacklogs() {
+            backlogDiscarders.forEach(Runnable::run);
+        }
     }
 
     /// Holds one thread's [#schedule(Runnable, long, TimeUnit)] call after the task is queued and before its future is returned, which is the window the

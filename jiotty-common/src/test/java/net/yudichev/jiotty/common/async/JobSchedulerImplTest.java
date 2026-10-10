@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.async;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,7 +16,9 @@ import java.time.ZoneOffset;
 import static java.time.temporal.ChronoUnit.DAYS;
 import static java.time.temporal.ChronoUnit.HOURS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class JobSchedulerImplTest {
@@ -36,6 +39,25 @@ class JobSchedulerImplTest {
             clock.advanceTime(taskRunTime);
             execCount++;
         };
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (scheduler != null) {
+            scheduler.stop();
+        }
+    }
+
+    /// The shared scheduler belongs to the application that started this component, not to whichever one first schedules a job on it.
+    @Test
+    void theSharedSchedulerIsOwnedByTheApplicationThatStartedIt(@Mock ExecutorOwner startingOwner, @Mock ExecutorOwner schedulingOwner) {
+        scheduler = new JobSchedulerImpl(new ExecutorFactoryImpl(), clock, zoneId, taskFailureReporter);
+        ScopedValue.where(ExecutorOwner.CURRENT, startingOwner).run(scheduler::start);
+
+        ScopedValue.where(ExecutorOwner.CURRENT, schedulingOwner).run(() -> scheduler.daily("dailyJob", LocalTime.of(9, 0), task).close());
+
+        verify(startingOwner).addBacklogDiscarder(any());
+        verifyNoInteractions(schedulingOwner);
     }
 
     @Test
