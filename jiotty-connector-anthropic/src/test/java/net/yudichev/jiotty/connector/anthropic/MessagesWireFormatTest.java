@@ -253,11 +253,42 @@ final class MessagesWireFormatTest {
     @Test
     void unmodelledContentBlocksParseWithoutText() {
         var response = Json.parse("""
-                                  {"content": [{"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": "answer"}],
+                                  {"content": [{"type": "container_upload", "file_id": "file_01"}, {"type": "text", "text": "answer"}],
                                    "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 2}}""", MessagesResponse.class);
 
         assertThat(textOf(response)).isEqualTo("answer");
         assertThat(response.textLength()).isEqualTo("answer".length());
+    }
+
+    /// A thinking model's reasoning comes back ahead of its calls, and Anthropic rejects the next request unless the assistant turn replays it field for field,
+    /// signature included — even where the reasoning text itself is empty.
+    @Test
+    void thinkingBlocksReplayUnaltered() {
+        var response = Json.parse("""
+                                  {"content": [{"type": "thinking", "thinking": "", "signature": "sig-01"},
+                                               {"type": "redacted_thinking", "data": "encrypted-01"},
+                                               {"type": "tool_use", "id": "toolu_01", "name": "get_help_topic", "input": {"path": "charging/prices"}}],
+                                   "stop_reason": "tool_use"}""", MessagesResponse.class);
+
+        var replayed = Json.parse("""
+                                  {"role": "assistant",
+                                   "content": [{"type": "thinking", "thinking": "", "signature": "sig-01"},
+                                               {"type": "redacted_thinking", "data": "encrypted-01"},
+                                               {"type": "tool_use", "id": "toolu_01", "name": "get_help_topic", "input": {"path": "charging/prices"}}]}""");
+
+        assertThat(textOf(response)).isEmpty();
+        assertThat(Json.parse(Json.stringify(Message.of(Role.ASSISTANT, response.content())))).isEqualTo(replayed);
+    }
+
+    /// A declined request is a whole reply, distinct both from a finished turn and from a cut-off one.
+    @Test
+    void refusalIsRecognised() {
+        var response = Json.parse("""
+                                  {"content": [], "stop_reason": "refusal"}""", MessagesResponse.class);
+
+        assertThat(response.isRefusal()).isTrue();
+        assertThat(response.isCompleteTurn()).isFalse();
+        assertThat(response.isAwaitingToolResults()).isFalse();
     }
 
     /// The length must match what appending actually produces, since callers size their buffer from it and a short answer would make them regrow anyway.

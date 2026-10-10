@@ -67,6 +67,12 @@ interface BaseMessagesResponse {
         return stopReason().filter("tool_use"::equals).isPresent();
     }
 
+    /// Whether Anthropic's safety classifiers declined the request. The reply is whole but carries no usable content, so a caller treats it as a decline
+    /// rather than as a truncation.
+    default boolean isRefusal() {
+        return stopReason().filter("refusal"::equals).isPresent();
+    }
+
     /// Every `tool_use` block in the reply, in the order the model made them, whatever the stop reason — a reply cut short mid-call still carries the call,
     /// with arguments only [#isAwaitingToolResults] makes safe to trust.
     ///

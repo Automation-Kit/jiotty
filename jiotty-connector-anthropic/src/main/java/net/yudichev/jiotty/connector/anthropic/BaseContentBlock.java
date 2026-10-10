@@ -15,8 +15,9 @@ import java.util.Optional;
 
 import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_ABSENT;
 
-/// One block of a message, in either direction. Anthropic's block types are a union discriminated by [#type] — this models the three a tool-using caller
-/// deals with (`text`, `tool_use`, `tool_result`), so every other field is optional and which ones are populated follows from the type.
+/// One block of a message, in either direction. Anthropic's block types are a union discriminated by [#type] — this models the ones a tool-using caller
+/// deals with (`text`, `tool_use`, `tool_result`, and the `thinking` and `redacted_thinking` blocks it must replay), so every other field is optional and
+/// which ones are populated follows from the type.
 @Value.Immutable
 @PublicImmutablesStyle
 @JsonSerialize
@@ -51,6 +52,16 @@ interface BaseContentBlock {
     /// as data, so a tool that could not do what was asked says so here instead of returning prose that reads like an answer.
     @JsonProperty("is_error")
     Optional<Boolean> isError();
+
+    /// A `thinking` block's reasoning, which is empty unless the request asked for it to be shown.
+    Optional<String> thinking();
+
+    /// What Anthropic checks a replayed `thinking` block against. A tool-using caller must send the block back with the call it preceded, unaltered, or the
+    /// request is rejected.
+    Optional<String> signature();
+
+    /// A `redacted_thinking` block's encrypted reasoning, replayed unaltered for the same reason as [#signature].
+    Optional<String> data();
 
     /// Whether this is a call the model is asking the caller to run. Ignored by Jackson: unlike the response types, a block is serialised as well as parsed,
     /// and a derived convenience emitted onto the wire is a field Anthropic never sent and does not accept back.
