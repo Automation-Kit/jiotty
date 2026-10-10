@@ -6,6 +6,7 @@ import net.yudichev.jiotty.security.OAuth2TokenManager;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
@@ -16,6 +17,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 final class FakeOAuth2TokenManager implements OAuth2TokenManager {
     private final CopyOnWriteArrayList<Consumer<? super AuthState>> handlers = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<String> invalidations = new CopyOnWriteArrayList<>();
+    private int revocationCount;
     private volatile AuthState state;
 
     FakeOAuth2TokenManager(AuthState initialState) {
@@ -61,7 +63,18 @@ final class FakeOAuth2TokenManager implements OAuth2TokenManager {
         setState(new AuthState.PermanentFailure(reason));
     }
 
+    @Override
+    public CompletableFuture<Void> revoke() {
+        revocationCount++;
+        setState(new AuthState.PermanentFailure("revoked"));
+        return CompletableFuture.completedFuture(null);
+    }
+
     List<String> invalidations() {
         return invalidations;
+    }
+
+    int revocationCount() {
+        return revocationCount;
     }
 }

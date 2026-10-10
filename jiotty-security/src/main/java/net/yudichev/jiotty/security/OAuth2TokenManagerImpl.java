@@ -2,6 +2,7 @@ package net.yudichev.jiotty.security;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -42,7 +43,13 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.Math.toIntExact;
 import static java.nio.charset.StandardCharsets.US_ASCII;
+import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessageFormattable;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.isServerError;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.isSuccess;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
@@ -50,9 +57,11 @@ import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
 import static net.yudichev.jiotty.security.Bindings.Dependency;
 import static net.yudichev.jiotty.security.Bindings.LoginPending;
+import static net.yudichev.jiotty.security.Bindings.RevocationUrl;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
+@SuppressWarnings({"FieldAccessNotGuarded", "NonFinalGuard"}) // @GuardedBy("executor") marks executor confinement, which IntelliJ's lock analysis cannot see
 public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OAuth2TokenManager {
     /// Token-endpoint error codes saying the grant itself is gone, so no refresh can ever succeed and the user has to authorise again: `invalid_grant`
     /// (RFC 6749 §5.2 — an expired, revoked or already-consumed grant, which is what a password change produces) and the OpenID Connect §3.1.2.6 codes
@@ -67,6 +76,18 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     static final Duration TOKEN_RETRY_INITIAL_INTERVAL = Duration.ofSeconds(5);
     @VisibleForTesting
     static final Duration TOKEN_RETRY_MAX_ELAPSED_TIME = Duration.ofMinutes(10);
+    /// The error Google's revocation endpoint answers with HTTP 400 for a token it no longer recognises, which leaves no grant to revoke.
+    @VisibleForTesting
+    static final String INVALID_TOKEN_ERROR = "invalid_token";
+    /// RFC 6749's name for a refresh token, used as a grant type, a request parameter and an RFC 7009 token type hint.
+    @VisibleForTesting
+    static final String REFRESH_TOKEN = "refresh_token";
+    /// The RFC 7009 revocation request parameter carrying the token to revoke.
+    @VisibleForTesting
+    static final String TOKEN_PARAM = "token";
+    /// The RFC 7009 revocation request parameter naming the kind of token sent.
+    @VisibleForTesting
+    static final String TOKEN_TYPE_HINT_PARAM = "token_type_hint";
     private static final Duration TOKEN_RETRY_MAX_INTERVAL = Duration.ofMinutes(1);
     protected final Logger logger = LogManager.getLogger(getClass());
     protected final String clientId;
@@ -81,13 +102,13 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     private final CurrentDateTimeProvider currentDateTimeProvider;
     /// The authentication state. Holds the latest value and hands it to each subscriber on subscription, so a subscriber that attaches once this component has
     /// already started — the common case, as the application starts this component before the service that consumes it — learns the state published during
-    /// [#doStart].
-    ///
-    /// Confined to [#executor]: [#publishAuthState] and [#subscribeToAccessTokenState] dispatch onto it, which lets this hold the single-threaded
-    /// implementation.
+    /// [#doStart]. [#publishAuthState] and [#subscribeToAccessTokenState] dispatch onto [#executor], which lets this hold the single-threaded implementation.
+    @GuardedBy("executor")
     private final ObservableValue<AuthState> authState = ObservableValue.simple(new AuthState.TransientFailure("Initialising"));
     private final String varStoreKey;
     private final String tokenUrl;
+    /// The authorisation server's revocation endpoint, or `null` when none is configured, in which case [#revoke()] only deletes the stored token.
+    private final @Nullable String revocationUrl;
     /// Whether the owner holds an auth code it supplies via [#onNewAuthCode] as part of its own startup, so a start with no stored token is the beginning of a
     /// login rather than a dormant not-authenticated state (see [#obtainAccessToken]).
     private final boolean loginPending;
@@ -95,15 +116,27 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     protected SchedulingExecutor executor;
     private OkHttpClient httpClient;
     private OauthAccessToken currentToken;
-    /// Backoff governing token-request retries, armed on the first failure of a streak and consulted on each subsequent failure. Confined to [#executor].
+    /// Backoff governing token-request retries, armed on the first failure of a streak and consulted on each subsequent failure.
+    @GuardedBy("executor")
     private BackOff tokenRequestBackOff;
-    /// Whether a token-request retry streak is in progress, so the first failure of a streak arms [#tokenRequestBackOff] and a success ends it. Confined to
-    /// [#executor].
+    /// Whether a token-request retry streak is in progress, so the first failure of a streak arms [#tokenRequestBackOff] and a success ends it.
+    @GuardedBy("executor")
     private boolean retryingTokenRequest;
     /// The pending scheduled token request — a retry ([#retryTokenRequestOrGiveUp]) or a routine refresh ([#scheduleTokenRefresh]) — or `null` when none is
     /// scheduled. Retained so it is cancelled before the next one is scheduled (at most one is ever pending) and by [#invalidateCredential], which must stop a
-    /// pending retry/refresh from resurrecting a dropped credential. Confined to [#executor].
+    /// pending retry/refresh from resurrecting a dropped credential.
+    @GuardedBy("executor")
     private @Nullable Closeable pendingScheduledTokenRequest;
+    /// Set by [#revoke()]; afterwards no token request is sent and no token response is stored.
+    @GuardedBy("executor")
+    private boolean revoked;
+    /// Whether a token request has been sent and its answer not yet handled.
+    @GuardedBy("executor")
+    private boolean tokenRequestInFlight;
+    /// The refresh token the request in flight when [#revoke()] ran brings back, or `null` when no revocation waits on one. It completes with `null` when that
+    /// request returns no refresh token.
+    @GuardedBy("executor")
+    private @Nullable CompletableFuture<@Nullable String> inFlightRefreshToken;
 
     @Inject
     public OAuth2TokenManagerImpl(@Dependency Provider<SchedulingExecutor> executorProvider,
@@ -113,6 +146,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                   @ClientSecret Optional<String> clientSecret,
                                   @ApiName String apiName,
                                   @TokenUrl String tokenUrl,
+                                  @RevocationUrl Optional<String> revocationUrl,
                                   @Scope String scope,
                                   @LoginPending boolean loginPending) {
         this.clientId = checkNotNull(clientId);
@@ -123,6 +157,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         this.apiName = checkNotNull(apiName);
         this.scope = checkNotNull(scope);
         this.tokenUrl = checkNotNull(tokenUrl);
+        this.revocationUrl = checkNotNull(revocationUrl).orElse(null);
         this.loginPending = loginPending;
         varStoreKey = apiName + "Oauth2Token_" + clientId + "_" + scope;
     }
@@ -131,17 +166,11 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     protected void doStart() {
         httpClient = createHttpClient();
         executor = executorProvider.get();
-        // The backoff reads elapsed time through the injected clock (so tests drive it deterministically via ProgrammableClock), not the wall clock.
-        tokenRequestBackOff = new ExponentialBackOff.Builder()
-                .setInitialIntervalMillis(toIntExact(TOKEN_RETRY_INITIAL_INTERVAL.toMillis()))
-                .setMaxIntervalMillis(toIntExact(TOKEN_RETRY_MAX_INTERVAL.toMillis()))
-                .setMaxElapsedTimeMillis(toIntExact(TOKEN_RETRY_MAX_ELAPSED_TIME.toMillis()))
-                .setNanoClock(currentDateTimeProvider)
-                .build();
+        tokenRequestBackOff = createRetryBackOff();
         varStore.readValueEncrypted(OauthAccessToken.class, varStoreKey)
                 .ifPresentOrElse(accessToken -> {
                                      if (isExpired(accessToken)) {
-                                         refreshAccessToken(accessToken.refreshToken());
+                                         executor.execute("refreshStoredToken", () -> refreshAccessToken(accessToken.refreshToken()));
                                      } else {
                                          setCurrentToken(accessToken);
                                          scheduleTokenRefresh();
@@ -232,7 +261,10 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                 .add("client_id", clientId);
         clientSecret.ifPresent(secret -> formBuilder.add("client_secret", secret));
         codeVerifier.ifPresent(verifier -> formBuilder.add("code_verifier", verifier));
-        requestToken(formBuilder.build(), null);
+        RequestBody formBody = formBuilder.build();
+        if (!executor.tryExecute("exchangeAuthCode", () -> requestToken(formBody, null))) {
+            logger.info("[{}] auth code dropped: the manager has stopped", apiName);
+        }
     }
 
     @Override
@@ -250,16 +282,141 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         }));
     }
 
+    @Override
+    public CompletableFuture<Void> revoke() {
+        return whenNotLifecycling(() -> isStartedPlain()
+                                        ? executor.submit(this::dropCredentialForRevocation)
+                                                  .thenCompose(dropped -> requestRevocation(dropped.storedRefreshToken())
+                                                                          .thenCombine(dropped.inFlightRefreshToken().thenCompose(this::requestRevocation),
+                                                                                       (_, _) -> null))
+                                        : new CompletableFuture<>());
+    }
+
+    /// Ends this manager's use of its credential: deletes the stored token through [#invalidateCredential], and arranges for the grant a token request still
+    /// in flight brings back to be revoked too. Runs on [#executor].
+    private DroppedCredential dropCredentialForRevocation() {
+        revoked = true;
+        CompletableFuture<@Nullable String> refreshTokenInFlight = tokenRequestInFlight ? new CompletableFuture<>() : completedFuture(null);
+        inFlightRefreshToken = tokenRequestInFlight ? refreshTokenInFlight : null;
+        String storedRefreshToken;
+        try {
+            storedRefreshToken = varStore.readValueEncrypted(OauthAccessToken.class, varStoreKey).map(OauthAccessToken::refreshToken).orElse(null);
+        } finally {
+            invalidateCredential("revoked");
+        }
+        logger.info("[{}] stored token deleted for revocation", apiName);
+        return new DroppedCredential(storedRefreshToken, refreshTokenInFlight);
+    }
+
+    /// Asks the authorisation server to revoke the grant behind `refreshToken`, retrying a transient failure until the retry budget is spent.
+    ///
+    /// @param refreshToken the refresh token to revoke, or `null` when there is none, in which case nothing is sent
+    private CompletableFuture<Void> requestRevocation(@Nullable String refreshToken) {
+        if (refreshToken == null || revocationUrl == null) {
+            return completedFuture(null);
+        }
+        var revocation = new CompletableFuture<Void>();
+        sendRevocation(revocationUrl, refreshToken, createRetryBackOff(), revocation);
+        return revocation;
+    }
+
+    /// The backoff for retrying a failed request to the authorisation server.
+    private BackOff createRetryBackOff() {
+        // The backoff reads elapsed time through the injected clock (so tests drive it deterministically via ProgrammableClock), not the wall clock.
+        return new ExponentialBackOff.Builder()
+                .setInitialIntervalMillis(toIntExact(TOKEN_RETRY_INITIAL_INTERVAL.toMillis()))
+                .setMaxIntervalMillis(toIntExact(TOKEN_RETRY_MAX_INTERVAL.toMillis()))
+                .setMaxElapsedTimeMillis(toIntExact(TOKEN_RETRY_MAX_ELAPSED_TIME.toMillis()))
+                .setNanoClock(currentDateTimeProvider)
+                .build();
+    }
+
+    private void sendRevocation(String url, String refreshToken, BackOff backOff, CompletableFuture<Void> revocation) {
+        Request request = new Request.Builder().url(url)
+                                               .post(new FormBody.Builder().add(TOKEN_PARAM, refreshToken)
+                                                                           .add(TOKEN_TYPE_HINT_PARAM, REFRESH_TOKEN)
+                                                                           .build())
+                                               .build();
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                onRevocationOutcome(() -> retryRevocationOrFail(url, refreshToken, backOff, revocation, e));
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) {
+                String error;
+                try (ResponseBody body = response.body()) {
+                    error = response.isSuccessful() ? "" : errorCode(body.string());
+                } catch (RuntimeException | IOException e) {
+                    onRevocationOutcome(() -> retryRevocationOrFail(url, refreshToken, backOff, revocation, e));
+                    return;
+                }
+                onRevocationOutcome(() -> handleRevocationResponse(url, refreshToken, backOff, revocation, response.code(), error));
+            }
+        });
+    }
+
+    /// Runs `action` on [#executor], dropping it once this manager has stopped, as [#requestToken] does with a token response.
+    private void onRevocationOutcome(Runnable action) {
+        executor.tryExecute("revocationOutcome", () -> ifNotStopped(action));
+    }
+
+    /// Completes `revocation` on a confirmed revocation or a token Google no longer recognises, retries a server-side or rate-limit failure, and fails
+    /// `revocation` on any other answer. Runs on [#executor].
+    ///
+    /// @param error the OAuth error code the response carried, or empty when it carried none
+    private void handleRevocationResponse(String url, String refreshToken, BackOff backOff, CompletableFuture<Void> revocation, int status, String error) {
+        logger.debug("[{}] grant revocation answered HTTP {}, error '{}'", apiName, status, error);
+        if (isSuccess(status) || (status == BAD_REQUEST_400 && INVALID_TOKEN_ERROR.equals(error))) {
+            logger.info("[{}] grant revoked", apiName);
+            revocation.complete(null);
+        } else if (isServerError(status) || status == TOO_MANY_REQUESTS_429) {
+            retryRevocationOrFail(url, refreshToken, backOff, revocation, new RuntimeException(apiName + ": grant revocation answered HTTP " + status));
+        } else {
+            revocation.completeExceptionally(new RuntimeException(apiName + ": grant revocation rejected with HTTP " + status + ", error '" + error + '\''));
+        }
+    }
+
+    /// Sends the revocation again after a backoff delay, or fails `revocation` with `failure` once the retry budget is spent. Runs on [#executor].
+    private void retryRevocationOrFail(String url, String refreshToken, BackOff backOff, CompletableFuture<Void> revocation, Throwable failure) {
+        long backOffMillis = backOff.nextBackOffMillis();
+        if (backOffMillis == BackOff.STOP) {
+            revocation.completeExceptionally(new RuntimeException(apiName + ": grant revocation failed", failure));
+        } else {
+            logger.info("[{}] grant revocation failed ({}); retrying in {}ms", apiName, humanReadableMessage(failure), backOffMillis);
+            executor.schedule(Duration.ofMillis(backOffMillis), () -> sendRevocation(url, refreshToken, backOff, revocation));
+        }
+    }
+
+    /// @return the OAuth error code `body` carries, or empty when `body` is not an OAuth error response
+    private String errorCode(String body) {
+        try {
+            return Json.parse(body, OauthErrorResponse.class).error();
+        } catch (RuntimeException e) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("[{}] grant revocation error response is not an OAuth error: {}", apiName, humanReadableMessageFormattable(e));
+            }
+            return "";
+        }
+    }
+
     private void refreshAccessToken(String refreshToken) {
         var formBuilder = new FormBody.Builder()
-                .add("grant_type", "refresh_token")
-                .add("refresh_token", refreshToken)
+                .add("grant_type", REFRESH_TOKEN)
+                .add(REFRESH_TOKEN, refreshToken)
                 .add("client_id", clientId);
         clientSecret.ifPresent(secret -> formBuilder.add("client_secret", secret));
         requestToken(formBuilder.build(), refreshToken);
     }
 
+    /// Sends a token request and handles its answer on [#executor]. Runs on [#executor].
     private void requestToken(RequestBody formBody, @Nullable String fallbackRefreshToken) {
+        if (revoked) {
+            logger.info("[{}] token request not sent: the credential is revoked", apiName);
+            return;
+        }
+        tokenRequestInFlight = true;
         logger.info("[{}] requesting token", apiName);
         Request request = new Request.Builder().url(tokenUrl).post(formBody).build();
         Instant requestTime = currentDateTimeProvider.currentInstant();
@@ -291,14 +448,10 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
             }
         });
 
-        // Marshal the completed request back onto the executor under the lifecycle lock: if the component stopped while the request was in flight, orphaned
-        // response is dropped instead of being rejected by the dead executor.
-        future.whenComplete((responseEither, throwable) ->
-                                    whenNotLifecycling(() -> {
-                                        if (isStartedPlain()) {
-                                            executor.execute(() -> handleTokenResponse(requestTime, formBody, fallbackRefreshToken, responseEither, throwable));
-                                        }
-                                    }));
+        // If the component stopped while the request was in flight, the orphaned response is dropped instead of being rejected by the dead executor.
+        future.whenComplete((responseEither, throwable) -> executor.tryExecute(
+                "tokenResponse",
+                () -> ifNotStopped(() -> handleTokenResponse(requestTime, formBody, fallbackRefreshToken, responseEither, throwable))));
     }
 
     /// Handles a completed token request on [#executor]: a successful response goes to [#handleSuccessResponse], an OAuth error to [#handleErrorResponse], and
@@ -311,6 +464,17 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                                      @Nullable String fallbackRefreshToken,
                                      @Nullable Either<OauthAccessTokenResponse, OauthErrorResponse> responseEither,
                                      @Nullable Throwable throwable) {
+        tokenRequestInFlight = false;
+        if (revoked) {
+            logger.info("[{}] token response not stored: the credential is revoked", apiName);
+            if (inFlightRefreshToken != null) {
+                inFlightRefreshToken.complete(responseEither == null
+                                              ? null
+                                              : responseEither.getLeft().flatMap(OauthAccessTokenResponse::refreshToken).orElse(null));
+                inFlightRefreshToken = null;
+            }
+            return;
+        }
         Throwable failure = throwable;
         if (failure == null) {
             try {
@@ -434,5 +598,16 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     private void cancelPendingTokenRequest() {
         Closeable.closeSafelyIfNotNull(logger, pendingScheduledTokenRequest);
         pendingScheduledTokenRequest = null;
+    }
+
+    /// What [#revoke()] has left to revoke once the stored token is deleted.
+    ///
+    /// @param storedRefreshToken   the refresh token the deleted token carried, or `null` when no token was stored
+    /// @param inFlightRefreshToken completes with the refresh token a token request in flight brings back, or with `null` when none is in flight or it brings
+    ///                             none back
+    private record DroppedCredential(@Nullable String storedRefreshToken, CompletableFuture<@Nullable String> inFlightRefreshToken) {
+        private DroppedCredential {
+            checkNotNull(inFlightRefreshToken);
+        }
     }
 }

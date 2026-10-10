@@ -30,6 +30,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -37,9 +39,14 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.CREDENTIAL_DEAD_ERRORS;
+import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.INVALID_TOKEN_ERROR;
+import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.REFRESH_TOKEN;
+import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_PARAM;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_INITIAL_INTERVAL;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_MAX_ELAPSED_TIME;
+import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_TYPE_HINT_PARAM;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Named.named;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
@@ -53,6 +60,7 @@ class OAuth2TokenManagerImplTest {
     private static final String API_NAME = "testApi";
     private static final String SCOPE = "test-scope";
     private static final String TOKEN_URL = "http://token-host/token";
+    private static final String REVOCATION_URL = "http://token-host/revoke";
     private static final String VAR_STORE_KEY = API_NAME + "Oauth2Token_" + CLIENT_ID + "_" + SCOPE;
     private static final Instant NOW = Instant.parse("2025-01-01T00:00:00Z");
     /// Sentinel stub: the enqueue answer delivers it as an okhttp transport failure ([Callback#onFailure]) rather than an HTTP response.
@@ -67,6 +75,7 @@ class OAuth2TokenManagerImplTest {
     // Auth states the manager publishes, captured in order (the manager runs on the single-threaded ProgrammableClock executor, so a plain list is safe).
     private final List<AuthState> authStates = new ArrayList<>();
     private int responseIndex;
+    private Optional<String> revocationUrl = Optional.of(REVOCATION_URL);
     // Set while the manager is starting (and by the stopped-manager test): the okhttp callback is captured rather than answered synchronously, so the response
     // lands after start() returns — mirroring the real async okhttp call, which never completes mid-doStart.
     private boolean captureOnly;
@@ -113,7 +122,7 @@ class OAuth2TokenManagerImplTest {
                                              .containsEntry("redirect_uri", "http://localhost/callback")
                                              .containsEntry("client_id", CLIENT_ID)
                                              .containsEntry("client_secret", CLIENT_SECRET)
-                                             .doesNotContainKey("refresh_token")
+                                             .doesNotContainKey(REFRESH_TOKEN)
                                              .doesNotContainKey("code_verifier");
         assertThat(lastAuthState()).isInstanceOfSatisfying(AuthState.Success.class,
                                                            success -> assertThat(success.authInfo()).isEqualTo("test-access-token"));
@@ -144,8 +153,8 @@ class OAuth2TokenManagerImplTest {
 
         startTokenManager(Optional.empty());
 
-        assertThat(formParams(soleRequest())).containsEntry("grant_type", "refresh_token")
-                                             .containsEntry("refresh_token", "old-rt")
+        assertThat(formParams(soleRequest())).containsEntry("grant_type", REFRESH_TOKEN)
+                                             .containsEntry(REFRESH_TOKEN, "old-rt")
                                              .containsEntry("client_id", CLIENT_ID)
                                              .doesNotContainKey("client_secret");
     }
@@ -226,8 +235,8 @@ class OAuth2TokenManagerImplTest {
 
         startTokenManager();
 
-        assertThat(formParams(soleRequest())).containsEntry("grant_type", "refresh_token")
-                                             .containsEntry("refresh_token", "old-rt")
+        assertThat(formParams(soleRequest())).containsEntry("grant_type", REFRESH_TOKEN)
+                                             .containsEntry(REFRESH_TOKEN, "old-rt")
                                              .containsEntry("client_id", CLIENT_ID)
                                              .containsEntry("client_secret", CLIENT_SECRET)
                                              .doesNotContainKey("code")
@@ -485,6 +494,7 @@ class OAuth2TokenManagerImplTest {
 
         captureOnly = true;
         tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
         captureOnly = false;
 
         int statesBeforeInvalidate = authStates.size();
@@ -522,6 +532,7 @@ class OAuth2TokenManagerImplTest {
 
         captureOnly = true;
         tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
         captureOnly = false;
         tokenManager.stop();
 
@@ -530,6 +541,207 @@ class OAuth2TokenManagerImplTest {
         clock.tick();
 
         assertThat(authStates).noneMatch(AuthState.Success.class::isInstance);
+    }
+
+    @Test
+    void revoke_deletesStoredTokenAndPostsItsRefreshTokenForRevocation() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        respondWith(OK_200, "");
+        startTokenManager();
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+
+        assertThat(revocation).succeedsWithin(Duration.ZERO);
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+        assertThat(soleRequest()).satisfies(request -> {
+            assertThat(request.url()).hasToString(REVOCATION_URL);
+            assertThat(formParams(request)).isEqualTo(Map.of(TOKEN_PARAM, "stored-rt", TOKEN_TYPE_HINT_PARAM, REFRESH_TOKEN));
+        });
+        assertThat(lastAuthState()).isInstanceOf(AuthState.PermanentFailure.class);
+    }
+
+    @Test
+    void revoke_withNoStoredToken_completesWithoutRequest() {
+        startTokenManager();
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+
+        assertThat(revocation).succeedsWithin(Duration.ZERO);
+        assertThat(requestLog).isEmpty();
+    }
+
+    @Test
+    void revoke_withNoRevocationEndpoint_onlyDeletesStoredToken() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        revocationUrl = Optional.empty();
+        startTokenManager();
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+
+        assertThat(revocation).succeedsWithin(Duration.ZERO);
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+        assertThat(requestLog).isEmpty();
+    }
+
+    /// A token the authorisation server no longer recognises leaves no grant to revoke.
+    @Test
+    void revoke_tokenUnknownToTheServer_completes() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        respondWith(BAD_REQUEST_400, """
+                                     {"error": "%s", "error_description": "Token expired or revoked"}""".formatted(INVALID_TOKEN_ERROR));
+        startTokenManager();
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+
+        assertThat(revocation).succeedsWithin(Duration.ZERO);
+    }
+
+    @ParameterizedTest
+    @MethodSource
+    void revoke_transientFailure_isRetriedUntilRevoked(FakeResponse transientFailure) {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        responses.add(transientFailure);
+        respondWith(OK_200, "");
+        startTokenManager();
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+        assertThat(revocation).isNotDone();
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+
+        clock.advanceTimeAndTick(TOKEN_RETRY_INITIAL_INTERVAL.multipliedBy(2));
+
+        assertThat(revocation).succeedsWithin(Duration.ZERO);
+        assertThat(requestLog).hasSize(2);
+    }
+
+    static Stream<Arguments> revoke_transientFailure_isRetriedUntilRevoked() {
+        return Stream.of(arguments(named("server error", new FakeResponse(SERVICE_UNAVAILABLE_503, ""))),
+                         arguments(named("rate limited", new FakeResponse(TOO_MANY_REQUESTS_429, ""))),
+                         arguments(named("transport failure", TRANSPORT_FAILURE)));
+    }
+
+    @Test
+    void revoke_persistentServerError_failsOnceTheRetryBudgetIsSpent() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        respondWith(SERVICE_UNAVAILABLE_503, "");
+        startTokenManager();
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        // Doubling the budget leaves room for the randomised, growing retry intervals to cross it.
+        clock.advanceTimeAndTick(TOKEN_RETRY_MAX_ELAPSED_TIME.multipliedBy(2));
+
+        assertThat(revocation).failsWithin(Duration.ZERO)
+                              .withThrowableOfType(ExecutionException.class)
+                              .withMessageContaining("grant revocation failed")
+                              .withMessageNotContaining("stored-rt");
+        assertThat(requestLog.size()).as("the revocation was retried before giving up").isGreaterThan(1);
+    }
+
+    @Test
+    void revoke_rejected_failsWithoutRetryingOrNamingTheToken() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        respondWith(BAD_REQUEST_400, """
+                                     {"error": "unsupported_token_type"}""");
+        startTokenManager();
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+
+        assertThat(revocation).failsWithin(Duration.ZERO)
+                              .withThrowableOfType(ExecutionException.class)
+                              .withMessageContaining("HTTP 400, error 'unsupported_token_type'")
+                              .withMessageNotContaining("stored-rt");
+        assertThat(requestLog).hasSize(1);
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+    }
+
+    /// A token exchange already in flight when the credential is revoked brings back a grant of its own, which must be revoked too rather than stored.
+    @Test
+    void revoke_tokenRequestInFlight_revokesTheGrantItBringsBack() {
+        respondWithToken("at", "rt", 3600);
+        respondWith(OK_200, "");
+        startTokenManager();
+        captureOnly = true;
+        tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
+        captureOnly = false;
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+        assertThat(revocation).isNotDone();
+
+        deliverPending();
+        clock.tick();
+
+        assertThat(revocation).succeedsWithin(Duration.ZERO);
+        assertThat(requestLog).hasSize(2);
+        assertThat(requestLog.getLast()).satisfies(request -> {
+            assertThat(request.url()).hasToString(REVOCATION_URL);
+            assertThat(formParams(request)).containsEntry(TOKEN_PARAM, "rt");
+        });
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+        assertThat(authStates).noneMatch(AuthState.Success.class::isInstance);
+    }
+
+    @Test
+    void revoke_thenAuthCode_sendsNoTokenRequest() {
+        startTokenManager();
+
+        tokenManager.revoke();
+        clock.tick();
+        tokenManager.onNewAuthCode("code", "http://r");
+        clock.tick();
+
+        assertThat(requestLog).isEmpty();
+    }
+
+    /// A value that cannot be read as a token is deleted all the same, but the grant behind it may still be live, so the revocation fails.
+    @Test
+    void revoke_unreadableStoredToken_isDeletedAndFails() {
+        startTokenManager();
+        varStore.saveValue(VAR_STORE_KEY, "not-an-encrypted-token");
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+
+        assertThat(revocation).failsWithin(Duration.ZERO);
+        assertThat(varStore.readValue(String.class, VAR_STORE_KEY)).isEmpty();
+    }
+
+    @Test
+    void revoke_answerArrivingAfterStop_isDropped() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        respondWith(OK_200, "");
+        startTokenManager();
+        captureOnly = true;
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+        captureOnly = false;
+
+        tokenManager.stop();
+        deliverPending();
+        clock.tick();
+
+        assertThat(revocation).isNotDone();
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();
+    }
+
+    @Test
+    void revoke_onStoppedManager_neverCompletes() {
+        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("stored-at", "stored-rt", NOW.plusSeconds(1800)));
+        startTokenManager();
+        tokenManager.stop();
+
+        CompletableFuture<Void> revocation = tokenManager.revoke();
+        clock.tick();
+
+        assertThat(revocation).isNotDone();
+        assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isPresent();
     }
 
     private void startTokenManager() {
@@ -542,7 +754,16 @@ class OAuth2TokenManagerImplTest {
 
     private void startTokenManager(Optional<String> clientSecret, boolean loginPending) {
         SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor(API_NAME + "-oauth2");
-        tokenManager = new OAuth2TokenManagerImpl(() -> executor, clock, varStore, CLIENT_ID, clientSecret, API_NAME, TOKEN_URL, SCOPE, loginPending) {
+        tokenManager = new OAuth2TokenManagerImpl(() -> executor,
+                                                  clock,
+                                                  varStore,
+                                                  CLIENT_ID,
+                                                  clientSecret,
+                                                  API_NAME,
+                                                  TOKEN_URL,
+                                                  revocationUrl,
+                                                  SCOPE,
+                                                  loginPending) {
             @Override
             OkHttpClient createHttpClient() {
                 return httpClient;

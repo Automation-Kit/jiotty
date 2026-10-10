@@ -28,6 +28,7 @@ import static net.yudichev.jiotty.security.Bindings.ClientSecret;
 import static net.yudichev.jiotty.security.Bindings.Dependency;
 import static net.yudichev.jiotty.security.Bindings.LogSubjectId;
 import static net.yudichev.jiotty.security.Bindings.LoginPending;
+import static net.yudichev.jiotty.security.Bindings.RevocationUrl;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
@@ -37,6 +38,7 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
     private final BindingSpec<String> apiNameSpec;
     private final @Nullable BindingSpec<String> loginUrlSpec;
     private final BindingSpec<String> tokenUrlSpec;
+    private final BindingSpec<Optional<String>> revocationUrlSpec;
     private final BindingSpec<String> scopeSpec;
     private final BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec;
     private final BindingSpec<Map<String, String>> loginExtraParamsSpec;
@@ -50,6 +52,7 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
                                      BindingSpec<String> apiNameSpec,
                                      @Nullable BindingSpec<String> loginUrlSpec,
                                      BindingSpec<String> tokenUrlSpec,
+                                     BindingSpec<Optional<String>> revocationUrlSpec,
                                      BindingSpec<String> scopeSpec,
                                      BindingSpec<Optional<Integer>> fixedCallbackHttpPortSpec,
                                      BindingSpec<Map<String, String>> loginExtraParamsSpec,
@@ -64,6 +67,7 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
         this.apiNameSpec = checkNotNull(apiNameSpec);
         this.loginUrlSpec = loginUrlSpec;
         this.tokenUrlSpec = checkNotNull(tokenUrlSpec);
+        this.revocationUrlSpec = checkNotNull(revocationUrlSpec);
         this.scopeSpec = checkNotNull(scopeSpec);
         this.fixedCallbackHttpPortSpec = checkNotNull(fixedCallbackHttpPortSpec);
         this.loginExtraParamsSpec = checkNotNull(loginExtraParamsSpec);
@@ -95,6 +99,9 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
         tokenUrlSpec.bind(String.class)
                     .annotatedWith(TokenUrl.class)
                     .installedBy(this::installLifecycleComponentModule);
+        revocationUrlSpec.bind(new TypeLiteral<>() {})
+                         .annotatedWith(RevocationUrl.class)
+                         .installedBy(this::installLifecycleComponentModule);
         scopeSpec.bind(String.class)
                  .annotatedWith(Scope.class)
                  .installedBy(this::installLifecycleComponentModule);
@@ -138,6 +145,7 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
         private BindingSpec<String> apiNameSpec;
         private BindingSpec<String> loginUrlSpec;
         private BindingSpec<String> tokenUrlSpec;
+        private BindingSpec<Optional<String>> revocationUrlSpec = literally(Optional.empty());
         private BindingSpec<String> scopeSpec;
         private BindingSpec<VarStore> varStoreSpec = boundTo(VarStore.class);
         private BindingSpec<String> logSubjectIdSpec = literally("");
@@ -182,6 +190,13 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
 
         public Builder setScope(BindingSpec<String> scopeSpec) {
             this.scopeSpec = checkNotNull(scopeSpec);
+            return this;
+        }
+
+        /// The authorisation server's token revocation endpoint (RFC 7009), which [OAuth2TokenManager#revoke()] posts the refresh token to. Without it, a
+        /// revocation only deletes the stored token.
+        public Builder withRevocationUrl(BindingSpec<String> revocationUrlSpec) {
+            this.revocationUrlSpec = revocationUrlSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, Optional::of);
             return this;
         }
 
@@ -238,6 +253,7 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
                                                 apiNameSpec,
                                                 loginUrlSpec,
                                                 tokenUrlSpec,
+                                                revocationUrlSpec,
                                                 scopeSpec,
                                                 fixedCallbackHttpPortSpec,
                                                 loginExtraParamsSpec,

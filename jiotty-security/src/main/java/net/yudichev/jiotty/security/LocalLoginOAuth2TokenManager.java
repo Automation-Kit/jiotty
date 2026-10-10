@@ -36,6 +36,7 @@ import static net.yudichev.jiotty.security.Bindings.ApiName;
 import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.ClientSecret;
 import static net.yudichev.jiotty.security.Bindings.Dependency;
+import static net.yudichev.jiotty.security.Bindings.RevocationUrl;
 import static net.yudichev.jiotty.security.Bindings.Scope;
 import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
@@ -61,12 +62,13 @@ public class LocalLoginOAuth2TokenManager extends OAuth2TokenManagerImpl {
                                         @ClientSecret Optional<String> clientSecret,
                                         @ApiName String apiName,
                                         @TokenUrl String tokenUrl,
+                                        @RevocationUrl Optional<String> revocationUrl,
                                         @Scope String scope,
                                         @LoginUrl String loginUrl,
                                         @FixedCallbackHttpPort Optional<Integer> fixedCallbackHttpPort,
                                         @ExtraLoginParams Map<String, String> extraLoginParams) {
         // never login-pending: this manager runs the login itself in obtainAccessToken
-        super(executorProvider, currentDateTimeProvider, varStore, clientId, clientSecret, apiName, tokenUrl, scope, false);
+        super(executorProvider, currentDateTimeProvider, varStore, clientId, clientSecret, apiName, tokenUrl, revocationUrl, scope, false);
         this.loginUrl = checkNotNull(loginUrl);
         this.fixedCallbackHttpPort = checkNotNull(fixedCallbackHttpPort);
         this.extraLoginParams = ImmutableMap.copyOf(extraLoginParams);

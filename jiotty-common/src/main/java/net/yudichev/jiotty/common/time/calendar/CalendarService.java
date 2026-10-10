@@ -18,6 +18,15 @@ public interface CalendarService {
 
     Closeable subscribeToAuthState(Consumer<AuthState> consumer);
 
+    /// Deletes every credential this service stored outside its configuration and withdraws the access the provider granted it. The service authenticates
+    /// nothing afterwards.
+    ///
+    /// @return completes once the provider has withdrawn the access
+    /// @implSpec The default suits a service whose credentials live only in its configuration.
+    default CompletableFuture<Void> disconnect() {
+        return CompletableFuture.completedFuture(null);
+    }
+
     /// Outcome of [#retrieveCalendars].
     sealed interface CalendarsResult {
         /// The account's calendar list. An empty list means the account genuinely has no calendars.

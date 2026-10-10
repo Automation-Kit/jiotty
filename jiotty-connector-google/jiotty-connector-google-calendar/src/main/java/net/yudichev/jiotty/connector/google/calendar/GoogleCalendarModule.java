@@ -73,6 +73,8 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
                                                                 .setApiName(literally(BASE_API_NAME))
                                                                 .withLogSubjectId(logSubjectIdSpec)
                                                                 .setTokenUrl(literally(TOKEN_URL))
+                                                                // Google revokes for the whole Cloud project, every client of it included
+                                                                .withRevocationUrl(literally("https://oauth2.googleapis.com/revoke"))
                                                                 .setScope(literally(GoogleCalendarScopes.CALENDAR_READONLY))
                                                                 .withVarStore(varStoreSpec)
                                                                 // a supplied auth code is a login in flight: the service hands it to the token manager on start

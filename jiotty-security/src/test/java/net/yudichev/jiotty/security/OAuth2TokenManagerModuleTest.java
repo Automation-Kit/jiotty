@@ -37,6 +37,7 @@ class OAuth2TokenManagerModuleTest {
                                                                            .withClientSecret(literally("cs"))
                                                                            .setApiName(literally("api"))
                                                                            .setTokenUrl(literally("http://token"))
+                                                                           .withRevocationUrl(literally("http://revoke"))
                                                                            .setScope(literally("scope"));
         if (withLoginUrl) {
             builder.withLoginUrl(literally("http://login"))

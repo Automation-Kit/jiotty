@@ -4,6 +4,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.security.AuthState;
 
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 public interface OAuth2TokenManager {
@@ -23,6 +24,13 @@ public interface OAuth2TokenManager {
     /// replaced it — the call is a no-op: the rejection was against a credential the manager has already moved on from, so honouring it would tear down a token
     /// that was never the one rejected. `reason` is a human-readable description of why the credential was rejected.
     void invalidate(String rejectedAccessToken, String reason);
+
+    /// Deletes the stored token and asks the authorisation server to revoke the grant behind it, and behind any token a request still in flight brings back,
+    /// retrying a transient failure for a bounded time. The token is deleted whatever the authorisation server answers, and the manager accepts no credential
+    /// afterwards, so this ends its use.
+    ///
+    /// @return completes once every grant is revoked, or at once when there is nothing to revoke
+    CompletableFuture<Void> revoke();
 
     /// Supply the new auth code received from the target system after the user logged in. This initiates exchanging this code for an access token.
     default void onNewAuthCode(String authCode, String redirectUri) {

@@ -21,6 +21,7 @@ import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
@@ -85,6 +86,11 @@ class MieleDishwasherImplTest {
 
             @Override
             public void invalidate(String rejectedAccessToken, String reason) {
+            }
+
+            @Override
+            public CompletableFuture<Void> revoke() {
+                return CompletableFuture.completedFuture(null);
             }
 
             @Override

@@ -199,6 +199,15 @@ class GoogleCalendarServiceTest {
     }
 
     @Test
+    void disconnect_revokesTheCredential() {
+        startService((_, _) -> ok("""
+                                  {"items":[]}"""));
+
+        assertThat(service.disconnect()).succeedsWithin(Duration.ZERO);
+        assertThat(tokenManager.revocationCount()).isEqualTo(1);
+    }
+
+    @Test
     void retrieveCalendars_apiIoException_failsFuture() {
         startService(transportThrowing(new IOException("connection reset")));
 

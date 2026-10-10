@@ -11,6 +11,7 @@ import com.google.api.services.calendar.model.CalendarList;
 import com.google.api.services.calendar.model.CalendarListEntry;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.ExecutorFactory;
@@ -50,6 +51,7 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.GONE_410;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 
+@SuppressWarnings({"FieldAccessNotGuarded", "NonFinalGuard"}) // @GuardedBy("executor") marks executor confinement, which IntelliJ's lock analysis cannot see
 class GoogleCalendarService extends BaseLifecycleComponent implements CalendarService {
     private static final Logger logger = LogManager.getLogger(GoogleCalendarService.class);
     private static final String APPLICATION_NAME = "jiotty";
@@ -68,14 +70,16 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     private final int timeoutMillis;
     private final String logSubjectId;
     private final ObservableValue<AuthState> authState;
-    /// The current calendar set, kept up to date by incremental `calendarList` sync (see [#syncCalendarList]). Confined to [#executor]: an unchanged calendar
-    /// keeps its existing [GoogleCalendar] instance across refreshes, so the consumer's identity-based change detection only fires on real changes.
+    /// The current calendar set, kept up to date by incremental `calendarList` sync (see [#syncCalendarList]). An unchanged calendar keeps its existing
+    /// [GoogleCalendar] instance across refreshes, so the consumer's identity-based change detection only fires on real changes.
+    @GuardedBy("executor")
     private final Map<String, GoogleCalendar> calendarsById = new LinkedHashMap<>();
-    /// Confined to [#executor]: written by the token-state callback (which marshals onto the executor in [#doStart]) and read by the request initializer, which
-    /// runs during Google Calendar API calls that are themselves submitted to the executor. `null` until the first token arrives.
+    /// Written by the token-state callback (which marshals onto the executor in [#doStart]) and read by the request initializer, which runs during Google
+    /// Calendar API calls that are themselves submitted to the executor. `null` until the first token arrives.
+    @GuardedBy("executor")
     private @Nullable String accessToken;
-    /// `calendarList` sync token from the last successful sync, or `null` when a full list is needed (first sync, or after the token expired). Confined to
-    /// [#executor].
+    /// `calendarList` sync token from the last successful sync, or `null` when a full list is needed (first sync, or after the token expired).
+    @GuardedBy("executor")
     private @Nullable String calendarListSyncToken;
     private SchedulingExecutor executor;
     private Calendar calendarApi;
@@ -146,6 +150,11 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     @Override
     public Closeable subscribeToAuthState(Consumer<AuthState> consumer) {
         return authState.subscribe(consumer);
+    }
+
+    @Override
+    public CompletableFuture<Void> disconnect() {
+        return tokenManager.revoke();
     }
 
     @Override

@@ -61,4 +61,10 @@ final class Bindings {
     @Retention(RUNTIME)
     @interface LoginPending {
     }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface RevocationUrl {
+    }
 }
