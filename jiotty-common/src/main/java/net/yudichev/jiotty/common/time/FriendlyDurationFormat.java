@@ -1,6 +1,8 @@
 package net.yudichev.jiotty.common.time;
 
 import com.google.common.base.Preconditions;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 
 import java.time.Duration;
 import java.util.Locale;
@@ -105,44 +107,45 @@ public final class FriendlyDurationFormat {
     /// @throws NullPointerException     if `duration` is null
     /// @throws IllegalArgumentException if `duration` is negative
     public static String formatHuman(Duration duration) {
+        checkFormattable(duration);
+        // Assumption: up to 4 tokens (d, h, m, s), each roughly up to ~7 characters incl. space and suffix.
+        var sb = new StringBuilder(4 * 8);
+        appendHuman(duration, sb);
+        return sb.toString();
+    }
+
+    /// The [#formatHuman] form of `duration`, computed only when the returned value is formatted.
+    ///
+    /// @throws NullPointerException     if `duration` is null
+    /// @throws IllegalArgumentException if `duration` is negative
+    public static StringFormattable formatHumanFormattable(Duration duration) {
+        checkFormattable(duration);
+        return appendable -> appendHuman(duration, appendable);
+    }
+
+    private static void checkFormattable(Duration duration) {
         Preconditions.checkNotNull(duration, "duration");
         if (duration.isNegative()) {
             throw new IllegalArgumentException("Invalid duration: negative values are not allowed");
         }
-        long days = duration.toDaysPart();
-        int hours = duration.toHoursPart();
-        int minutes = duration.toMinutesPart();
-        int seconds = duration.toSecondsPart();
+    }
 
-        // If everything is zero, show 0s
-        if (days == 0 && hours == 0 && minutes == 0 && seconds == 0) {
-            return "0s";
-        }
-
-        // Build array of units in order
-        long[] values = {days, hours, minutes, seconds};
-
-        // Find first non-zero (to skip leading zero units) and last non-zero (to trim trailing zeroes)
-        int first = 0;
-        while (first < values.length && values[first] == 0) {
-            first++;
-        }
-        int last = values.length - 1;
-        while (last >= 0 && values[last] == 0) {
-            last--;
-        }
-
-        // Assumption: up to 4 tokens (d, h, m, s), each roughly up to ~7 characters incl. space and suffix.
-        var sb = new StringBuilder(4 * 8);
-        for (int i = first; i <= last; i++) {
-            // Skip zero components in the middle to keep it concise
+    private static void appendHuman(Duration duration, Appendable appendable) {
+        long[] values = {duration.toDaysPart(), duration.toHoursPart(), duration.toMinutesPart(), duration.toSecondsPart()};
+        boolean appended = false;
+        for (int i = 0; i < values.length; i++) {
+            // Zero components are skipped wherever they fall, to keep it concise
             if (values[i] != 0) {
-                if (!sb.isEmpty()) {
-                    sb.append(' ');
+                if (appended) {
+                    Append.to(appendable, ' ');
                 }
-                sb.append(values[i]).append(FORMATTING_SUFFIXES[i]);
+                Append.to(appendable, values[i]);
+                Append.to(appendable, FORMATTING_SUFFIXES[i]);
+                appended = true;
             }
         }
-        return sb.toString();
+        if (!appended) {
+            Append.to(appendable, "0s");
+        }
     }
 }

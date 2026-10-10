@@ -121,6 +121,12 @@ class FriendlyDurationFormatTest {
 
     @ParameterizedTest
     @MethodSource("formats")
+    void formattableWritesTheSameForm(Duration input, String expected) {
+        assertThat(FriendlyDurationFormat.formatHumanFormattable(input).toString(16)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest
+    @MethodSource("formats")
     void formattedValueParsesBackToSameDuration(Duration input, String formatted) {
         assertThat(FriendlyDurationFormat.parseHuman(formatted)).isEqualTo(input);
     }
@@ -134,6 +140,19 @@ class FriendlyDurationFormatTest {
     @Test
     void formatNegativeThrowsIae() {
         assertThatThrownBy(() -> FriendlyDurationFormat.formatHuman(Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("negative");
+    }
+
+    @Test
+    void formattableRejectsNullAtCreation() {
+        assertThatThrownBy(() -> FriendlyDurationFormat.formatHumanFormattable(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void formattableRejectsNegativeAtCreation() {
+        assertThatThrownBy(() -> FriendlyDurationFormat.formatHumanFormattable(Duration.ofSeconds(-1)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("negative");
     }
