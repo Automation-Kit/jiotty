@@ -14,6 +14,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
@@ -28,7 +29,8 @@ import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 /// (partner endpoints). Both connectors POST the same envelope shape and unwrap the same [ResponseWrapper], so the
 /// request building and response unwrapping live here once.
 final class TeslaHttp {
-    static final String AUDIENCE = "https://fleet-api.prd.eu.vn.cloud.tesla.com";
+    public static final String AUDIENCE = "https://fleet-api.prd.eu.vn.cloud.tesla.com";
+    public static final String TOKEN_URL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token";
     private static final Logger logger = LogManager.getLogger(TeslaHttp.class);
     /// A VIN is 17 characters from an alphabet that excludes I, O and Q, so it cannot collide with a hex token of the same length.
     private static final Pattern VIN = Pattern.compile("\\b[A-HJ-NPR-Z0-9]{17}\\b");
@@ -37,12 +39,9 @@ final class TeslaHttp {
     private TeslaHttp() {
     }
 
-    static OkHttpClient newFleetClient(@Nullable SslCustomisation sslCustomisation) {
-        return newClient(builder -> {
-            if (sslCustomisation != null) {
-                builder.sslSocketFactory(sslCustomisation.socketFactory(), sslCustomisation.trustManager());
-            }
-        });
+    public static OkHttpClient newFleetClient(Optional<SslCustomisation> sslCustomisation) {
+        return newClient(builder -> sslCustomisation.ifPresent(customisation -> builder.sslSocketFactory(customisation.socketFactory(),
+                                                                                                         customisation.trustManager())));
     }
 
     static String telemetryConfigUrl(String baseUrl, String vin) {
@@ -92,7 +91,7 @@ final class TeslaHttp {
                 .build();
 
         var request = new Request.Builder()
-                .url("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token")
+                .url(TOKEN_URL)
                 .post(form)
                 .build();
 

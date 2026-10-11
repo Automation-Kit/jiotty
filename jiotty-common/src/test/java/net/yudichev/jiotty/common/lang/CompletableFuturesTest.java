@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.common.lang;
 
 import com.google.common.collect.ImmutableList;
+import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -8,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Function;
@@ -163,5 +165,30 @@ class CompletableFuturesTest {
 
         assertThat(result).isDone();
         assertThat(result.getNow(null)).isEmpty();
+    }
+
+    @Test
+    void logErrorOnFailure_logsTheFormattedTextAsItIs_evenWhenItReadsLikeAPlaceholder(@Mock Logger logger) {
+        var failure = new RuntimeException("boom");
+
+        CompletableFutures.<String>logErrorOnFailure(logger, "failed for %s", "{}").accept(null, failure);
+
+        verify(logger).error("{}", "failed for {}", failure);
+    }
+
+    @Test
+    void isCancellation_findsACancellationAnywhereInTheCausalChain() {
+        assertThat(CompletableFutures.isCancellation(new CompletionException(new CancellationException()))).isTrue();
+        assertThat(CompletableFutures.isCancellation(new CompletionException(new IllegalStateException()))).isFalse();
+        assertThat(CompletableFutures.isCancellation(null)).isFalse();
+    }
+
+    @Test
+    void isCancellation_rejectsACausalChainThatLoops() {
+        var first = new IllegalStateException("first");
+        var second = new IllegalStateException("second", first);
+        first.initCause(second);
+
+        assertThatThrownBy(() -> CompletableFutures.isCancellation(first)).isInstanceOf(IllegalArgumentException.class);
     }
 }

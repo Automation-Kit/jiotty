@@ -22,6 +22,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.IntStream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.toFutureOfList;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /// Integration tests for [MqttImpl] against a real in-JVM MQTT broker ([EmbeddedMqttBrokerExtension]). Unlike a mock-based test, these exercise genuine broker
@@ -104,16 +105,16 @@ class MqttImplIntegrationTest {
 
         assertThat(client.clearRetained(topic)).succeedsWithin(AWAIT_TIMEOUT);
 
-        var subscribed = new CompletableFuture<Void>();
+        var subscriptionConfirmation = new CompletableFuture<Void>();
         var firstValue = new CompletableFuture<String>();
         subscriptions.add(newConnectedClient().subscribe(prefix + "/#", (receivedTopic, payload) -> {
             if (receivedTopic.equals(topic)) {
                 firstValue.complete(payload);
             } else {
-                subscribed.complete(null);
+                subscriptionConfirmation.complete(null);
             }
         }));
-        assertThat(subscribed).succeedsWithin(AWAIT_TIMEOUT);
+        assertThat(subscriptionConfirmation).succeedsWithin(AWAIT_TIMEOUT);
         publishRetained(topic, "live");
         assertThat(firstValue).succeedsWithin(AWAIT_TIMEOUT).isEqualTo("live");
     }
@@ -128,9 +129,9 @@ class MqttImplIntegrationTest {
         }
         MqttImpl client = newConnectedClient();
 
-        List<CompletableFuture<Void>> clears = topics.stream().map(client::clearRetained).toList();
+        CompletableFuture<List<Void>> clears = topics.stream().map(client::clearRetained).collect(toFutureOfList());
 
-        assertThat(CompletableFuture.allOf(clears.toArray(CompletableFuture[]::new))).succeedsWithin(AWAIT_TIMEOUT);
+        assertThat(clears).succeedsWithin(AWAIT_TIMEOUT);
     }
 
     /// After the broker bounces and the client auto-reconnects, [MqttImpl] restores its subscriptions, so a message published after the reconnect is still

@@ -1,14 +1,11 @@
 package net.yudichev.jiotty.appliance;
 
 import net.yudichev.jiotty.common.rest.JavalinRestServer;
+import net.yudichev.jiotty.common.testutil.LogCapture;
+import net.yudichev.jiotty.common.testutil.LogCapture.CapturedLine;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.core.LogEvent;
-import org.apache.logging.log4j.core.LoggerContext;
-import org.apache.logging.log4j.core.appender.AbstractAppender;
-import org.apache.logging.log4j.core.config.LoggerConfig;
-import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,13 +24,10 @@ import java.time.Duration;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
-import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
@@ -63,19 +57,17 @@ class ApplianceServerTest {
     private static final String OUT_OF_BOUNDS_MESSAGE = "position must be within [0.0, 1.0] bounds";
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(30);
     private static final String LOOPBACK = "127.0.0.1";
-    /// Written on the Jetty request thread that serves each POST and drained on the JUnit thread that asserts.
-    private final Queue<LogEvent> logEvents = new ConcurrentLinkedQueue<>();
     @Mock
     private Appliance appliance;
-    private LoggerContext loggerContext;
-    private CapturingAppender appender;
+    /// The server's own lines, logged on the Jetty request thread that serves each POST.
+    private LogCapture serverLog;
     private JavalinRestServer restServer;
     private ApplianceServer applianceServer;
     private HttpClient httpClient;
 
     @BeforeEach
     void setUp() {
-        captureApplianceServerLog();
+        serverLog = LogCapture.capture(ApplianceServer.class, Level.INFO);
         when(appliance.getAllSupportedCommandMetadata())
                 .thenReturn(Set.of(createPositionCommandMeta(), createScheduleCommandMeta(), createBrokenCommandMeta()));
         restServer = new JavalinRestServer(0, Optional.of(LOOPBACK));
@@ -93,7 +85,7 @@ class ApplianceServerTest {
                              httpClient,
                              applianceServer == null ? null : applianceServer::stop,
                              restServer == null ? null : restServer::stop,
-                             loggerContext == null ? null : this::detachApplianceServerLog);
+                             serverLog);
     }
 
     static Stream<Arguments> executesCommandBuiltFromRequestParameters() {
@@ -144,9 +136,9 @@ class ApplianceServerTest {
     void logsRejectionBelowTheLevelThatAlerts() throws Exception {
         post(POSITION_PATH, "?pos=1.5");
 
-        assertThat(logEvents).extracting(LogEvent::getLevel).containsOnly(Level.INFO);
-        assertThat(logEvents).extracting(event -> event.getMessage().getFormattedMessage())
-                             .anySatisfy(message -> assertThat(message).contains(APPLIANCE_ID, "rejecting", POSITION_PATH, OUT_OF_BOUNDS_MESSAGE));
+        assertThat(serverLog.lines()).extracting(CapturedLine::level).containsOnly(Level.INFO);
+        assertThat(serverLog.lines()).extracting(CapturedLine::message)
+                                     .anySatisfy(message -> assertThat(message).contains(APPLIANCE_ID, "rejecting", POSITION_PATH, OUT_OF_BOUNDS_MESSAGE));
     }
 
     @Test
@@ -195,24 +187,6 @@ class ApplianceServerTest {
         return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
-    private void detachApplianceServerLog() {
-        loggerContext.getConfiguration().removeLogger(ApplianceServer.class.getName());
-        loggerContext.updateLoggers();
-        appender.stop();
-    }
-
-    /// Renders the server's own lines into [#logEvents]. The build pins the root level to [Level#OFF], so the capture needs a logger config of its own, and
-    /// non-additivity sends them there alone.
-    private void captureApplianceServerLog() {
-        loggerContext = (LoggerContext) LogManager.getContext(false);
-        appender = new CapturingAppender(logEvents);
-        appender.start();
-        var loggerConfig = new LoggerConfig(ApplianceServer.class.getName(), Level.INFO, false);
-        loggerConfig.addAppender(appender, null, null);
-        loggerContext.getConfiguration().addLogger(ApplianceServer.class.getName(), loggerConfig);
-        loggerContext.updateLoggers();
-    }
-
     private static CommandMeta<PositionCommand> createPositionCommandMeta() {
         return CommandMeta.<PositionCommand>builder()
                           .setCommandName(POSITION_COMMAND)
@@ -256,20 +230,6 @@ class ApplianceServerTest {
         @Override
         public <U> Optional<U> accept(Command.Visitor<U> visitor) {
             return Optional.empty();
-        }
-    }
-
-    private static final class CapturingAppender extends AbstractAppender {
-        private final Queue<LogEvent> events;
-
-        CapturingAppender(Queue<LogEvent> events) {
-            super("capturingAppender", null, null, true, Property.EMPTY_ARRAY);
-            this.events = checkNotNull(events);
-        }
-
-        @Override
-        public void append(LogEvent event) {
-            events.add(event.toImmutable());
         }
     }
 }

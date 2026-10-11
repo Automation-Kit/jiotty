@@ -98,7 +98,7 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
     /// Creates the client every Fleet call goes through. Overridden in tests to inject a deterministic fake.
     @VisibleForTesting
     OkHttpClient createHttpClient() {
-        return TeslaHttp.newFleetClient(sslCustomisation);
+        return TeslaHttp.newFleetClient(Optional.ofNullable(sslCustomisation));
     }
 
     @Override
@@ -143,11 +143,6 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
     @Override
     public TeslaVehicle vehicle(String vin) {
         return new TeslaVehicleImpl(vin);
-    }
-
-    @Override
-    public CompletableFuture<Void> revokeCredential() {
-        return tokenManager.revoke();
     }
 
     /// Runs `code` with the current access token, and invalidates that token if the API answers that it will not accept it. The hook rides the call's own

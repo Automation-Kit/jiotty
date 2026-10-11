@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.TypeLiteral;
@@ -22,7 +21,8 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 
 public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
-    private static final String BASE_API_NAME = "TeslaFleet";
+    /// The API name the token manager is given, which keys the stored token, so [TeslaFleetGrantRevokerModule] reads it under the same key.
+    static final String BASE_API_NAME = "TeslaFleet";
     private static final String OFFLINE_ACCESS_SCOPE = "offline_access";
 
     private final BindingSpec<String> clientIdSpec;
@@ -57,9 +57,8 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
         this.localLogin = localLogin;
     }
 
-    /// The space-separated OAuth2 scope string. Always carries {@value #OFFLINE_ACCESS_SCOPE}, which is what makes the token endpoint return a refresh token,
-    /// so a caller that omits it from its requested scopes still gets a credential that survives the first access-token expiry.
-    @VisibleForTesting
+    /// The space-separated OAuth2 scope string, which keys the stored token. It always carries {@value #OFFLINE_ACCESS_SCOPE}, which makes the token endpoint
+    /// return a refresh token, so a caller omitting it from its scopes still gets a credential that survives the first access-token expiry.
     static String scope(Set<String> scopeSet) {
         String joined = String.join(" ", scopeSet);
         return scopeSet.contains(OFFLINE_ACCESS_SCOPE) ? joined : joined + ' ' + OFFLINE_ACCESS_SCOPE;
@@ -73,7 +72,7 @@ public final class TeslaFleetModule extends BaseExposedKeyModule<TeslaFleet> {
                 .withClientSecret(clientSecretSpec)
                 .setApiName(literally(BASE_API_NAME))
                 .withLogSubjectId(logSubjectIdSpec)
-                .setTokenUrl(literally("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"))
+                .setTokenUrl(literally(TeslaHttp.TOKEN_URL))
                 .setScope(oauthScopesSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, TeslaFleetModule::scope))
                 .withLoginPending(loginPendingSpec)
                 .withAnnotation(forAnnotation(TeslaFleetImpl.Dependency.class));

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.mqtt;
 
+import com.google.common.collect.Sets;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.AsyncOperationFailureHandler;
@@ -59,6 +60,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.idempotent;
 import static net.yudichev.jiotty.common.lang.Closeable.noop;
 import static net.yudichev.jiotty.common.lang.CompositeException.runForAll;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessageFormattable;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 class MqttImpl extends BaseLifecycleComponent implements Mqtt {
@@ -77,7 +79,8 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     private final NanoClock nanoClock;
     private final Listeners<ConnectionStatus> connectionStatusListeners = new Listeners<>();
     private final Queue<QueuedSend> queuedSends = new ArrayDeque<>();
-    private int sendsInFlight;
+    /// The sends awaiting the broker's answer, held by identity; [#settle] frees a send's slot by removing it from this set.
+    private final Set<QueuedSend> sendsInFlight = Sets.newIdentityHashSet();
     private SchedulingExecutor executor;
     private @Nullable ConnectionStatus connectionStatus;
 
@@ -251,44 +254,57 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     /// here for an acknowledgement to free a slot.
     private CompletableFuture<Void> send(String topic, byte[] payload, boolean retained) {
         checkStarted();
-        var sent = new CompletableFuture<Void>();
+        var acknowledgement = new CompletableFuture<Void>();
         executor.execute("mqttSend", () -> {
-            queuedSends.add(new QueuedSend(topic, payload, retained, sent));
+            queuedSends.add(new QueuedSend(topic, payload, retained, acknowledgement));
             sendQueued();
         });
-        return sent;
+        return acknowledgement;
     }
 
     private void sendQueued() {
-        while (sendsInFlight < mqttConnectOptions.getMaxInflight() && !queuedSends.isEmpty()) {
+        while (sendsInFlight.size() < mqttConnectOptions.getMaxInflight() && !queuedSends.isEmpty()) {
             QueuedSend send = queuedSends.remove();
-            sendsInFlight++;
+            sendsInFlight.add(send);
             try {
                 client.publish(send.topic(), send.payload(), 1, send.retained(), null, new IMqttActionListener() {
                     @Override
                     public void onSuccess(IMqttToken asyncActionToken) {
-                        executor.execute("mqttSent", () -> onSendSettled(send, null));
+                        executor.execute("mqttSent", () -> onBrokerAnswer(send, null));
                     }
 
                     @Override
                     public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
-                        executor.execute("mqttSendFailed", () -> onSendSettled(send, exception));
+                        executor.execute("mqttSendFailed", () -> onBrokerAnswer(send, exception));
                     }
                 });
             } catch (MqttException | RuntimeException e) {
-                onSendSettled(send, e);
+                settle(send, e);
             }
         }
     }
 
-    private void onSendSettled(QueuedSend send, @Nullable Throwable failure) {
-        sendsInFlight--;
-        if (failure == null) {
-            send.sent().complete(null);
-        } else {
-            send.sent().completeExceptionally(failure);
-        }
+    /// @param failure `null` when the broker acknowledged the send
+    private void onBrokerAnswer(QueuedSend send, @Nullable Throwable failure) {
+        settle(send, failure);
         sendQueued();
+    }
+
+    /// Frees the send's slot and completes its acknowledgement, once only: after a reconnect Paho can report a failure and then a success for the same message.
+    ///
+    /// @param failure `null` when the broker acknowledged the send
+    private void settle(QueuedSend send, @Nullable Throwable failure) {
+        if (!sendsInFlight.remove(send)) {
+            if (failure != null && logger.isDebugEnabled()) {
+                logger.debug("A send already settled reported a late failure: {}", humanReadableMessageFormattable(failure));
+            }
+            return;
+        }
+        if (failure == null) {
+            send.acknowledgement().complete(null);
+        } else {
+            send.acknowledgement().completeExceptionally(failure);
+        }
     }
 
     @Override
@@ -428,7 +444,7 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
         }
     }
 
-    private record QueuedSend(String topic, byte[] payload, boolean retained, CompletableFuture<Void> sent) {}
+    private record QueuedSend(String topic, byte[] payload, boolean retained, CompletableFuture<Void> acknowledgement) {}
 
     private record Subscription(int qos, BiConsumer<String, MqttMessage> dataCallback) {
         public void accept(String topic, MqttMessage message) {

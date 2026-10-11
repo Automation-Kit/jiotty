@@ -151,13 +151,41 @@ class MqttImplTest {
                 .thenThrow(new MqttException(MqttException.REASON_CODE_CLIENT_NOT_CONNECTED))
                 .thenReturn(null);
 
-        CompletableFuture<Void> refused = mqtt.publish("home/a", "on");
-        CompletableFuture<Void> next = mqtt.publish("home/b", "on");
+        CompletableFuture<Void> refusedSend = mqtt.publish("home/a", "on");
+        CompletableFuture<Void> nextSend = mqtt.publish("home/b", "on");
         clock.tick();
 
-        assertThat(refused).failsWithin(Duration.ZERO);
-        assertThat(next).isNotDone();
+        assertThat(refusedSend).failsWithin(Duration.ZERO);
+        assertThat(nextSend).isNotDone();
         verify(client).publish(eq("home/b"), any(byte[].class), eq(1), eq(false), any(), any());
+    }
+
+    @Test
+    void aSendItsCallerCancelledStillFreesItsSlotWhenTheBrokerAnswers() throws MqttException {
+        List<IMqttActionListener> acknowledgements = recordPublishes();
+        List<CompletableFuture<Void>> sends = IntStream.rangeClosed(0, MAX_INFLIGHT_DEFAULT).mapToObj(i -> mqtt.publish("home/" + i, "on")).toList();
+        clock.tick();
+
+        sends.getFirst().cancel(false);
+        acknowledgements.getFirst().onSuccess(null);
+        clock.tick();
+
+        assertThat(acknowledgements).hasSize(MAX_INFLIGHT_DEFAULT + 1);
+    }
+
+    @Test
+    void aSendReportedFailedAndThenAcknowledgedFreesOneSlotOnly() throws MqttException {
+        List<IMqttActionListener> acknowledgements = recordPublishes();
+        List<CompletableFuture<Void>> sends = IntStream.rangeClosed(0, MAX_INFLIGHT_DEFAULT + 1).mapToObj(i -> mqtt.publish("home/" + i, "on")).toList();
+        clock.tick();
+
+        acknowledgements.getFirst().onFailure(null, new MqttException(MqttException.REASON_CODE_CONNECTION_LOST));
+        acknowledgements.getFirst().onSuccess(null);
+        clock.tick();
+
+        assertThat(sends.getFirst()).failsWithin(Duration.ZERO);
+        assertThat(acknowledgements).hasSize(MAX_INFLIGHT_DEFAULT + 1);
+        assertThat(sends.getLast()).isNotDone();
     }
 
     private List<IMqttActionListener> recordPublishes() throws MqttException {

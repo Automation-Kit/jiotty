@@ -23,14 +23,9 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
-import static net.yudichev.jiotty.security.Bindings.ClientID;
-import static net.yudichev.jiotty.security.Bindings.ClientSecret;
 import static net.yudichev.jiotty.security.Bindings.Dependency;
 import static net.yudichev.jiotty.security.Bindings.LogSubjectId;
 import static net.yudichev.jiotty.security.Bindings.LoginPending;
-import static net.yudichev.jiotty.security.Bindings.RevocationUrl;
-import static net.yudichev.jiotty.security.Bindings.Scope;
-import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
 public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2TokenManager> {
     private final BindingSpec<String> clientIdSpec;
@@ -87,24 +82,13 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
 
     @Override
     protected void configure() {
-        clientIdSpec.bind(String.class)
-                    .annotatedWith(ClientID.class)
-                    .installedBy(this::installLifecycleComponentModule);
-        clientSecretSpec.bind(new TypeLiteral<>() {})
-                        .annotatedWith(ClientSecret.class)
-                        .installedBy(this::installLifecycleComponentModule);
-        apiNameSpec.bind(String.class)
-                   .annotatedWith(ApiName.class)
-                   .installedBy(this::installLifecycleComponentModule);
-        tokenUrlSpec.bind(String.class)
-                    .annotatedWith(TokenUrl.class)
-                    .installedBy(this::installLifecycleComponentModule);
-        revocationUrlSpec.bind(new TypeLiteral<>() {})
-                         .annotatedWith(RevocationUrl.class)
-                         .installedBy(this::installLifecycleComponentModule);
-        scopeSpec.bind(String.class)
-                 .annotatedWith(Scope.class)
-                 .installedBy(this::installLifecycleComponentModule);
+        OAuth2ClientBindings.bind(this::installLifecycleComponentModule,
+                                  clientIdSpec,
+                                  clientSecretSpec,
+                                  apiNameSpec,
+                                  tokenUrlSpec,
+                                  revocationUrlSpec,
+                                  scopeSpec);
         varStoreSpec.bind(new TypeLiteral<>() {})
                     .annotatedWith(Dependency.class)
                     .installedBy(this::installLifecycleComponentModule);

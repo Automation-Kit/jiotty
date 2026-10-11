@@ -123,7 +123,7 @@ public class TeslaFleetPartnerImpl extends BaseLifecycleComponent implements Tes
     /// Creates the client every partner call goes through. Overridden in tests to inject a deterministic fake.
     @VisibleForTesting
     OkHttpClient createHttpClient() {
-        return TeslaHttp.newFleetClient(sslCustomisation);
+        return TeslaHttp.newFleetClient(Optional.ofNullable(sslCustomisation));
     }
 
     /// Overridden in tests, which have no Tesla auth server to obtain a token from.

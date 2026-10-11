@@ -45,11 +45,6 @@ import static java.lang.Math.toIntExact;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
-import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessageFormattable;
-import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
-import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
-import static net.yudichev.jiotty.common.rest.HttpStatuses.isServerError;
-import static net.yudichev.jiotty.common.rest.HttpStatuses.isSuccess;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
@@ -68,7 +63,6 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     /// meaning the end user must interact. Codes naming a client or deployment fault — `invalid_client`, `unauthorized_client`, `invalid_scope`,
     /// `unsupported_grant_type`, `invalid_request` — are deliberately absent: the stored credential may be perfectly good, and dropping it would make every
     /// user of a misconfigured client re-authenticate.
-    @VisibleForTesting
     static final ImmutableSet<String> CREDENTIAL_DEAD_ERRORS =
             ImmutableSet.of("invalid_grant", "login_required", "consent_required", "interaction_required", "account_selection_required");
     // Backoff schedule for retrying a failed token request before escalating to PermanentFailure.
@@ -76,18 +70,8 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     static final Duration TOKEN_RETRY_INITIAL_INTERVAL = Duration.ofSeconds(5);
     @VisibleForTesting
     static final Duration TOKEN_RETRY_MAX_ELAPSED_TIME = Duration.ofMinutes(10);
-    /// The error Google's revocation endpoint answers with HTTP 400 for a token it no longer recognises, which leaves no grant to revoke.
-    @VisibleForTesting
-    static final String INVALID_TOKEN_ERROR = "invalid_token";
     /// RFC 6749's name for a refresh token, used as a grant type, a request parameter and an RFC 7009 token type hint.
-    @VisibleForTesting
     static final String REFRESH_TOKEN = "refresh_token";
-    /// The RFC 7009 revocation request parameter carrying the token to revoke.
-    @VisibleForTesting
-    static final String TOKEN_PARAM = "token";
-    /// The RFC 7009 revocation request parameter naming the kind of token sent.
-    @VisibleForTesting
-    static final String TOKEN_TYPE_HINT_PARAM = "token_type_hint";
     private static final Duration TOKEN_RETRY_MAX_INTERVAL = Duration.ofMinutes(1);
     protected final Logger logger = LogManager.getLogger(getClass());
     protected final String clientId;
@@ -115,6 +99,8 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     protected SchedulingExecutor executor;
     private OkHttpClient httpClient;
+    /// Sends [#revoke()]'s requests to [#revocationUrl]; `null` when none is configured.
+    private @Nullable GrantRevocation grantRevocation;
     private OauthAccessToken currentToken;
     /// Backoff governing token-request retries, armed on the first failure of a streak and consulted on each subsequent failure.
     @GuardedBy("executor")
@@ -159,7 +145,33 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         this.tokenUrl = checkNotNull(tokenUrl);
         this.revocationUrl = checkNotNull(revocationUrl).orElse(null);
         this.loginPending = loginPending;
-        varStoreKey = apiName + "Oauth2Token_" + clientId + "_" + scope;
+        varStoreKey = varStoreKey(apiName, clientId, scope);
+    }
+
+    /// The var-store key a manager for this API, client and scope keeps its token under, which [StoredGrantRevokerImpl] reads the token back from.
+    static String varStoreKey(String apiName, String clientId, String scope) {
+        return apiName + "Oauth2Token_" + clientId + "_" + scope;
+    }
+
+    /// The form of a refresh-token grant request (RFC 6749 §6), carrying `clientSecret` when the client is a confidential one.
+    static RequestBody refreshTokenGrant(String refreshToken, String clientId, Optional<String> clientSecret) {
+        var formBuilder = new FormBody.Builder()
+                .add("grant_type", REFRESH_TOKEN)
+                .add(REFRESH_TOKEN, refreshToken)
+                .add("client_id", clientId);
+        clientSecret.ifPresent(secret -> formBuilder.add("client_secret", secret));
+        return formBuilder.build();
+    }
+
+    /// The backoff for retrying a failed request to the authorisation server, giving up once `maxElapsedTime` has passed.
+    static BackOff retryBackOff(CurrentDateTimeProvider currentDateTimeProvider, Duration maxElapsedTime) {
+        // The backoff reads elapsed time through the injected clock (so tests drive it deterministically via ProgrammableClock), not the wall clock.
+        return new ExponentialBackOff.Builder()
+                .setInitialIntervalMillis(toIntExact(TOKEN_RETRY_INITIAL_INTERVAL.toMillis()))
+                .setMaxIntervalMillis(toIntExact(TOKEN_RETRY_MAX_INTERVAL.toMillis()))
+                .setMaxElapsedTimeMillis(toIntExact(maxElapsedTime.toMillis()))
+                .setNanoClock(currentDateTimeProvider)
+                .build();
     }
 
     @Override
@@ -167,6 +179,15 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         httpClient = createHttpClient();
         executor = executorProvider.get();
         tokenRequestBackOff = createRetryBackOff();
+        if (revocationUrl != null) {
+            grantRevocation = new GrantRevocation(apiName,
+                                                  new GrantRevocation.Method.Rfc7009(revocationUrl),
+                                                  httpClient,
+                                                  executor,
+                                                  // A revocation answer arriving once this manager has stopped is dropped, as a token response is.
+                                                  outcome -> executor.tryExecute("revocationOutcome", () -> ifNotStopped(outcome)),
+                                                  this::createRetryBackOff);
+        }
         varStore.readValueEncrypted(OauthAccessToken.class, varStoreKey)
                 .ifPresentOrElse(accessToken -> {
                                      if (isExpired(accessToken)) {
@@ -311,103 +332,23 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
     /// Asks the authorisation server to revoke the grant behind `refreshToken`, retrying a transient failure until the retry budget is spent.
     ///
     /// @param refreshToken the refresh token to revoke, or `null` when there is none, in which case nothing is sent
+    /// @return completes once the grant has ended; fails when the authorisation server refused or could not be reached
     private CompletableFuture<Void> requestRevocation(@Nullable String refreshToken) {
-        if (refreshToken == null || revocationUrl == null) {
-            return completedFuture(null);
-        }
-        var revocation = new CompletableFuture<Void>();
-        sendRevocation(revocationUrl, refreshToken, createRetryBackOff(), revocation);
-        return revocation;
+        return refreshToken == null || grantRevocation == null
+               ? completedFuture(null)
+               : grantRevocation.revoke(refreshToken).thenAccept(result -> {
+                   if (result != StoredGrantRevoker.Result.ENDED) {
+                       throw new RuntimeException(apiName + ": the authorisation server did not end the grant: " + result);
+                   }
+               });
     }
 
-    /// The backoff for retrying a failed request to the authorisation server.
     private BackOff createRetryBackOff() {
-        // The backoff reads elapsed time through the injected clock (so tests drive it deterministically via ProgrammableClock), not the wall clock.
-        return new ExponentialBackOff.Builder()
-                .setInitialIntervalMillis(toIntExact(TOKEN_RETRY_INITIAL_INTERVAL.toMillis()))
-                .setMaxIntervalMillis(toIntExact(TOKEN_RETRY_MAX_INTERVAL.toMillis()))
-                .setMaxElapsedTimeMillis(toIntExact(TOKEN_RETRY_MAX_ELAPSED_TIME.toMillis()))
-                .setNanoClock(currentDateTimeProvider)
-                .build();
-    }
-
-    private void sendRevocation(String url, String refreshToken, BackOff backOff, CompletableFuture<Void> revocation) {
-        Request request = new Request.Builder().url(url)
-                                               .post(new FormBody.Builder().add(TOKEN_PARAM, refreshToken)
-                                                                           .add(TOKEN_TYPE_HINT_PARAM, REFRESH_TOKEN)
-                                                                           .build())
-                                               .build();
-        httpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException e) {
-                onRevocationOutcome(() -> retryRevocationOrFail(url, refreshToken, backOff, revocation, e));
-            }
-
-            @Override
-            public void onResponse(Call call, Response response) {
-                String error;
-                try (ResponseBody body = response.body()) {
-                    error = response.isSuccessful() ? "" : errorCode(body.string());
-                } catch (RuntimeException | IOException e) {
-                    onRevocationOutcome(() -> retryRevocationOrFail(url, refreshToken, backOff, revocation, e));
-                    return;
-                }
-                onRevocationOutcome(() -> handleRevocationResponse(url, refreshToken, backOff, revocation, response.code(), error));
-            }
-        });
-    }
-
-    /// Runs `action` on [#executor], dropping it once this manager has stopped, as [#requestToken] does with a token response.
-    private void onRevocationOutcome(Runnable action) {
-        executor.tryExecute("revocationOutcome", () -> ifNotStopped(action));
-    }
-
-    /// Completes `revocation` on a confirmed revocation or a token Google no longer recognises, retries a server-side or rate-limit failure, and fails
-    /// `revocation` on any other answer. Runs on [#executor].
-    ///
-    /// @param error the OAuth error code the response carried, or empty when it carried none
-    private void handleRevocationResponse(String url, String refreshToken, BackOff backOff, CompletableFuture<Void> revocation, int status, String error) {
-        logger.debug("[{}] grant revocation answered HTTP {}, error '{}'", apiName, status, error);
-        if (isSuccess(status) || (status == BAD_REQUEST_400 && INVALID_TOKEN_ERROR.equals(error))) {
-            logger.info("[{}] grant revoked", apiName);
-            revocation.complete(null);
-        } else if (isServerError(status) || status == TOO_MANY_REQUESTS_429) {
-            retryRevocationOrFail(url, refreshToken, backOff, revocation, new RuntimeException(apiName + ": grant revocation answered HTTP " + status));
-        } else {
-            revocation.completeExceptionally(new RuntimeException(apiName + ": grant revocation rejected with HTTP " + status + ", error '" + error + '\''));
-        }
-    }
-
-    /// Sends the revocation again after a backoff delay, or fails `revocation` with `failure` once the retry budget is spent. Runs on [#executor].
-    private void retryRevocationOrFail(String url, String refreshToken, BackOff backOff, CompletableFuture<Void> revocation, Throwable failure) {
-        long backOffMillis = backOff.nextBackOffMillis();
-        if (backOffMillis == BackOff.STOP) {
-            revocation.completeExceptionally(new RuntimeException(apiName + ": grant revocation failed", failure));
-        } else {
-            logger.info("[{}] grant revocation failed ({}); retrying in {}ms", apiName, humanReadableMessage(failure), backOffMillis);
-            executor.schedule(Duration.ofMillis(backOffMillis), () -> sendRevocation(url, refreshToken, backOff, revocation));
-        }
-    }
-
-    /// @return the OAuth error code `body` carries, or empty when `body` is not an OAuth error response
-    private String errorCode(String body) {
-        try {
-            return Json.parse(body, OauthErrorResponse.class).error();
-        } catch (RuntimeException e) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("[{}] grant revocation error response is not an OAuth error: {}", apiName, humanReadableMessageFormattable(e));
-            }
-            return "";
-        }
+        return retryBackOff(currentDateTimeProvider, TOKEN_RETRY_MAX_ELAPSED_TIME);
     }
 
     private void refreshAccessToken(String refreshToken) {
-        var formBuilder = new FormBody.Builder()
-                .add("grant_type", REFRESH_TOKEN)
-                .add(REFRESH_TOKEN, refreshToken)
-                .add("client_id", clientId);
-        clientSecret.ifPresent(secret -> formBuilder.add("client_secret", secret));
-        requestToken(formBuilder.build(), refreshToken);
+        requestToken(refreshTokenGrant(refreshToken, clientId, clientSecret), refreshToken);
     }
 
     /// Sends a token request and handles its answer on [#executor]. Runs on [#executor].

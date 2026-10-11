@@ -21,6 +21,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -282,16 +283,18 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
         /// [#authState] to [AuthState.PermanentFailure]; on a successful response, to [AuthState.Success]. A transient failure (5xx, network) leaves the auth
         /// state unchanged: the bound credentials may still be valid; the call just couldn't get through. Pushes go through [#authStateUpdater] so
         /// identical-type transitions are deduped and subscribers only see real state changes.
-        private void updateAuthStateFromOutcome(Object resultOrNull, Throwable throwableOrNull) {
+        ///
+        /// @param resultOrNull    the call's result, or `null` when the call failed
+        /// @param throwableOrNull why the call failed, or `null` when it succeeded
+        private void updateAuthStateFromOutcome(@Nullable Object resultOrNull, @Nullable Throwable throwableOrNull) {
             if (throwableOrNull == null) {
                 authStateUpdater.accept(AUTH_SUCCESS);
                 return;
             }
-            for (Throwable cur = throwableOrNull; cur != null; cur = cur.getCause()) {
-                if (cur instanceof HttpResponseException http && (http.statusCode() == UNAUTHORIZED_401 || http.statusCode() == FORBIDDEN_403)) {
-                    authStateUpdater.accept(new AuthState.PermanentFailure(humanReadableMessage(throwableOrNull)));
-                    return;
-                }
+            if (HttpResponseException.findIn(throwableOrNull)
+                                     .filter(httpResponse -> httpResponse.statusCode() == UNAUTHORIZED_401 || httpResponse.statusCode() == FORBIDDEN_403)
+                                     .isPresent()) {
+                authStateUpdater.accept(new AuthState.PermanentFailure(humanReadableMessage(throwableOrNull)));
             }
         }
 

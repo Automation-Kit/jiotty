@@ -3,6 +3,7 @@ package net.yudichev.jiotty.common.rest;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.isClientError;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.isServerError;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.isSuccess;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -23,6 +24,20 @@ class HttpStatusesTest {
             "503, false"})
     void classifiesSuccessByStatus(int code, boolean expectedSuccess) {
         assertThat(isSuccess(code)).isEqualTo(expectedSuccess);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            // boundaries of the 4xx class
+            "399, false",
+            "400, true",
+            "429, true",
+            "499, true",
+            "500, false",
+            // 2xx
+            "200, false"})
+    void classifiesClientErrorByStatus(int code, boolean expectedClientError) {
+        assertThat(isClientError(code)).isEqualTo(expectedClientError);
     }
 
     @ParameterizedTest

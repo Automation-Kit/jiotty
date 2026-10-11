@@ -1,13 +1,15 @@
 package net.yudichev.jiotty.common.rest;
 
+import java.util.Optional;
+
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.findInCausalChain;
 
-/// Thrown by [RestClients#call] when the server returns a non-2xx status. Callers that need to react to specific HTTP codes (e.g. transition an auth-state
-/// observable to [net.yudichev.jiotty.common.security.AuthState.PermanentFailure] on 401/403) can `instanceof`-match this type and read [#statusCode] / [#body]
-/// directly, instead of regex-matching the message.
+/// Thrown by [RestClients]' calls when the server returns a non-2xx status, carrying its [#statusCode] and [#body]; [#findIn] locates it in a failure's
+/// causal chain.
 ///
-/// The exception message format is preserved verbatim from the previous untyped form (`"Response code N, body: ..."`) so string-matching callers keep working.
+/// The message reads `Response code N, body: ...`; string-matching callers depend on that format.
 public final class HttpResponseException extends RuntimeException {
     private final int statusCode;
     private final String body;
@@ -17,6 +19,12 @@ public final class HttpResponseException extends RuntimeException {
         checkArgument(statusCode > 0, "statusCode must be positive, was %s", statusCode);
         this.statusCode = statusCode;
         this.body = body;
+    }
+
+    /// @return the [HttpResponseException] in `throwable`'s causal chain, or empty when the failure carries no HTTP response; an [HttpResponseException] is
+    ///         always a leaf, so the chain holds at most one
+    public static Optional<HttpResponseException> findIn(Throwable throwable) {
+        return findInCausalChain(throwable, HttpResponseException.class);
     }
 
     public int statusCode() {

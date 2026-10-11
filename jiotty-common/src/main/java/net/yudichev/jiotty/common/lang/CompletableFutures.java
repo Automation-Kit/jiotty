@@ -17,6 +17,7 @@ import java.util.stream.Collector;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Collections.emptyList;
 import static net.yudichev.jiotty.common.lang.DelayedExecutors.delayedExecutor;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.findInCausalChain;
 
 @SuppressWarnings("WeakerAccess") // it's a library
 public final class CompletableFutures {
@@ -121,7 +122,8 @@ public final class CompletableFutures {
     public static <T> BiConsumer<T, Throwable> logErrorOnFailure(Logger logger, String errorMessageTemplate, Object... params) {
         return (_, e) -> {
             if (e != null) {
-                logger.error(String.format(errorMessageTemplate, params), e);
+                // Passed as a parameter, so a `{}` in the formatted text is logged as it is.
+                logger.error("{}", String.format(errorMessageTemplate, params), e);
             }
         };
     }
@@ -137,12 +139,7 @@ public final class CompletableFutures {
     }
 
     public static boolean isCancellation(@Nullable Throwable throwable) {
-        for (Throwable current = throwable; current != null; current = current.getCause()) {
-            if (current instanceof CancellationException) {
-                return true;
-            }
-        }
-        return false;
+        return throwable != null && findInCausalChain(throwable, CancellationException.class).isPresent();
     }
 
     private static class FutureChainBuilder<T, R> {

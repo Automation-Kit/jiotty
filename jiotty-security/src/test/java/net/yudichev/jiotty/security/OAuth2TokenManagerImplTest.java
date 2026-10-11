@@ -40,13 +40,15 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
+import static net.yudichev.jiotty.security.GrantRevocation.INVALID_TOKEN_ERROR;
+import static net.yudichev.jiotty.security.GrantRevocation.TOKEN_PARAM;
+import static net.yudichev.jiotty.security.GrantRevocation.TOKEN_TYPE_HINT_PARAM;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.CREDENTIAL_DEAD_ERRORS;
-import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.INVALID_TOKEN_ERROR;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.REFRESH_TOKEN;
-import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_PARAM;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_INITIAL_INTERVAL;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_MAX_ELAPSED_TIME;
-import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_TYPE_HINT_PARAM;
+import static net.yudichev.jiotty.security.StoredGrantRevoker.Result.REFUSED;
+import static net.yudichev.jiotty.security.StoredGrantRevoker.Result.UNREACHABLE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Named.named;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
@@ -637,7 +639,7 @@ class OAuth2TokenManagerImplTest {
 
         assertThat(revocation).failsWithin(Duration.ZERO)
                               .withThrowableOfType(ExecutionException.class)
-                              .withMessageContaining("grant revocation failed")
+                              .withMessageContaining("did not end the grant: " + UNREACHABLE)
                               .withMessageNotContaining("stored-rt");
         assertThat(requestLog.size()).as("the revocation was retried before giving up").isGreaterThan(1);
     }
@@ -654,7 +656,7 @@ class OAuth2TokenManagerImplTest {
 
         assertThat(revocation).failsWithin(Duration.ZERO)
                               .withThrowableOfType(ExecutionException.class)
-                              .withMessageContaining("HTTP 400, error 'unsupported_token_type'")
+                              .withMessageContaining("did not end the grant: " + REFUSED)
                               .withMessageNotContaining("stored-rt");
         assertThat(requestLog).hasSize(1);
         assertThat(varStore.readValueEncrypted(OauthAccessToken.class, VAR_STORE_KEY)).isEmpty();

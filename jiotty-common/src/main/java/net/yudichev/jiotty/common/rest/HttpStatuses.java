@@ -29,6 +29,11 @@ public final class HttpStatuses {
         return code / 100 == 2;
     }
 
+    /// @return `true` when `code` is a 4xx client error.
+    public static boolean isClientError(int code) {
+        return code / 100 == 4;
+    }
+
     /// @return `true` when `code` is a 5xx server error.
     public static boolean isServerError(int code) {
         return code / 100 == 5;

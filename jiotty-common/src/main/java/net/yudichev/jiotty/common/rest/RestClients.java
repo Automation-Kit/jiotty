@@ -125,8 +125,9 @@ public final class RestClients {
                 if (retryCount == 0) {
                     future.completeExceptionally(new RuntimeException("call failed: " + call.request().method() + ' ' + url, e));
                 } else {
-                    // All three are carried into the retry. Dropping one here would silently restore body or URL logging (or unsuccessful-response parsing) for
-                    // every attempt after the first, which is precisely when a flaky endpoint is being retried.
+                    // attemptParsingUnsuccessfulResponse, responseBodyLogging and loggableUrl are carried into the retry. Dropping one here would silently
+                    // restore body or URL logging (or unsuccessful-response parsing) for every attempt after the first, which is precisely when a flaky
+                    // endpoint is being retried.
                     call(call.clone(), responseType, retryCount - 1, attemptParsingUnsuccessfulResponse, responseBodyLogging, loggableUrl)
                             .whenComplete((result, exception) -> {
                                 if (exception == null) {

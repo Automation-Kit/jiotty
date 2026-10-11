@@ -19,7 +19,4 @@ public interface TeslaFleet {
     CompletableFuture<TelemetryCreateConfigResponse> telemetryCreateConfig(TelemetryCreateConfigRequest request);
 
     TeslaVehicle vehicle(String vehicleVin);
-
-    /// Ends this connector's use of the user's credential, as [OAuth2TokenManager#revoke()] describes.
-    CompletableFuture<Void> revokeCredential();
 }
