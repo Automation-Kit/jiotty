@@ -47,7 +47,6 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
 import static net.yudichev.jiotty.common.misc.RejectedCredential.indicatesRejectedCredential;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
-import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
 
@@ -99,11 +98,7 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
     /// Creates the client every Fleet call goes through. Overridden in tests to inject a deterministic fake.
     @VisibleForTesting
     OkHttpClient createHttpClient() {
-        return newClient(builder -> {
-            if (sslCustomisation != null) {
-                builder.sslSocketFactory(sslCustomisation.socketFactory(), sslCustomisation.trustManager());
-            }
-        });
+        return TeslaHttp.newFleetClient(sslCustomisation);
     }
 
     @Override
@@ -148,6 +143,11 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
     @Override
     public TeslaVehicle vehicle(String vin) {
         return new TeslaVehicleImpl(vin);
+    }
+
+    @Override
+    public CompletableFuture<Void> revokeCredential() {
+        return tokenManager.revoke();
     }
 
     /// Runs `code` with the current access token, and invalidates that token if the API answers that it will not accept it. The hook rides the call's own
@@ -304,7 +304,7 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
 
         TeslaVehicleImpl(String vin) {
             getDataUrl = baseUrl + "/vehicles/" + vin + "/vehicle_data";
-            telemetryConfigUrl = baseUrl + "/vehicles/" + vin + "/fleet_telemetry_config";
+            telemetryConfigUrl = TeslaHttp.telemetryConfigUrl(baseUrl, vin);
             telemetryFleetErrorsUrl = baseUrl + "/vehicles/" + vin + "/fleet_telemetry_errors";
             telemetryFleetStatusUrl = baseUrl + "/vehicles/fleet_status";
             wakeUpUrl = baseUrl + "/vehicles/" + vin + "/wake_up";

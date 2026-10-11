@@ -38,6 +38,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /// Covers the credential-rejection hook every Fleet call goes through: a 401 says the token that request carried is no longer accepted, so it is invalidated;
 /// any other outcome leaves it alone. Only account-level endpoints are exercised, because [RestClients] logs the request URL verbatim and a per-vehicle URL
@@ -180,6 +181,18 @@ class TeslaFleetImplTest {
         assertThat(teslaFleet.listVehicles()).isCompletedExceptionally();
         assertThat(pendingCalls).isEmpty();
         verify(tokenManager, never()).invalidate(any(), any());
+    }
+
+    @Test
+    void revokeCredential_completesWithTheTokenManagersRevocation() {
+        var revocation = new CompletableFuture<Void>();
+        when(tokenManager.revoke()).thenReturn(revocation);
+
+        CompletableFuture<Void> result = teslaFleet.revokeCredential();
+
+        assertThat(result).isNotDone();
+        revocation.complete(null);
+        assertThat(result).isCompleted();
     }
 
     private void respondWith(int status, String body) {

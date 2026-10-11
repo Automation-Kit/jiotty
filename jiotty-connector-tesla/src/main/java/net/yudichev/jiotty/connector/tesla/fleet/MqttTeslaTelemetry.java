@@ -12,13 +12,17 @@ import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.toFutureOfList;
+import static net.yudichev.jiotty.connector.tesla.fleet.TelemetryField.ALL_NAMES;
 
 /// Feeds data from the MQTT dispatcher of the [Tesla Fleet Telemetry Server](https://github.com/teslamotors/fleet-telemetry)
 public final class MqttTeslaTelemetry implements TeslaTelemetry {
@@ -27,6 +31,7 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
     private final Mqtt mqtt;
     private final String vin;
     private final String redactedVin;
+    private final String metricTopicPrefix;
     private final String metricsTopicFilter;
     private final String connectivityTopicFilter;
 
@@ -37,7 +42,8 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
         this.mqtt = checkNotNull(mqtt);
         this.vin = checkNotNull(vin);
         redactedVin = LogRedaction.redact(vin);
-        metricsTopicFilter = topicBase + '/' + vin + "/v/#";
+        metricTopicPrefix = topicBase + '/' + vin + "/v/";
+        metricsTopicFilter = metricTopicPrefix + '#';
         connectivityTopicFilter = topicBase + '/' + vin + "/connectivity";
     }
 
@@ -88,6 +94,16 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
             }
             listener.accept(new TelemetryResult.Success<>(event));
         });
+    }
+
+    /// @implNote the metric topics cleared are those of the fields [TelemetryField] models
+    @Override
+    public CompletableFuture<Void> clearRetained() {
+        logger.debug("clearing retained telemetry of {}", redactedVin);
+        return Stream.concat(ALL_NAMES.stream().map(fieldName -> metricTopicPrefix + fieldName), Stream.of(connectivityTopicFilter))
+                     .map(mqtt::clearRetained)
+                     .collect(toFutureOfList())
+                     .thenApply(_ -> null);
     }
 
     private String redactedTopic(String topic) {

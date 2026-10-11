@@ -34,10 +34,12 @@ import org.jspecify.annotations.Nullable;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -50,7 +52,6 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.concurrent.CompletableFuture.supplyAsync;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.Closeable.closeIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
@@ -62,6 +63,8 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     private static final Logger logger = LogManager.getLogger(MqttImpl.class);
+
+    private static final byte[] NO_PAYLOAD = new byte[0];
     private final ThresholdThrottlingConsumerFactory<Throwable> throttledLoggerFactory;
     private final MqttConnectOptions mqttConnectOptions;
     private final Map<String, MqttMessage> lastReceivedMessageByTopic = new HashMap<>();
@@ -73,6 +76,8 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     private final double connectBackoffRandomisationFactor;
     private final NanoClock nanoClock;
     private final Listeners<ConnectionStatus> connectionStatusListeners = new Listeners<>();
+    private final Queue<QueuedSend> queuedSends = new ArrayDeque<>();
+    private int sendsInFlight;
     private SchedulingExecutor executor;
     private @Nullable ConnectionStatus connectionStatus;
 
@@ -232,12 +237,58 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
 
     @Override
     public CompletableFuture<Void> publish(String topic, String message) {
+        logger.debug("OUT topic: {}, msg: {}", topic, message);
+        return send(topic, message.getBytes(UTF_8), false);
+    }
+
+    /// A zero-length retained message is what tells the broker to drop the one it holds.
+    @Override
+    public CompletableFuture<Void> clearRetained(String topic) {
+        return send(topic, NO_PAYLOAD, true);
+    }
+
+    /// Completes once the broker has acknowledged the message. Paho refuses a publish while its in-flight window is full, so a send beyond the window waits
+    /// here for an acknowledgement to free a slot.
+    private CompletableFuture<Void> send(String topic, byte[] payload, boolean retained) {
         checkStarted();
-        return supplyAsync(() -> {
-            logger.debug("OUT topic: {}, msg: {}", topic, message);
-            asUnchecked(() -> client.publish(topic, message.getBytes(UTF_8), 1, false));
-            return null;
-        }, executor);
+        var sent = new CompletableFuture<Void>();
+        executor.execute("mqttSend", () -> {
+            queuedSends.add(new QueuedSend(topic, payload, retained, sent));
+            sendQueued();
+        });
+        return sent;
+    }
+
+    private void sendQueued() {
+        while (sendsInFlight < mqttConnectOptions.getMaxInflight() && !queuedSends.isEmpty()) {
+            QueuedSend send = queuedSends.remove();
+            sendsInFlight++;
+            try {
+                client.publish(send.topic(), send.payload(), 1, send.retained(), null, new IMqttActionListener() {
+                    @Override
+                    public void onSuccess(IMqttToken asyncActionToken) {
+                        executor.execute("mqttSent", () -> onSendSettled(send, null));
+                    }
+
+                    @Override
+                    public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
+                        executor.execute("mqttSendFailed", () -> onSendSettled(send, exception));
+                    }
+                });
+            } catch (MqttException | RuntimeException e) {
+                onSendSettled(send, e);
+            }
+        }
+    }
+
+    private void onSendSettled(QueuedSend send, @Nullable Throwable failure) {
+        sendsInFlight--;
+        if (failure == null) {
+            send.sent().complete(null);
+        } else {
+            send.sent().completeExceptionally(failure);
+        }
+        sendQueued();
     }
 
     @Override
@@ -376,6 +427,8 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
             logger.debug("Message delivered: {}", token.getMessageId());
         }
     }
+
+    private record QueuedSend(String topic, byte[] payload, boolean retained, CompletableFuture<Void> sent) {}
 
     private record Subscription(int qos, BiConsumer<String, MqttMessage> dataCallback) {
         public void accept(String topic, MqttMessage message) {

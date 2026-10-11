@@ -1,9 +1,11 @@
 package net.yudichev.jiotty.connector.tesla.fleet;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -26,16 +28,19 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
-import static net.yudichev.jiotty.common.rest.RestClients.newClient;
+import static net.yudichev.jiotty.common.rest.RestClients.callSuppressingResponseBody;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 
-public final class TeslaFleetPartnerImpl extends BaseLifecycleComponent implements TeslaFleetPartner {
+public class TeslaFleetPartnerImpl extends BaseLifecycleComponent implements TeslaFleetPartner {
     private static final Logger logger = LogManager.getLogger(TeslaFleetPartnerImpl.class);
+
+    private static final TypeToken<ResponseWrapper<TelemetryDeleteConfigResponse>> DELETE_CONFIG_RESPONSE_TYPE = new TypeToken<>() {};
 
     private final String clientId;
     private final String clientSecret;
     private final String scope;
     private final AtomicInteger requestIdGenerator = new AtomicInteger();
+    private final String baseUrl;
     private final String registerPartnerDomainUrl;
     private final String partnerPublicKeyUrl;
     private final @Nullable SslCustomisation sslCustomisation;
@@ -50,7 +55,7 @@ public final class TeslaFleetPartnerImpl extends BaseLifecycleComponent implemen
         this.clientId = checkNotNull(clientId);
         this.clientSecret = checkNotNull(clientSecret);
         this.scope = checkNotNull(scope);
-        checkNotNull(baseUrl);
+        this.baseUrl = checkNotNull(baseUrl);
         this.sslCustomisation = sslCustomisation.orElse(null);
         registerPartnerDomainUrl = baseUrl + "/partner_accounts";
         partnerPublicKeyUrl = baseUrl + "/partner_accounts/public_key";
@@ -58,11 +63,7 @@ public final class TeslaFleetPartnerImpl extends BaseLifecycleComponent implemen
 
     @Override
     protected void doStart() {
-        httpClient = newClient(builder -> {
-            if (sslCustomisation != null) {
-                builder.sslSocketFactory(sslCustomisation.socketFactory(), sslCustomisation.trustManager());
-            }
-        });
+        httpClient = createHttpClient();
     }
 
     @Override
@@ -100,7 +101,34 @@ public final class TeslaFleetPartnerImpl extends BaseLifecycleComponent implemen
                 }));
     }
 
-    private CompletableFuture<String> acquirePartnerToken() {
+    @Override
+    public CompletableFuture<TelemetryDeleteConfigResponse> deleteTelemetryConfig(String vin) {
+        return whenStartedAndNotLifecycling(() -> acquirePartnerToken()
+                .thenCompose(partnerToken -> {
+                    String url = TeslaHttp.telemetryConfigUrl(baseUrl, vin);
+                    var request = new Request.Builder()
+                            .url(url)
+                            .header("Authorization", "Bearer " + partnerToken)
+                            .delete()
+                            .build();
+                    StringFormattable loggableUrl = TeslaHttp.withVinsRedacted(url);
+                    int requestId = requestIdGenerator.incrementAndGet();
+                    logger.debug("[{}] executing DELETE {}", requestId, loggableUrl);
+                    return callSuppressingResponseBody(httpClient.newCall(request), DELETE_CONFIG_RESPONSE_TYPE, 0, loggableUrl)
+                            .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
+                            .thenApply(TeslaHttp.unwrapOrFail());
+                }));
+    }
+
+    /// Creates the client every partner call goes through. Overridden in tests to inject a deterministic fake.
+    @VisibleForTesting
+    OkHttpClient createHttpClient() {
+        return TeslaHttp.newFleetClient(sslCustomisation);
+    }
+
+    /// Overridden in tests, which have no Tesla auth server to obtain a token from.
+    @VisibleForTesting
+    CompletableFuture<String> acquirePartnerToken() {
         return TeslaHttp.acquirePartnerToken(requestIdGenerator, clientId, clientSecret, scope);
     }
 

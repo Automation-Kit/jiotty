@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -68,6 +69,21 @@ public final class InMemoryMqtt implements Mqtt {
         var topicAndData = new TopicAndData(topic, message);
         listeners.forEach((topicAndDataListeners) -> topicAndDataListeners.notify(topicAndData));
         return CompletableFuture.completedFuture(null);
+    }
+
+    @Override
+    public CompletableFuture<Void> clearRetained(String topic) {
+        synchronized (lock) {
+            dataByTopic.remove(topic);
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    /// @return the message held for `topic`, as a later subscriber would receive it first
+    public Optional<String> retainedMessage(String topic) {
+        synchronized (lock) {
+            return Optional.ofNullable(dataByTopic.get(topic));
+        }
     }
 
     @Override

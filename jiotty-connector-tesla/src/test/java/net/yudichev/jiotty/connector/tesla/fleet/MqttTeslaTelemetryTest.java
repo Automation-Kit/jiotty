@@ -25,11 +25,12 @@ class MqttTeslaTelemetryTest {
     private final List<TelemetryResult<TelemetryField>> metricResults = new ArrayList<>();
     private final List<TelemetryResult<TelemetryConnectivityEvent>> connectivityResults = new ArrayList<>();
     private InMemoryMqtt mqtt;
+    private MqttTeslaTelemetry telemetry;
 
     @BeforeEach
     void setUp() {
         mqtt = new InMemoryMqtt();
-        var telemetry = new MqttTeslaTelemetry(mqtt, TOPIC_BASE, VIN);
+        telemetry = new MqttTeslaTelemetry(mqtt, TOPIC_BASE, VIN);
         telemetry.subscribeToMetrics(metricResults::add);
         telemetry.subscribeToConnectivity(connectivityResults::add);
     }
@@ -93,6 +94,22 @@ class MqttTeslaTelemetryTest {
                                            assertThat(error.message()).contains(REDACTED_VIN).doesNotContain(VIN);
                                            assertThat(error.cause()).isNotNull();
                                        });
+    }
+
+    @Test
+    void clearRetained_removesThisVehiclesMetricsAndConnectivityOnly() {
+        String otherVehicleTopic = TOPIC_BASE + "/5YJ3E1EA1JF000002/v/" + TLocation.NAME;
+        mqtt.publish(metricTopic(TBatteryLevel.NAME), "67");
+        mqtt.publish(metricTopic(TLocation.NAME), "{\"latitude\":51.501234,\"longitude\":-0.142567}");
+        mqtt.publish(connectivityTopic(), "{}");
+        mqtt.publish(otherVehicleTopic, "{}");
+
+        assertThat(telemetry.clearRetained()).isCompleted();
+
+        assertThat(mqtt.retainedMessage(metricTopic(TBatteryLevel.NAME))).isEmpty();
+        assertThat(mqtt.retainedMessage(metricTopic(TLocation.NAME))).isEmpty();
+        assertThat(mqtt.retainedMessage(connectivityTopic())).isEmpty();
+        assertThat(mqtt.retainedMessage(otherVehicleTopic)).hasValue("{}");
     }
 
     private static String metricTopic(String fieldName) {

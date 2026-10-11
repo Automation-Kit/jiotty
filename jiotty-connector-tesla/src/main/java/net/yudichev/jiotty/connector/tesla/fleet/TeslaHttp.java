@@ -3,6 +3,7 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.StringFormattable;
+import net.yudichev.jiotty.common.net.SslCustomisation;
 import net.yudichev.jiotty.common.rest.ContentTypes;
 import okhttp3.FormBody;
 import okhttp3.MediaType;
@@ -34,6 +35,18 @@ final class TeslaHttp {
     private static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
 
     private TeslaHttp() {
+    }
+
+    static OkHttpClient newFleetClient(@Nullable SslCustomisation sslCustomisation) {
+        return newClient(builder -> {
+            if (sslCustomisation != null) {
+                builder.sslSocketFactory(sslCustomisation.socketFactory(), sslCustomisation.trustManager());
+            }
+        });
+    }
+
+    static String telemetryConfigUrl(String baseUrl, String vin) {
+        return baseUrl + "/vehicles/" + vin + "/fleet_telemetry_config";
     }
 
     static <T> Function<ResponseWrapper<T>, T> unwrapOrFail() {

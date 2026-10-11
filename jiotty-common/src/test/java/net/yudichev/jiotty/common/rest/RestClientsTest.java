@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.misc.SharedUpstreamOutage;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
@@ -304,6 +306,42 @@ class RestClientsTest {
                 .cause()
                 .hasMessageNotContaining("someone@example.com")
                 .hasMessageContaining("chars");
+    }
+
+    /// The VIN-shaped path segment is what the PII log guard looks for, so the guard also fails this test if a log line renders the real URL.
+    @Test
+    void callSuppressingResponseBody_withLoggableUrl_keepsTheRealUrlOutOfTheFailureAcrossRetries() {
+        String url = BASE + "/vehicles/5YJ3E1EA1JF000001/config";
+        urlToFailure.put(url, new IOException("transport boom"));
+
+        CompletableFuture<Page> future = RestClients.callSuppressingResponseBody(callFactory.apply(url),
+                                                                                 TypeToken.of(Page.class),
+                                                                                 1,
+                                                                                 appendable -> Append.to(appendable, BASE + "/vehicles/5YJ***/config"));
+
+        assertThatThrownBy(future::join).cause()
+                                        .hasMessage("call failed: GET " + BASE + "/vehicles/5YJ***/config")
+                                        .hasMessageNotContaining("5YJ3E1EA1JF000001");
+        assertThat(urlHitCount).containsEntry(url, 2);
+    }
+
+    @Test
+    void callSuppressingResponseBody_withLoggableUrl_nonSuccessResponse_keepsTheStatusAndWithholdsTheBody() {
+        String url = BASE + "/vehicles/5YJ3E1EA1JF000001/config";
+        urlToBody.put(url, "{\"error\":\"vehicle 5YJ3E1EA1JF000001 not found\"}");
+        urlToHttpStatus.put(url, NOT_FOUND_404);
+
+        CompletableFuture<Page> future = RestClients.callSuppressingResponseBody(callFactory.apply(url),
+                                                                                 TypeToken.of(Page.class),
+                                                                                 0,
+                                                                                 appendable -> Append.to(appendable, "redacted"));
+
+        assertThatThrownBy(future::join)
+                .cause()
+                .isInstanceOfSatisfying(HttpResponseException.class, http -> {
+                    assertThat(http.statusCode()).isEqualTo(NOT_FOUND_404);
+                    assertThat(http).hasMessageNotContaining("5YJ3E1EA1JF000001");
+                });
     }
 
     @Test

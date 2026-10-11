@@ -18,18 +18,25 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.IntStream;
 
 import static net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff.DEFAULT_MAX_ELAPSED_TIME_MILLIS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.eclipse.paho.client.mqttv3.MqttConnectOptions.MAX_INFLIGHT_DEFAULT;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/// Unit tests for [MqttImpl]'s re-subscription retries after a reconnect, driven by a [ProgrammableClock] against a client double whose subscribe can be
-/// made to fail. [MqttImplIntegrationTest] covers the broker-facing behaviour.
+/// Unit tests for [MqttImpl]'s re-subscription retries after a reconnect and its window of unacknowledged sends, driven by a [ProgrammableClock] against a
+/// client double. [MqttImplIntegrationTest] covers the broker-facing behaviour.
 @ExtendWith(MockitoExtension.class)
 class MqttImplTest {
     /// Covers the re-subscription backoff's limit plus its longest randomised retry interval.
@@ -102,6 +109,64 @@ class MqttImplTest {
         clock.advanceTimeAndTick(Duration.ofSeconds(1));
 
         assertThat(subscribeAttempts - attemptsBeforeReconnect).isGreaterThan(1);
+    }
+
+    @Test
+    void aSendBeyondTheInFlightWindowWaitsForAnAcknowledgementToFreeASlot() throws MqttException {
+        List<IMqttActionListener> acknowledgements = recordPublishes();
+        List<CompletableFuture<Void>> sends = IntStream.rangeClosed(0, MAX_INFLIGHT_DEFAULT).mapToObj(i -> mqtt.clearRetained("home/" + i)).toList();
+        clock.tick();
+
+        assertThat(acknowledgements).hasSize(MAX_INFLIGHT_DEFAULT);
+        assertThat(sends).allSatisfy(send -> assertThat(send).isNotDone());
+
+        acknowledgements.getFirst().onSuccess(null);
+        clock.tick();
+
+        assertThat(sends.getFirst()).succeedsWithin(Duration.ZERO);
+        assertThat(acknowledgements).hasSize(MAX_INFLIGHT_DEFAULT + 1);
+        verify(client).publish(eq("home/" + MAX_INFLIGHT_DEFAULT), eq(new byte[0]), eq(1), eq(true), any(), any());
+    }
+
+    @Test
+    void aSendTheBrokerFailsFailsAndFreesItsSlot() throws MqttException {
+        List<IMqttActionListener> acknowledgements = recordPublishes();
+        List<CompletableFuture<Void>> sends = IntStream.rangeClosed(0, MAX_INFLIGHT_DEFAULT).mapToObj(i -> mqtt.publish("home/" + i, "on")).toList();
+        clock.tick();
+
+        acknowledgements.getFirst().onFailure(null, new MqttException(MqttException.REASON_CODE_CONNECTION_LOST));
+        clock.tick();
+
+        assertThat(sends.getFirst()).failsWithin(Duration.ZERO)
+                                    .withThrowableThat()
+                                    .havingCause()
+                                    .isInstanceOfSatisfying(MqttException.class,
+                                                            e -> assertThat(e.getReasonCode()).isEqualTo(MqttException.REASON_CODE_CONNECTION_LOST));
+        assertThat(acknowledgements).hasSize(MAX_INFLIGHT_DEFAULT + 1);
+    }
+
+    @Test
+    void aSendTheClientRefusesFailsAndFreesItsSlot() throws MqttException {
+        when(client.publish(anyString(), any(byte[].class), anyInt(), anyBoolean(), any(), any(IMqttActionListener.class)))
+                .thenThrow(new MqttException(MqttException.REASON_CODE_CLIENT_NOT_CONNECTED))
+                .thenReturn(null);
+
+        CompletableFuture<Void> refused = mqtt.publish("home/a", "on");
+        CompletableFuture<Void> next = mqtt.publish("home/b", "on");
+        clock.tick();
+
+        assertThat(refused).failsWithin(Duration.ZERO);
+        assertThat(next).isNotDone();
+        verify(client).publish(eq("home/b"), any(byte[].class), eq(1), eq(false), any(), any());
+    }
+
+    private List<IMqttActionListener> recordPublishes() throws MqttException {
+        List<IMqttActionListener> acknowledgements = new ArrayList<>();
+        when(client.publish(anyString(), any(byte[].class), anyInt(), anyBoolean(), any(), any(IMqttActionListener.class))).thenAnswer(invocation -> {
+            acknowledgements.add(invocation.getArgument(5));
+            return null;
+        });
+        return acknowledgements;
     }
 
     private void reconnect() {

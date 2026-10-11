@@ -13,7 +13,13 @@ public interface Mqtt {
         return subscribe(topicFilter, 2, dataCallback);
     }
 
+    /// @return completes once the broker has acknowledged the message
     CompletableFuture<Void> publish(String topic, String message);
+
+    /// Removes the message the broker retains on `topic`, so a later subscriber receives nothing for it until something new is published.
+    ///
+    /// @return completes once the broker has acknowledged the removal
+    CompletableFuture<Void> clearRetained(String topic);
 
     Closeable subscribeToConnectionStatus(Consumer<ConnectionStatus> listener);
 

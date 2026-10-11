@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
 import com.google.common.util.concurrent.MoreExecutors;
 import net.yudichev.jiotty.common.lang.Json;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
@@ -12,6 +13,7 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -23,6 +25,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
@@ -81,7 +84,16 @@ public final class RestClients {
     ///
     /// Use it wherever the upstream quotes the submitted value back — a transactional email API naming the recipient it rejected, say.
     public static <T> CompletableFuture<T> callSuppressingResponseBody(Call theCall, Class<? extends T> responseType, int retryCount) {
-        return call(theCall, TypeToken.of(responseType), retryCount, false, ResponseBodyLogging.SUPPRESSED);
+        return call(theCall, TypeToken.of(responseType), retryCount, false, ResponseBodyLogging.SUPPRESSED, null);
+    }
+
+    /// [#callSuppressingResponseBody(Call, Class, int)] for an endpoint whose URL itself carries personal data, such as a vehicle identifier in its path:
+    /// `loggableUrl` stands in for the URL in every log line and failure message.
+    public static <T> CompletableFuture<T> callSuppressingResponseBody(Call theCall,
+                                                                       TypeToken<? extends T> responseType,
+                                                                       int retryCount,
+                                                                       StringFormattable loggableUrl) {
+        return call(theCall, responseType, retryCount, false, ResponseBodyLogging.SUPPRESSED, checkNotNull(loggableUrl));
     }
 
     private static <T> CompletableFuture<T> call(Call theCall,
@@ -89,22 +101,33 @@ public final class RestClients {
                                                  int retryCount,
                                                  boolean attemptParsingUnsuccessfulResponse,
                                                  ResponseBodyLogging responseBodyLogging) {
+        return call(theCall, responseType, retryCount, attemptParsingUnsuccessfulResponse, responseBodyLogging, null);
+    }
+
+    /// @param loggableUrl what log lines and failure messages show in place of the request URL, or `null` to show the URL itself
+    private static <T> CompletableFuture<T> call(Call theCall,
+                                                 TypeToken<? extends T> responseType,
+                                                 int retryCount,
+                                                 boolean attemptParsingUnsuccessfulResponse,
+                                                 ResponseBodyLogging responseBodyLogging,
+                                                 @Nullable StringFormattable loggableUrl) {
         int requestId = requestIdGenerator.incrementAndGet();
         CompletableFuture<T> future = new CompletableFuture<>();
-        logger.debug("[{}] Sending {} {}", requestId, theCall.request().method(), theCall.request().url());
+        logger.debug("[{}] Sending {} {}", requestId, theCall.request().method(), loggableUrl == null ? theCall.request().url() : loggableUrl);
         theCall.enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
                 // Method and URL, never the Request itself: its toString renders the headers, and OkHttp redacts only the well-known credential ones
                 // (Authorization, Cookie, Proxy-Authorization, Set-Cookie). An API passing its key in a header of its own choosing — `api-key`, `X-Api-Key` —
                 // would otherwise put that key in this message, which reaches WARN logs and operator alerts.
-                logger.debug("[{}] Call failed: {} {}, retries left: {}", requestId, call.request().method(), call.request().url(), retryCount, e);
+                String url = loggableUrl == null ? call.request().url().toString() : loggableUrl.toString(128);
+                logger.debug("[{}] Call failed: {} {}, retries left: {}", requestId, call.request().method(), url, retryCount, e);
                 if (retryCount == 0) {
-                    future.completeExceptionally(new RuntimeException("call failed: " + call.request().method() + ' ' + call.request().url(), e));
+                    future.completeExceptionally(new RuntimeException("call failed: " + call.request().method() + ' ' + url, e));
                 } else {
-                    // Both flags are carried into the retry. Dropping them here would silently restore body logging (and unsuccessful-response parsing) for
+                    // All three are carried into the retry. Dropping one here would silently restore body or URL logging (or unsuccessful-response parsing) for
                     // every attempt after the first, which is precisely when a flaky endpoint is being retried.
-                    call(call.clone(), responseType, retryCount - 1, attemptParsingUnsuccessfulResponse, responseBodyLogging)
+                    call(call.clone(), responseType, retryCount - 1, attemptParsingUnsuccessfulResponse, responseBodyLogging, loggableUrl)
                             .whenComplete((result, exception) -> {
                                 if (exception == null) {
                                     future.complete(result);

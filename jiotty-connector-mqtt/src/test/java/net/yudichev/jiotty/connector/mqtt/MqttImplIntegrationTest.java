@@ -6,6 +6,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.throttling.ThresholdThrottlingConsumerFactory;
 import org.eclipse.paho.client.mqttv3.IMqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.junit.jupiter.api.AfterEach;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.IntStream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -88,6 +90,47 @@ class MqttImplIntegrationTest {
         publishRetained(topic, "v2");
         assertThat(subscriberBSecond).succeedsWithin(AWAIT_TIMEOUT).isEqualTo("v2");
         assertThat(subscriberAPayloads).containsExactly("v1");
+    }
+
+    /// A subscriber arriving after the clear gets the next live message first, where an uncleared topic would hand it the retained value ahead of it. The
+    /// sibling topic's retained marker is what shows the subscription is in place before the live message goes out.
+    @Test
+    void clearedRetainedMessageIsNotDeliveredToALaterSubscriber() throws Exception {
+        String prefix = uniqueTopic();
+        String topic = prefix + "/value";
+        publishRetained(topic, "stale");
+        publishRetained(prefix + "/marker", "subscribed");
+        MqttImpl client = newConnectedClient();
+
+        assertThat(client.clearRetained(topic)).succeedsWithin(AWAIT_TIMEOUT);
+
+        var subscribed = new CompletableFuture<Void>();
+        var firstValue = new CompletableFuture<String>();
+        subscriptions.add(newConnectedClient().subscribe(prefix + "/#", (receivedTopic, payload) -> {
+            if (receivedTopic.equals(topic)) {
+                firstValue.complete(payload);
+            } else {
+                subscribed.complete(null);
+            }
+        }));
+        assertThat(subscribed).succeedsWithin(AWAIT_TIMEOUT);
+        publishRetained(topic, "live");
+        assertThat(firstValue).succeedsWithin(AWAIT_TIMEOUT).isEqualTo("live");
+    }
+
+    /// Clearing more topics at once than the client may have awaiting the broker's acknowledgement still clears every one of them.
+    @Test
+    void clearingMoreTopicsAtOnceThanTheInFlightWindowClearsThemAll() throws Exception {
+        String prefix = uniqueTopic();
+        List<String> topics = IntStream.range(0, MqttConnectOptions.MAX_INFLIGHT_DEFAULT * 2).mapToObj(i -> prefix + "/" + i).toList();
+        for (String topic : topics) {
+            publishRetained(topic, "stale");
+        }
+        MqttImpl client = newConnectedClient();
+
+        List<CompletableFuture<Void>> clears = topics.stream().map(client::clearRetained).toList();
+
+        assertThat(CompletableFuture.allOf(clears.toArray(CompletableFuture[]::new))).succeedsWithin(AWAIT_TIMEOUT);
     }
 
     /// After the broker bounces and the client auto-reconnects, [MqttImpl] restores its subscriptions, so a message published after the reconnect is still
