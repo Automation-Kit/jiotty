@@ -7,7 +7,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
-import jakarta.servlet.AsyncContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
@@ -19,7 +18,6 @@ import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionDto;
 import net.yudichev.jiotty.user.ui.sse.SseChannel;
 import net.yudichev.jiotty.user.ui.sse.SseChannel.SseSink;
-import net.yudichev.jiotty.user.ui.sse.SseChannel.SseStream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -30,11 +28,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
@@ -95,7 +93,8 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     @Override
     protected void doStart() {
         executor = executorProvider.get();
-        channel = channelFactory.create("ui", executor, UIJson.WRITER, SseChannel.UNBOUNDED);
+        // Named after the user, because the channel logs from container threads, whose names carry no subject.
+        channel = channelFactory.create("ui-" + userId, executor, UIJson.WRITER, SseChannel.UNBOUNDED);
         channel.start();
         optionSnapshotThrottle = new ThrottlingConsumer<>(executor,
                                                           optionsThrottlingPeriod,
@@ -118,18 +117,13 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
 
     @Override
     public Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException {
-        AsyncContext asyncContext = request.startAsync();
         Timer.Sample headersToSnapshotStartSample = Timer.start(meterRegistry);
-        Optional<SseStream> stream = channel.open(asyncContext, response, onStreamClosed, sink -> sendInitialImageTo(sink, headersToSnapshotStartSample));
-        if (stream.isEmpty()) {
-            // The channel is unbounded, so the only refusal is teardown racing this request. Complete the exchange and report the stream closed, so the
-            // request does not hang on an async context nobody owns and the caller releases whatever it attached to the stream.
-            logger.debug("[{}] SSE stream refused: the channel is closed", userId);
-            asyncContext.complete();
-            onStreamClosed.run();
-            return Closeable.noop();
-        }
-        return stream.get();
+        // Read under the lifecycle lock in every state, because a stopped channel refuses the stream and releases its exchange.
+        SseChannel streamChannel = whenNotLifecycling(() -> {
+            checkState(channel != null, "%s was asked for a stream before it started", this);
+            return channel;
+        });
+        return streamChannel.startStream(request, response, onStreamClosed, sink -> sendInitialImageTo(sink, headersToSnapshotStartSample));
     }
 
     private void sendInitialImageTo(SseSink sink, Timer.Sample headersToSnapshotStartSample) {

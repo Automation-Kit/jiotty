@@ -45,6 +45,7 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static net.yudichev.jiotty.user.ui.sse.testing.SseFrames.dataOf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
@@ -638,6 +639,24 @@ class SseServiceImplTest {
         verify(asyncContext).complete();
         verify(onStreamClosed).run();
         assertThatCode(handle::close).doesNotThrowAnyException();
+    }
+
+    @Test
+    void namesTheFaultWhenAskedForAStreamBeforeStarting(@Mock HttpServletRequest request,
+                                                        @Mock HttpServletResponse response,
+                                                        @Mock Runnable onStreamClosed) {
+        var unstartedService = new SseServiceImpl(() -> clock.createSingleThreadedSchedulingExecutor("unstarted"),
+                                                  optionRegistry,
+                                                  displayableRegistry,
+                                                  SseChannels.factory(clock, alertService),
+                                                  alertService,
+                                                  THROTTLING_PERIOD,
+                                                  USER_ID,
+                                                  meterRegistry);
+
+        assertThatThrownBy(() -> unstartedService.startSse(request, response, onStreamClosed))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("before it started");
     }
 
     // endregion

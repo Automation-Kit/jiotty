@@ -13,6 +13,7 @@ import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
 import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.ServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
@@ -106,6 +107,27 @@ public final class SseChannel extends BaseIdempotentCloseable {
                 closeAndRemoveClient(client);
             }
         });
+    }
+
+    /// Starts `request`'s async context and opens a stream on it. A stream this channel refuses has its exchange completed here and `onStreamClosed` run.
+    ///
+    /// @return the new stream, or a no-op handle when it was refused
+    /// @throws IOException as [#open] does
+    public Closeable startStream(HttpServletRequest request,
+                                 HttpServletResponse response,
+                                 Runnable onStreamClosed,
+                                 Consumer<? super SseStream> onOpen) throws IOException {
+        AsyncContext asyncContext = request.startAsync();
+        Optional<SseStream> stream = open(asyncContext, response, onStreamClosed, onOpen);
+        if (stream.isEmpty()) {
+            // Complete the exchange and report the stream closed, so the request does not hang on an async context nobody owns and the caller releases
+            // whatever it attached to the stream.
+            logger.debug("[SSE {}] stream refused", name);
+            asyncContext.complete();
+            onStreamClosed.run();
+            return Closeable.noop();
+        }
+        return stream.get();
     }
 
     /// Opens an SSE stream on an `asyncContext` the caller has already started, setting its timeout to zero.

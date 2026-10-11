@@ -6,6 +6,7 @@ import jakarta.servlet.AsyncContext;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
 import jakarta.servlet.ServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
@@ -298,11 +299,44 @@ class SseChannelTest {
         clock.tick();
         var capture = new SseCapture("host1", 1111);
 
-        Optional<SseChannel.SseStream> refused = getAsUnchecked(
+        Optional<SseChannel.SseStream> refusedStream = getAsUnchecked(
                 () -> channel.open(capture.asyncContext, capture.response, capture.onStreamClosed, _ -> {}));
 
-        assertThat(refused).isEmpty();
+        assertThat(refusedStream).isEmpty();
         assertThat(capture.output()).isEmpty();
+    }
+
+    @Test
+    void startStreamStartsTheRequestsAsyncContextAndOpensAStreamOnIt(@Mock HttpServletRequest request) {
+        var capture = new SseCapture("host1", 1111);
+        when(request.startAsync()).thenReturn(capture.asyncContext);
+
+        Closeable stream = getAsUnchecked(() -> channel.startStream(request, capture.response, capture.onStreamClosed, sink -> sink.send("image", 1)));
+        clock.tick();
+
+        assertThat(capture.output()).contains("event: hello").contains("event: image");
+        stream.close();
+        clock.tick();
+        verify(capture.onStreamClosed).run();
+    }
+
+    @Test
+    void startStreamOnAClosedChannelCompletesTheExchangeAndReportsTheStreamClosed(@Mock HttpServletRequest request) {
+        channel.close();
+        clock.tick();
+        var capture = new SseCapture("host1", 1111);
+        when(request.startAsync()).thenReturn(capture.asyncContext);
+
+        Closeable refusedStream = getAsUnchecked(() -> channel.startStream(request, capture.response, capture.onStreamClosed, _ -> {}));
+
+        verify(capture.asyncContext).complete();
+        verify(capture.onStreamClosed).run();
+        assertThat(capture.output()).isEmpty();
+        // The refused stream has nothing left to end, so closing it completes nothing and reports nothing a second time.
+        assertThatCode(refusedStream::close).doesNotThrowAnyException();
+        clock.tick();
+        verify(capture.asyncContext, times(1)).complete();
+        verify(capture.onStreamClosed, times(1)).run();
     }
 
     @Test
@@ -429,11 +463,11 @@ class SseChannelTest {
 
         SseCapture capture1 = openClient("host1", 1111);
         var capture2 = new SseCapture("host2", 2222);
-        Optional<SseChannel.SseStream> refused = getAsUnchecked(
+        Optional<SseChannel.SseStream> refusedStream = getAsUnchecked(
                 () -> channel.open(capture2.asyncContext, capture2.response, capture2.onStreamClosed, _ -> {}));
         clock.tick();
 
-        assertThat(refused).isEmpty();
+        assertThat(refusedStream).isEmpty();
         assertThat(capture2.output()).isEmpty();
         verify(capture2.response, never()).setContentType(any());
         assertThat(channel.clientCount()).isEqualTo(1);
