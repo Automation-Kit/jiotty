@@ -6,13 +6,15 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.rest.OkHttpStubs;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.security.EnvelopeEncryption;
+import net.yudichev.jiotty.common.testutil.LogCapture;
+import net.yudichev.jiotty.common.testutil.LogCapture.CapturedLine;
 import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-
+import org.apache.logging.log4j.Level;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -67,6 +69,7 @@ class OAuth2TokenManagerImplTest {
     private static final Instant NOW = Instant.parse("2025-01-01T00:00:00Z");
     /// Sentinel stub: the enqueue answer delivers it as an okhttp transport failure ([Callback#onFailure]) rather than an HTTP response.
     private static final FakeResponse TRANSPORT_FAILURE = new FakeResponse(-1, "");
+    private static final String LEAKED_TOKEN = "eyJhbGciOiJSUzI1NiJ9.leakedTokenPayload";
 
     private final ProgrammableClock clock = new ProgrammableClock();
     private final InMemoryVarStore varStore = new InMemoryVarStore();
@@ -383,6 +386,37 @@ class OAuth2TokenManagerImplTest {
                                 new FakeResponse(SERVICE_UNAVAILABLE_503,
                                                  """
                                                  {"error": "temporarily_unavailable", "error_description": "Service is temporarily unavailable"}"""))));
+    }
+
+    /// A token endpoint's answer carries tokens, so the tokens in one the manager cannot read reach neither the log nor the published auth state, which name
+    /// the status and the parser's own exception type instead.
+    @ParameterizedTest
+    @MethodSource
+    void anUnreadableAnswer_logsAndPublishesNoToken(FakeResponse unreadableAnswer) {
+        responses.add(unreadableAnswer);
+        startTokenManager();
+
+        // The manager's logger is named after its runtime class, which here is the test's subclass.
+        try (LogCapture log = LogCapture.capture(tokenManager.getClass(), Level.DEBUG)) {
+            tokenManager.onNewAuthCode("code", "http://r");
+            clock.tick();
+
+            assertThat(lastAuthState()).isInstanceOfSatisfying(
+                    AuthState.TransientFailure.class,
+                    transientFailure -> assertThat(transientFailure.description()).doesNotContain(LEAKED_TOKEN)
+                                                                                  .contains(String.valueOf(unreadableAnswer.status()))
+                                                                                  .containsPattern("Json\\w*Exception"));
+            assertThat(log.lines()).isNotEmpty();
+            assertThat(log.lines().stream().flatMap(CapturedLine::text)).noneMatch(text -> text.contains(LEAKED_TOKEN));
+        }
+    }
+
+    static Stream<Arguments> anUnreadableAnswer_logsAndPublishesNoToken() {
+        return Stream.of(
+                arguments(named("a token answer cut short", new FakeResponse(OK_200, """
+                                                                                     {"access_token": "%s", "refresh_token": \"""".formatted(LEAKED_TOKEN)))),
+                arguments(named("an error page quoting the request", new FakeResponse(SERVICE_UNAVAILABLE_503,
+                                                                                      "<html>refresh_token=%s</html>".formatted(LEAKED_TOKEN)))));
     }
 
     @Test

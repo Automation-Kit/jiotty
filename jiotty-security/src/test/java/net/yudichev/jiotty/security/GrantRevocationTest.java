@@ -269,9 +269,9 @@ class GrantRevocationTest {
     }
 
     private static void assertNoTokenIn(LogCapture log) {
-        assertThat(log.lines()).isNotEmpty()
-                               .extracting(CapturedLine::message)
-                               .noneMatch(message -> message.contains(REFRESH_TOKEN_VALUE) || message.contains(ROTATED_REFRESH_TOKEN));
+        assertThat(log.lines()).isNotEmpty();
+        assertThat(log.lines().stream().flatMap(CapturedLine::text))
+                .noneMatch(text -> text.contains(REFRESH_TOKEN_VALUE) || text.contains(ROTATED_REFRESH_TOKEN));
     }
 
     private static String refreshTokenSent(Request request) {

@@ -12,8 +12,11 @@ import org.apache.logging.log4j.core.config.Property;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Throwables.getCausalChain;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 
 /// Captures the lines one logger renders, for a test asserting on what it logged. The build pins the root level to [Level#OFF], so the capture installs a
 /// logger config of its own, non-additive so the lines go there alone; [#close()] removes it.
@@ -35,7 +38,8 @@ public final class LogCapture implements AutoCloseable {
         loggerContext.updateLoggers();
     }
 
-    /// Starts capturing what the logger named after `loggerOwner` logs at `level` or above.
+    /// Starts capturing what the logger named after `loggerOwner` logs at `level` or above. A class that names its logger after [Object#getClass()] logs
+    /// under its runtime class, so a test subclassing it captures with `instance.getClass()`; an empty capture is the symptom.
     public static LogCapture capture(Class<?> loggerOwner, Level level) {
         return new LogCapture(loggerOwner.getName(), level);
     }
@@ -53,7 +57,15 @@ public final class LogCapture implements AutoCloseable {
     }
 
     /// One rendered log line.
-    public record CapturedLine(Level level, String message) {
+    ///
+    /// @param level   the level the line was logged at
+    /// @param message the line's formatted message
+    /// @param thrown  each exception in the causal chain the line logged, as its [Throwable#toString()], outermost first; empty when it logged none
+    public record CapturedLine(Level level, String message, List<String> thrown) {
+        /// @return the message, then each of [#thrown()]: all the text the line put into the log
+        public Stream<String> text() {
+            return Stream.concat(Stream.of(message), thrown.stream());
+        }
     }
 
     private static final class CapturingAppender extends AbstractAppender {
@@ -66,7 +78,12 @@ public final class LogCapture implements AutoCloseable {
 
         @Override
         public void append(LogEvent event) {
-            lines.add(new CapturedLine(event.getLevel(), event.getMessage().getFormattedMessage()));
+            Throwable thrown = event.getThrown();
+            lines.add(new CapturedLine(event.getLevel(),
+                                       event.getMessage().getFormattedMessage(),
+                                       thrown == null
+                                       ? ImmutableList.of()
+                                       : getCausalChain(thrown).stream().map(Throwable::toString).collect(toImmutableList())));
         }
     }
 }

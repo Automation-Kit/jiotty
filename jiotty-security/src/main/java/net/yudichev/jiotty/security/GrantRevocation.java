@@ -24,6 +24,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Throwables.getRootCause;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.isClientError;
@@ -172,7 +173,7 @@ final class GrantRevocation {
         } catch (RuntimeException e) {
             // The type alone: a parser's message can quote the body, which can quote the token.
             if (logger.isDebugEnabled()) {
-                logger.debug("[{}] grant revocation error response is not an OAuth error: {}", apiName, e.getClass().getSimpleName());
+                logger.debug("[{}] grant revocation error response is not an OAuth error: {}", apiName, getRootCause(e).getClass().getSimpleName());
             }
             return "";
         }
@@ -185,7 +186,7 @@ final class GrantRevocation {
         } catch (RuntimeException e) {
             // The type alone: a parser's message can quote the body, which carries a token.
             if (logger.isDebugEnabled()) {
-                logger.debug("[{}] token rotation response is not a token response: {}", apiName, e.getClass().getSimpleName());
+                logger.debug("[{}] token rotation response is not a token response: {}", apiName, getRootCause(e).getClass().getSimpleName());
             }
             return null;
         }

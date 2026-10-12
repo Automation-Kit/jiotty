@@ -41,6 +41,7 @@ import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Throwables.getRootCause;
 import static java.lang.Math.toIntExact;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static java.util.concurrent.CompletableFuture.completedFuture;
@@ -374,14 +375,9 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
                 try (ResponseBody body = response.body()) {
                     String bodyString = checkNotNull(body).string();
                     if (response.isSuccessful()) {
-                        future.complete(Either.left(Json.parse(bodyString, OauthAccessTokenResponse.class)));
+                        future.complete(Either.left(parseTokenEndpointAnswer(bodyString, OauthAccessTokenResponse.class, response.code())));
                     } else {
-                        try {
-                            future.complete(Either.right(Json.parse(bodyString, OauthErrorResponse.class)));
-                        } catch (RuntimeException e) {
-                            future.completeExceptionally(
-                                    new RuntimeException("Token request failed with HTTP " + response.code() + ": " + bodyString, e));
-                        }
+                        future.complete(Either.right(parseTokenEndpointAnswer(bodyString, OauthErrorResponse.class, response.code())));
                     }
                 } catch (RuntimeException | IOException e) {
                     future.completeExceptionally(new RuntimeException("Failed to process token response", e));
@@ -393,6 +389,16 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
         future.whenComplete((responseEither, throwable) -> executor.tryExecute(
                 "tokenResponse",
                 () -> ifNotStopped(() -> handleTokenResponse(requestTime, formBody, fallbackRefreshToken, responseEither, throwable))));
+    }
+
+    /// @throws IllegalStateException naming the HTTP status and the parser's root exception type alone, since a parser's message can quote the body, and a
+    /// token answer's body carries the tokens
+    private static <T> T parseTokenEndpointAnswer(String body, Class<T> type, int status) {
+        try {
+            return Json.parse(body, type);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("unreadable token endpoint answer (HTTP " + status + "): " + getRootCause(e).getClass().getSimpleName());
+        }
     }
 
     /// Handles a completed token request on [#executor]: a successful response goes to [#handleSuccessResponse], an OAuth error to [#handleErrorResponse], and
