@@ -45,7 +45,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
-import static net.yudichev.jiotty.common.misc.RejectedCredential.indicatesRejectedCredential;
+import static net.yudichev.jiotty.common.net.RejectedCredential.indicatesRejectedCredential;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 

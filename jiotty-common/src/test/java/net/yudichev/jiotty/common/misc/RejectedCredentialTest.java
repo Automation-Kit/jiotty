@@ -9,7 +9,7 @@ import java.io.IOException;
 import java.util.concurrent.CompletionException;
 import java.util.stream.Stream;
 
-import static net.yudichev.jiotty.common.misc.RejectedCredential.indicatesRejectedCredential;
+import static net.yudichev.jiotty.common.net.RejectedCredential.indicatesRejectedCredential;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.TOO_MANY_REQUESTS_429;

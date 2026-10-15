@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.common.misc;
+package net.yudichev.jiotty.common.net;
 
 import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.rest.HttpStatuses;
