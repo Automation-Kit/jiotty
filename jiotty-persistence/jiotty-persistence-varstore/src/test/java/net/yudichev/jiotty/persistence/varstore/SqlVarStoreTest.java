@@ -423,6 +423,53 @@ class SqlVarStoreTest {
                 new VarStore.ExportedEntry("b", false, "\"two\""));
     }
 
+    @Test
+    void keysStartingWithListsTheUsersMatchingKeysWithTheirPrefixTakenLiterally() {
+        startVarStore();
+        VarStore alice = varStore.forUser("alice");
+        alice.saveValue("token_a", "1");
+        alice.saveValue("token_b", "2");
+        alice.saveValue("tokenXc", "3");
+        alice.saveValue("colour", "red");
+        varStore.forUser("bob").saveValue("token_d", "4");
+        flushExecutor();
+
+        assertThat(alice.keysStartingWith("token_")).containsExactlyInAnyOrder("token_a", "token_b");
+    }
+
+    @Test
+    void keysStartingWithFollowsClearsAndSurvivesAReload() {
+        startVarStore();
+        VarStore alice = varStore.forUser("alice");
+        alice.saveValue("token_a", "1");
+        alice.saveValue("token_b", "2");
+        flushExecutor();
+        alice.clearValue("token_a");
+        flushExecutor();
+
+        varStore.stop();
+        startVarStore();
+
+        assertThat(varStore.forUser("alice").keysStartingWith("token_")).containsExactly("token_b");
+    }
+
+    @Test
+    void keysStartingWithOnUnscopedMultiUserStoreThrows() {
+        startVarStore();
+        assertThatThrownBy(() -> varStore.keysStartingWith("")).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void keysStartingWithOnSingleUserStoreListsItsMatchingKeys() {
+        singleUser = true;
+        startVarStore();
+        varStore.saveValue("token_a", "1");
+        varStore.saveValue("colour", "red");
+        flushExecutor();
+
+        assertThat(varStore.keysStartingWith("token_")).containsExactly("token_a");
+    }
+
     /// A row holding the numeric form is on disk in every deployment, so the read path has to load it.
     @Test
     void readsARowHoldingATemporalValueInTheLegacyNumericForm() {

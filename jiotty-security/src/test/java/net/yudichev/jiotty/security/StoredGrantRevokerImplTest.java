@@ -46,6 +46,7 @@ import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.REFRESH_TOKEN;
 import static net.yudichev.jiotty.security.OAuth2TokenManagerImpl.TOKEN_RETRY_INITIAL_INTERVAL;
 import static net.yudichev.jiotty.security.StoredGrantRevokerImpl.RETRY_MAX_ELAPSED_TIME;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
@@ -61,6 +62,8 @@ class StoredGrantRevokerImplTest {
     private static final String TOKEN_URL = "http://token-host/token";
     private static final String REVOCATION_URL = "http://token-host/revoke";
     private static final String VAR_STORE_KEY = OAuth2TokenManagerImpl.varStoreKey(API_NAME, CLIENT_ID, SCOPE);
+    private static final String OTHER_CLIENT_VAR_STORE_KEY = OAuth2TokenManagerImpl.varStoreKey(API_NAME, "other-client-id", SCOPE);
+    private static final String OTHER_CLIENT_REFRESH_TOKEN = "other-client-rt";
     private static final Instant NOW = Instant.parse("2025-01-01T00:00:00Z");
     private static final String STORED_REFRESH_TOKEN = "stored-rt";
     private static final String ROTATED_REFRESH_TOKEN = "rotated-rt";
@@ -316,9 +319,9 @@ class StoredGrantRevokerImplTest {
                               .withRootCauseInstanceOf(IllegalStateException.class);
     }
 
-    /// A store failing to read may be passing, so the token is kept for a later attempt and the failure reaches the caller.
+    /// Reading the value again would fail again, so keeping it would fail every later call too.
     @Test
-    void aStoreThatCannotReadTheToken_failsTheRevocationAndKeepsTheValue() {
+    void anUnreadableStoredToken_failsTheRevocationAndIsDeleted() {
         varStore.saveValue(VAR_STORE_KEY, "not-an-encrypted-token");
         StoredGrantRevokerImpl revoker = startRevoker(Optional.empty());
 
@@ -326,11 +329,98 @@ class StoredGrantRevokerImplTest {
         clock.tick();
 
         assertThat(revocation).isCompletedExceptionally();
-        assertThat(varStore.readValue(String.class, VAR_STORE_KEY)).isPresent();
+        assertThat(varStore.readValue(String.class, VAR_STORE_KEY)).isEmpty();
         assertThat(requestLog).isEmpty();
     }
 
+    @Test
+    void everyClient_revokesTheTokenOfEachClientOfTheApiAndScope() {
+        storeToken(VAR_STORE_KEY, STORED_REFRESH_TOKEN);
+        storeToken(OTHER_CLIENT_VAR_STORE_KEY, OTHER_CLIENT_REFRESH_TOKEN);
+        storeToken(OAuth2TokenManagerImpl.varStoreKey(API_NAME, CLIENT_ID, "other-scope"), "other-scope-rt");
+        storeToken(OAuth2TokenManagerImpl.varStoreKey("otherApi", CLIENT_ID, SCOPE), "other-api-rt");
+        answer(OK_200, "");
+        StoredGrantRevokerImpl revoker = startEveryClientRevoker();
+
+        CompletableFuture<Result> revocation = revoker.revoke(varStore);
+        clock.tick();
+
+        assertThat(revocation).isCompletedWithValue(Result.ENDED);
+        assertThat(requestLog).extracting(request -> formParams(request).get(TOKEN_PARAM))
+                              .containsExactlyInAnyOrder(STORED_REFRESH_TOKEN, OTHER_CLIENT_REFRESH_TOKEN);
+        assertThat(varStore.keysStartingWith("")).containsExactlyInAnyOrder(OAuth2TokenManagerImpl.varStoreKey(API_NAME, CLIENT_ID, "other-scope"),
+                                                                            OAuth2TokenManagerImpl.varStoreKey("otherApi", CLIENT_ID, SCOPE));
+    }
+
+    @Test
+    void everyClient_withNoTokenOfTheApiAndScope_endsWithoutARequest() {
+        storeToken(OAuth2TokenManagerImpl.varStoreKey(API_NAME, CLIENT_ID, "other-scope"), "other-scope-rt");
+        StoredGrantRevokerImpl revoker = startEveryClientRevoker();
+
+        CompletableFuture<Result> revocation = revoker.revoke(varStore);
+        clock.tick();
+
+        assertThat(revocation).isCompletedWithValue(Result.NOTHING_STORED);
+        assertThat(requestLog).isEmpty();
+    }
+
+    @Test
+    void everyClient_aRefusalOutranksAnEndedGrant() {
+        storeToken(VAR_STORE_KEY, STORED_REFRESH_TOKEN);
+        storeToken(OTHER_CLIENT_VAR_STORE_KEY, OTHER_CLIENT_REFRESH_TOKEN);
+        answers.add(request -> STORED_REFRESH_TOKEN.equals(formParams(request).get(TOKEN_PARAM))
+                               ? response(request, OK_200, "")
+                               : response(request, BAD_REQUEST_400, """
+                                                                    {"error": "invalid_request"}"""));
+        StoredGrantRevokerImpl revoker = startEveryClientRevoker();
+
+        CompletableFuture<Result> revocation = revoker.revoke(varStore);
+        clock.tick();
+
+        assertThat(revocation).isCompletedWithValue(Result.REFUSED);
+        assertThat(varStore.keysStartingWith("")).isEmpty();
+    }
+
+    /// The token the authorisation server was never asked about is kept, so the caller's retry reaches it.
+    @Test
+    void everyClient_anUnreachableServerOutranksAnEndedGrant() {
+        storeToken(VAR_STORE_KEY, STORED_REFRESH_TOKEN);
+        storeToken(OTHER_CLIENT_VAR_STORE_KEY, OTHER_CLIENT_REFRESH_TOKEN);
+        answers.add(request -> STORED_REFRESH_TOKEN.equals(formParams(request).get(TOKEN_PARAM))
+                               ? response(request, OK_200, "")
+                               : response(request, SERVICE_UNAVAILABLE_503, ""));
+        StoredGrantRevokerImpl revoker = startEveryClientRevoker();
+
+        CompletableFuture<Result> revocation = revoker.revoke(varStore);
+        // Doubling the budget leaves room for the randomised, growing retry intervals to cross it.
+        clock.advanceTimeAndTick(RETRY_MAX_ELAPSED_TIME.multipliedBy(2));
+
+        assertThat(revocation).isCompletedWithValue(Result.UNREACHABLE);
+        assertThat(varStore.keysStartingWith("")).containsExactly(OTHER_CLIENT_VAR_STORE_KEY);
+    }
+
+    @Test
+    void withoutARevocationUrl_aClientIdIsRequired() {
+        assertThatThrownBy(() -> new StoredGrantRevokerImpl(clock,
+                                                            clock,
+                                                            Optional.empty(),
+                                                            Optional.empty(),
+                                                            API_NAME,
+                                                            Optional.of(TOKEN_URL),
+                                                            Optional.empty(),
+                                                            SCOPE))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private StoredGrantRevokerImpl startRevoker(Optional<String> revocationUrl) {
+        return startRevoker(Optional.of(CLIENT_ID), revocationUrl);
+    }
+
+    private StoredGrantRevokerImpl startEveryClientRevoker() {
+        return startRevoker(Optional.empty(), Optional.of(REVOCATION_URL));
+    }
+
+    private StoredGrantRevokerImpl startRevoker(Optional<String> clientId, Optional<String> revocationUrl) {
         lenient().when(httpClient.newCall(any())).thenAnswer(invocation -> {
             requestLog.add(invocation.getArgument(0));
             return call;
@@ -346,7 +436,7 @@ class StoredGrantRevokerImplTest {
             }
             return null;
         }).when(call).enqueue(any());
-        var revoker = new StoredGrantRevokerImpl(clock, clock, CLIENT_ID, Optional.of(CLIENT_SECRET), API_NAME, TOKEN_URL, revocationUrl, SCOPE) {
+        var revoker = new StoredGrantRevokerImpl(clock, clock, clientId, Optional.of(CLIENT_SECRET), API_NAME, Optional.of(TOKEN_URL), revocationUrl, SCOPE) {
             @Override
             OkHttpClient createHttpClient() {
                 return httpClient;
@@ -358,7 +448,11 @@ class StoredGrantRevokerImplTest {
     }
 
     private void storeToken(String refreshToken) {
-        varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("at", refreshToken, NOW.plusSeconds(1800)));
+        storeToken(VAR_STORE_KEY, refreshToken);
+    }
+
+    private void storeToken(String key, String refreshToken) {
+        varStore.saveValueEncrypted(key, OauthAccessToken.of("at", refreshToken, NOW.plusSeconds(1800)));
     }
 
     private void answer(int status, String body) {

@@ -4,6 +4,7 @@ import com.google.common.reflect.TypeToken;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -39,6 +40,11 @@ final class UserScopedVarStore implements VarStore {
     @Override
     public List<ExportedEntry> exportEntries() {
         return delegate.exportEntriesWithPrefix(keyPrefix);
+    }
+
+    @Override
+    public Set<String> keysStartingWith(String prefix) {
+        return delegate.keysWithPrefix(keyPrefix, prefix);
     }
 
     @Override

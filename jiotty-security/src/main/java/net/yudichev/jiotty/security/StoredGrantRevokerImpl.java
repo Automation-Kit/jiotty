@@ -11,14 +11,19 @@ import net.yudichev.jiotty.persistence.varstore.VarStore;
 import okhttp3.OkHttpClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Throwables.getRootCause;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.toFutureOfList;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
@@ -38,28 +43,40 @@ public class StoredGrantRevokerImpl extends BaseLifecycleComponent implements St
     private final ExecutorFactory executorFactory;
     private final CurrentDateTimeProvider currentDateTimeProvider;
     private final String apiName;
-    private final String varStoreKey;
+    /// The key of the one token this revoker ends the grant of, or `null` when it ends the grant behind every token of its API and scope, whatever the client.
+    private final @Nullable String varStoreKey;
+    private final String varStoreKeyPrefix;
+    private final String varStoreKeySuffix;
     private final GrantRevocation.Method method;
 
     private SchedulingExecutor executor;
     private OkHttpClient httpClient;
     private GrantRevocation grantRevocation;
 
+    /// @param clientId the client whose token is revoked, or empty to revoke the token of every client of the API and scope, which needs `revocationUrl`
+    /// @param tokenUrl the token endpoint, which a revocation without `revocationUrl` refreshes at and so needs
     @Inject
     public StoredGrantRevokerImpl(ExecutorFactory executorFactory,
                                   CurrentDateTimeProvider currentDateTimeProvider,
-                                  @ClientID String clientId,
+                                  @ClientID Optional<String> clientId,
                                   @ClientSecret Optional<String> clientSecret,
                                   @ApiName String apiName,
-                                  @TokenUrl String tokenUrl,
+                                  @TokenUrl Optional<String> tokenUrl,
                                   @RevocationUrl Optional<String> revocationUrl,
                                   @Scope String scope) {
         this.executorFactory = checkNotNull(executorFactory);
         this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider);
         this.apiName = checkNotNull(apiName);
-        varStoreKey = OAuth2TokenManagerImpl.varStoreKey(apiName, checkNotNull(clientId), checkNotNull(scope));
+        checkNotNull(clientSecret);
+        checkNotNull(scope);
+        checkArgument(revocationUrl.isPresent() || (clientId.isPresent() && tokenUrl.isPresent()),
+                      "%s: a revoker without a revocation URL needs a client id and a token URL",
+                      apiName);
+        varStoreKey = clientId.map(id -> OAuth2TokenManagerImpl.varStoreKey(apiName, id, scope)).orElse(null);
+        varStoreKeyPrefix = OAuth2TokenManagerImpl.varStoreKeyPrefix(apiName);
+        varStoreKeySuffix = OAuth2TokenManagerImpl.varStoreKeySuffix(scope);
         method = revocationUrl.<GrantRevocation.Method>map(GrantRevocation.Method.Rfc7009::new)
-                              .orElseGet(() -> new GrantRevocation.Method.Rotation(tokenUrl, clientId, clientSecret));
+                              .orElseGet(() -> new GrantRevocation.Method.Rotation(tokenUrl.orElseThrow(), clientId.orElseThrow(), clientSecret));
     }
 
     /// Creates the HTTP client the revocations are sent with. Overridden in tests to inject a deterministic fake.
@@ -95,21 +112,63 @@ public class StoredGrantRevokerImpl extends BaseLifecycleComponent implements St
 
     /// Runs on [#executor], as does the completion of [GrantRevocation#revoke], which hands every outcome to it.
     private CompletableFuture<Result> revokeOnExecutor(VarStore varStore) {
-        return varStore.readValueEncrypted(OauthAccessToken.class, varStoreKey)
-                       .map(storedToken -> grantRevocation.revoke(storedToken.refreshToken())
-                                                          .thenApply(result -> deleteUnlessKept(varStore, storedToken.refreshToken(), result)))
-                       .orElseGet(() -> completedFuture(Result.NOTHING_STORED));
+        return varStoreKey == null ? revokeEveryClient(varStore) : revokeStored(varStore, varStoreKey);
+    }
+
+    /// Ends the grants behind every token of this API and scope side by side, and reports the most urgent of their outcomes.
+    private CompletableFuture<Result> revokeEveryClient(VarStore varStore) {
+        return varStore.keysStartingWith(varStoreKeyPrefix)
+                       .stream()
+                       .filter(key -> key.endsWith(varStoreKeySuffix))
+                       .map(key -> revokeStored(varStore, key))
+                       .collect(toFutureOfList())
+                       .thenApply(StoredGrantRevokerImpl::mostPressing);
+    }
+
+    private static Result mostPressing(List<Result> results) {
+        Result mostPressing = Result.NOTHING_STORED;
+        for (Result result : results) {
+            if (urgency(result) > urgency(mostPressing)) {
+                mostPressing = result;
+            }
+        }
+        return mostPressing;
+    }
+
+    /// Ranks an outcome by what it asks of the caller: a token kept for a later call comes first, then a grant left in place.
+    private static int urgency(Result result) {
+        return switch (result) {
+            case NOTHING_STORED -> 0;
+            case ENDED -> 1;
+            case REFUSED -> 2;
+            case UNREACHABLE -> 3;
+        };
+    }
+
+    /// Deletes a stored token that cannot be read before failing, since reading it again would fail again.
+    private CompletableFuture<Result> revokeStored(VarStore varStore, String key) {
+        Optional<OauthAccessToken> storedToken;
+        try {
+            storedToken = varStore.readValueEncrypted(OauthAccessToken.class, key);
+        } catch (RuntimeException e) {
+            varStore.clearValue(key);
+            logger.info("[{}] stored token unreadable ({}), so deleted", apiName, getRootCause(e).getClass().getSimpleName());
+            throw e;
+        }
+        return storedToken.map(token -> grantRevocation.revoke(token.refreshToken())
+                                                       .thenApply(result -> deleteUnlessKept(varStore, key, token.refreshToken(), result)))
+                          .orElseGet(() -> completedFuture(Result.NOTHING_STORED));
     }
 
     /// Deletes the stored token unless the authorisation server could not be asked about it, or a token stored since has replaced it.
-    private Result deleteUnlessKept(VarStore varStore, String revokedRefreshToken, Result result) {
+    private Result deleteUnlessKept(VarStore varStore, String key, String revokedRefreshToken, Result result) {
         if (result == Result.UNREACHABLE) {
             logger.info("[{}] stored token kept for a later revocation", apiName);
-        } else if (varStore.readValueEncrypted(OauthAccessToken.class, varStoreKey)
+        } else if (varStore.readValueEncrypted(OauthAccessToken.class, key)
                            .map(OauthAccessToken::refreshToken)
                            .filter(revokedRefreshToken::equals)
                            .isPresent()) {
-            varStore.clearValue(varStoreKey);
+            varStore.clearValue(key);
             logger.info("[{}] stored token deleted", apiName);
         } else {
             logger.info("[{}] stored token changed since it was read, so left in place", apiName);

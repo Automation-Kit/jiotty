@@ -5,6 +5,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -26,6 +27,11 @@ public interface VarStore {
     ///
     /// @throws IllegalStateException if called on an unscoped multi-user store — scope to a user via [#forUser] first
     List<ExportedEntry> exportEntries();
+
+    /// Returns the scope-relative key of every value held in this store's current scope whose key starts with `prefix`.
+    ///
+    /// @throws IllegalStateException if called on an unscoped multi-user store — scope to a user via [#forUser] first
+    Set<String> keysStartingWith(String prefix);
 
     <T> Optional<T> readValue(TypeToken<T> type, String key);
 

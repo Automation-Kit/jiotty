@@ -25,9 +25,12 @@ import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotatio
 /// and code verifier and supplies them via [Builder#withAuthCode]/[Builder#withCodeVerifier]. Token exchange, persistence and refresh are handled by the
 /// embedded [OAuth2TokenManagerModule].
 public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarService> {
-    private static final String TOKEN_URL = "https://oauth2.googleapis.com/token";
+    static final String TOKEN_URL = "https://oauth2.googleapis.com/token";
+    /// Google revokes for the whole Cloud project, every client of it included.
+    static final String REVOCATION_URL = "https://oauth2.googleapis.com/revoke";
+    /// Part of the key every token is stored under, so renaming it loses the stored tokens.
+    static final String BASE_API_NAME = "GoogleCalendar";
     private static final String AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth";
-    private static final String BASE_API_NAME = "GoogleCalendar";
 
     private final BindingSpec<String> clientIdSpec;
     private final BindingSpec<String> redirectUriSpec;
@@ -73,8 +76,7 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
                                                                 .setApiName(literally(BASE_API_NAME))
                                                                 .withLogSubjectId(logSubjectIdSpec)
                                                                 .setTokenUrl(literally(TOKEN_URL))
-                                                                // Google revokes for the whole Cloud project, every client of it included
-                                                                .withRevocationUrl(literally("https://oauth2.googleapis.com/revoke"))
+                                                                .withRevocationUrl(literally(REVOCATION_URL))
                                                                 .setScope(literally(GoogleCalendarScopes.CALENDAR_READONLY))
                                                                 .withVarStore(varStoreSpec)
                                                                 // a supplied auth code is a login in flight: the service hands it to the token manager on start

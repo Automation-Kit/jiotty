@@ -151,7 +151,17 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     /// The var-store key a manager for this API, client and scope keeps its token under, which [StoredGrantRevokerImpl] reads the token back from.
     static String varStoreKey(String apiName, String clientId, String scope) {
-        return apiName + "Oauth2Token_" + clientId + "_" + scope;
+        return varStoreKeyPrefix(apiName) + clientId + varStoreKeySuffix(scope);
+    }
+
+    /// The start of the var-store key of every token kept for this API, whatever its client and scope.
+    static String varStoreKeyPrefix(String apiName) {
+        return apiName + "Oauth2Token_";
+    }
+
+    /// The end of the var-store key of every token kept for this scope, whatever its API and client.
+    static String varStoreKeySuffix(String scope) {
+        return "_" + scope;
     }
 
     /// The form of a refresh-token grant request (RFC 6749 §6), carrying `clientSecret` when the client is a confidential one.

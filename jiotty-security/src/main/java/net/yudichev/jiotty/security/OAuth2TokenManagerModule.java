@@ -23,9 +23,11 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 import static net.yudichev.jiotty.security.Bindings.ApiName;
+import static net.yudichev.jiotty.security.Bindings.ClientID;
 import static net.yudichev.jiotty.security.Bindings.Dependency;
 import static net.yudichev.jiotty.security.Bindings.LogSubjectId;
 import static net.yudichev.jiotty.security.Bindings.LoginPending;
+import static net.yudichev.jiotty.security.Bindings.TokenUrl;
 
 public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2TokenManager> {
     private final BindingSpec<String> clientIdSpec;
@@ -82,13 +84,9 @@ public final class OAuth2TokenManagerModule extends BaseExposedKeyModule<OAuth2T
 
     @Override
     protected void configure() {
-        OAuth2ClientBindings.bind(this::installLifecycleComponentModule,
-                                  clientIdSpec,
-                                  clientSecretSpec,
-                                  apiNameSpec,
-                                  tokenUrlSpec,
-                                  revocationUrlSpec,
-                                  scopeSpec);
+        OAuth2ClientBindings.bind(this::installLifecycleComponentModule, clientSecretSpec, apiNameSpec, revocationUrlSpec, scopeSpec);
+        clientIdSpec.bind(String.class).annotatedWith(ClientID.class).installedBy(this::installLifecycleComponentModule);
+        tokenUrlSpec.bind(String.class).annotatedWith(TokenUrl.class).installedBy(this::installLifecycleComponentModule);
         varStoreSpec.bind(new TypeLiteral<>() {})
                     .annotatedWith(Dependency.class)
                     .installedBy(this::installLifecycleComponentModule);

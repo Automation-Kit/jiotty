@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import org.apache.logging.log4j.LogManager;
@@ -16,6 +17,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -105,6 +107,25 @@ abstract class BaseFileVarStore implements PrefixClearableVarStore {
                 }
             });
             return entries;
+        }));
+    }
+
+    @Override
+    public Set<String> keysStartingWith(String prefix) {
+        return keysWithPrefix("", prefix);
+    }
+
+    @Override
+    public Set<String> keysWithPrefix(String keyPrefix, String prefix) {
+        String fullPrefix = keyPrefix + prefix;
+        return inLock(lock, () -> getAsUnchecked(() -> {
+            var keys = ImmutableSet.<String>builder();
+            readConfig().fieldNames().forEachRemaining(name -> {
+                if (name.startsWith(fullPrefix)) {
+                    keys.add(name.substring(keyPrefix.length()));
+                }
+            });
+            return keys.build();
         }));
     }
 

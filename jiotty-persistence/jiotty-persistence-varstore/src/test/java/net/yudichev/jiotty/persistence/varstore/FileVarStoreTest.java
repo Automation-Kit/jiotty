@@ -94,6 +94,35 @@ class FileVarStoreTest {
     }
 
     @Test
+    void keysStartingWithListsTheUsersMatchingKeysWithTheirPrefixTakenLiterally(@TempDir Path tempDir) {
+        VarStore varStore = new FileVarStore(tempDir.resolve("data.json"), false, Optional.empty());
+        VarStore alice = varStore.forUser("alice");
+        alice.saveValue("token_a", "1");
+        alice.saveValue("token_b", "2");
+        alice.saveValue("tokenXc", "3");
+        alice.saveValue("colour", "red");
+        varStore.forUser("bob").saveValue("token_d", "4");
+
+        assertThat(alice.keysStartingWith("token_")).containsExactlyInAnyOrder("token_a", "token_b");
+    }
+
+    @Test
+    void keysStartingWithOnUnscopedMultiUserStoreThrows(@TempDir Path tempDir) {
+        VarStore varStore = new FileVarStore(tempDir.resolve("data.json"), false, Optional.empty());
+
+        assertThatThrownBy(() -> varStore.keysStartingWith("")).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void keysStartingWithOnSingleUserStoreListsItsMatchingKeys(@TempDir Path tempDir) {
+        VarStore varStore = new FileVarStore(tempDir.resolve("data.json"), true, Optional.empty());
+        varStore.saveValue("token_a", "1");
+        varStore.saveValue("colour", "red");
+
+        assertThat(varStore.keysStartingWith("token_")).containsExactly("token_a");
+    }
+
+    @Test
     void readValueEncryptedThrowsWhenEncryptionNotConfigured(@TempDir Path tempDir) {
         VarStore varStore = new FileVarStore(tempDir.resolve("data.json"), true, Optional.empty());
 

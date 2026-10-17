@@ -5,6 +5,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 
 final class MultiUserFileVarStore extends BaseFileVarStore {
 
@@ -26,5 +27,10 @@ final class MultiUserFileVarStore extends BaseFileVarStore {
     @Override
     public List<ExportedEntry> exportEntries() {
         throw new IllegalStateException("exportEntries() on the unscoped multi-user store is not supported; use forUser(userId).exportEntries()");
+    }
+
+    @Override
+    public Set<String> keysStartingWith(String prefix) {
+        throw new IllegalStateException("keysStartingWith() on the unscoped multi-user store is not supported; use forUser(userId).keysStartingWith(prefix)");
     }
 }

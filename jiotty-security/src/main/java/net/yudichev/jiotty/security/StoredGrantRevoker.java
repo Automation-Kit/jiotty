@@ -5,12 +5,14 @@ import net.yudichev.jiotty.persistence.varstore.VarStore;
 import java.util.concurrent.CompletableFuture;
 
 /// Ends the grant behind a token an [OAuth2TokenManager] stored and that manager must no longer be running. One instance serves every var store holding a
-/// token for the same API, client and scope.
+/// token for the same API and scope, and either one client's token or the tokens of every client.
 public interface StoredGrantRevoker {
-    /// Asks the authorisation server to end the grant behind the token stored in `varStore`, then deletes that token — unless a token stored since has
-    /// replaced it, which is left in place, or the authorisation server could not be asked within the retry budget, in which case it is kept for a later call.
+    /// Asks the authorisation server to end the grant behind each token this revoker serves in `varStore`, then deletes that token — unless a token stored
+    /// since has replaced it, which is left in place, or the authorisation server could not be asked within the retry budget, in which case it is kept for a
+    /// later call.
     ///
-    /// @return the outcome; fails only when `varStore` itself fails
+    /// @return the outcome, the most urgent of several when there are several tokens; fails when `varStore` itself fails, or when a stored token cannot be
+    ///         read, which is deleted first
     CompletableFuture<Result> revoke(VarStore varStore);
 
     /// How a revocation ended.

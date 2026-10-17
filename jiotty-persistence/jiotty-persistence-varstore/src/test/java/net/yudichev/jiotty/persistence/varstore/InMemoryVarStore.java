@@ -7,6 +7,7 @@ import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -78,6 +79,23 @@ public final class InMemoryVarStore implements PrefixClearableVarStore {
             }
         });
         return entries;
+    }
+
+    @Override
+    public Set<String> keysStartingWith(String prefix) {
+        return keysWithPrefix("", prefix);
+    }
+
+    @Override
+    public Set<String> keysWithPrefix(String keyPrefix, String prefix) {
+        String fullPrefix = keyPrefix + prefix;
+        var keys = new HashSet<String>();
+        serialisedValuesByKey.keySet().forEach(key -> {
+            if (key.startsWith(fullPrefix)) {
+                keys.add(key.substring(keyPrefix.length()));
+            }
+        });
+        return keys;
     }
 
     @Override

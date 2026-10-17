@@ -42,11 +42,11 @@ public final class TeslaFleetGrantRevokerModule extends BaseExposedKeyModule<Sto
     protected void configure() {
         ExposedKeyModule<StoredGrantRevoker> revokerModule =
                 StoredGrantRevokerModule.builder()
-                                        .setClientId(clientIdSpec)
-                                        .withClientSecret(clientSecretSpec)
                                         .setApiName(literally(TeslaFleetModule.BASE_API_NAME))
-                                        .setTokenUrl(literally(TeslaHttp.TOKEN_URL))
                                         .setScope(oauthScopesSpec.map(new TypeToken<>() {}, new TypeToken<>() {}, TeslaFleetModule::scope))
+                                        .withClientId(clientIdSpec)
+                                        .withClientSecret(clientSecretSpec)
+                                        .withTokenUrl(literally(TeslaHttp.TOKEN_URL))
                                         .withAnnotation(forAnnotation(uniqueAnnotation()))
                                         .build();
         installLifecycleComponentModule(revokerModule);

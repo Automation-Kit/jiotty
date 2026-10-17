@@ -18,6 +18,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -128,6 +129,14 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     }
 
     @Override
+    public Set<String> keysStartingWith(String prefix) {
+        return whenStartedAndNotLifecycling(() -> {
+            checkState(singleUser, "keysStartingWith() on the unscoped multi-user store is not supported; use forUser(userId).keysStartingWith(prefix)");
+            return operations.keysStartingWith(prefix);
+        });
+    }
+
+    @Override
     public <T> Optional<T> readValue(TypeToken<T> type, String key) {
         return whenStartedAndNotLifecycling(() -> operations.readValue(type, key));
     }
@@ -229,6 +238,11 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
         @Override
         public List<ExportedEntry> exportEntries() {
             return whenStartedAndNotLifecycling(userOperations::exportEntries);
+        }
+
+        @Override
+        public Set<String> keysStartingWith(String prefix) {
+            return whenStartedAndNotLifecycling(() -> userOperations.keysStartingWith(prefix));
         }
 
         @Override

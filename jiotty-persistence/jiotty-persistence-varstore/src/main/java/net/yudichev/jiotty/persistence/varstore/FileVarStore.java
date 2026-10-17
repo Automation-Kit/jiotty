@@ -7,6 +7,7 @@ import net.yudichev.jiotty.common.security.EnvelopeEncryption;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static net.yudichev.jiotty.persistence.varstore.Bindings.SingleUser;
 import static net.yudichev.jiotty.persistence.varstore.Bindings.ThePath;
@@ -44,6 +45,11 @@ public final class FileVarStore implements VarStore {
     @Override
     public List<ExportedEntry> exportEntries() {
         return delegate.exportEntries();
+    }
+
+    @Override
+    public Set<String> keysStartingWith(String prefix) {
+        return delegate.keysStartingWith(prefix);
     }
 
     @Override

@@ -3,6 +3,7 @@ package net.yudichev.jiotty.persistence.varstore;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Throwables;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.security.EnvelopeEncryption;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
@@ -127,6 +129,17 @@ final class SqlVarStoreOperations {
                 }
             }
         });
+    }
+
+    /// Reads the keys from the in-memory cache, which [#loadAll] fills with every row of this scope and every write keeps in step.
+    public Set<String> keysStartingWith(String prefix) {
+        var keys = ImmutableSet.<String>builder();
+        for (String key : cache.keySet()) {
+            if (key.startsWith(prefix)) {
+                keys.add(key);
+            }
+        }
+        return keys.build();
     }
 
     @SuppressWarnings("unchecked")
