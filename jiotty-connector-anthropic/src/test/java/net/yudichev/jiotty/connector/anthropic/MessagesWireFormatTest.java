@@ -246,6 +246,7 @@ final class MessagesWireFormatTest {
                                    "usage": {"input_tokens": 12, "output_tokens": 512}}""", MessagesResponse.class);
 
         assertThat(response.isCompleteTurn()).isFalse();
+        assertThat(response.isCutOffByTokenCeiling()).isTrue();
         assertThat(textOf(response)).isEqualTo("Open the char");
     }
 
@@ -289,6 +290,7 @@ final class MessagesWireFormatTest {
         assertThat(response.isRefusal()).isTrue();
         assertThat(response.isCompleteTurn()).isFalse();
         assertThat(response.isAwaitingToolResults()).isFalse();
+        assertThat(response.isCutOffByTokenCeiling()).isFalse();
     }
 
     /// The length must match what appending actually produces, since callers size their buffer from it and a short answer would make them regrow anyway.

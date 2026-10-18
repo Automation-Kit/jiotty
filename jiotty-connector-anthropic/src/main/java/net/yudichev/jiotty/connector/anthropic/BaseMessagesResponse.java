@@ -73,6 +73,12 @@ interface BaseMessagesResponse {
         return stopReason().filter("refusal"::equals).isPresent();
     }
 
+    /// Whether the reply ran into the [MessagesRequest#maxTokens()] ceiling, its thinking or its text cut off mid-way. Asking again for a shorter reply can
+    /// succeed where repeating the request would only be cut off again.
+    default boolean isCutOffByTokenCeiling() {
+        return stopReason().filter("max_tokens"::equals).isPresent();
+    }
+
     /// Every `tool_use` block in the reply, in the order the model made them, whatever the stop reason — a reply cut short mid-call still carries the call,
     /// with arguments only [#isAwaitingToolResults] makes safe to trust.
     ///
