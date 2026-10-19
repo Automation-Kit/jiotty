@@ -1,18 +1,18 @@
 package net.yudichev.jiotty.persistence.recording;
 
-import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.time.DateTimeUtils;
+import net.yudichev.jiotty.user.ui.Displayable;
 import net.yudichev.jiotty.user.ui.HistoryDisplayableDto;
 import net.yudichev.jiotty.user.ui.UIServer;
+import net.yudichev.jiotty.user.ui.io.Answer;
 import org.jspecify.annotations.Nullable;
 
 import java.time.ZoneId;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-import static net.yudichev.jiotty.common.lang.CompletableFutures.completedFuture;
+import static java.util.concurrent.CompletableFuture.completedFuture;
 
 public sealed interface UIDestination extends Destination permits UIDestinationImpl {
     interface HtmlRenderer<R> {
@@ -30,7 +30,7 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
                        int windowSize,
                        Function<R, String> displayableEventKeyExtractor,
                        @Nullable Supplier<HtmlRenderer<R>> renderer,
-                       BiFunction<String, HttpServletResponse, CompletableFuture<Void>> downloadHandler)
+                       Function<String, CompletableFuture<Answer>> downloadHandler)
             implements Destination.Config<R> {
         public UIConfig(UIServer uiServer,
                         ZoneId zoneId,
@@ -40,7 +40,15 @@ public sealed interface UIDestination extends Destination permits UIDestinationI
                         int windowSize,
                         Function<R, String> displayableEventKeyExtractor,
                         @Nullable Supplier<HtmlRenderer<R>> renderer) {
-            this(uiServer, zoneId, recordType, title, format, windowSize, displayableEventKeyExtractor, renderer, (_, _) -> completedFuture());
+            this(uiServer,
+                 zoneId,
+                 recordType,
+                 title,
+                 format,
+                 windowSize,
+                 displayableEventKeyExtractor,
+                 renderer,
+                 _ -> completedFuture(Displayable.NO_DOWNLOAD));
         }
 
         @Override

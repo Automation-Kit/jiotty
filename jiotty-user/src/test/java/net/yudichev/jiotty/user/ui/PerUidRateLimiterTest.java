@@ -57,8 +57,8 @@ class PerUidRateLimiterTest {
         assertThat(limiter.tryAdmit("user-1")).isFalse();
 
         assertThat(meterRegistry.get(GuardMetrics.REJECTED_COUNTER)
-                                .tag("guard", "per_uid")
-                                .tag("outcome", GuardMetrics.OUTCOME_RATE_LIMITED)
+                                .tag(GuardMetrics.TAG_GUARD, PerUidRateLimiter.GUARD)
+                                .tag(GuardMetrics.TAG_OUTCOME, GuardMetrics.OUTCOME_RATE_LIMITED)
                                 .counter()
                                 .count())
                 .isEqualTo(2.0);

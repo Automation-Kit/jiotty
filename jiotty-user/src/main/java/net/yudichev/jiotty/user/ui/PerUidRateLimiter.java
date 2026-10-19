@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.ui;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -22,6 +23,8 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 /// account cannot hammer the API from many addresses (or from one behind NAT). The key is the id the token verifier vouched for, never a client-supplied
 /// value.
 final class PerUidRateLimiter {
+    @VisibleForTesting
+    static final String GUARD = "per_uid";
     /// Caps the per-user bucket map so tracking cannot itself exhaust memory. A user is at most one entry; eviction only costs an idle user its (full) bucket.
     private static final int MAX_TRACKED_USERS = 10_000;
     private static final Duration USER_IDLE_EVICTION = Duration.ofMinutes(15);
@@ -35,7 +38,11 @@ final class PerUidRateLimiter {
                       @MaxBurst double maxBurst,
                       MeterRegistry meterRegistry) {
         rateLimiter = new PerKeyRateLimiter(currentDateTimeProvider, permitsPerSecond, maxBurst, MAX_TRACKED_USERS, USER_IDLE_EVICTION);
-        rateLimitedCounter = meterRegistry.counter(GuardMetrics.REJECTED_COUNTER, "guard", "per_uid", "outcome", GuardMetrics.OUTCOME_RATE_LIMITED);
+        rateLimitedCounter = meterRegistry.counter(GuardMetrics.REJECTED_COUNTER,
+                                                   GuardMetrics.TAG_GUARD,
+                                                   GUARD,
+                                                   GuardMetrics.TAG_OUTCOME,
+                                                   GuardMetrics.OUTCOME_RATE_LIMITED);
     }
 
     /// Whether the user identified by `userId` is within its API allowance, counting a rejection when it is not.

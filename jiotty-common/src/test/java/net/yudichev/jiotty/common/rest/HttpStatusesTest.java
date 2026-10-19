@@ -6,9 +6,22 @@ import org.junit.jupiter.params.provider.CsvSource;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.isClientError;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.isServerError;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.isSuccess;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.isValid;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class HttpStatusesTest {
+
+    @ParameterizedTest
+    @CsvSource({
+            // boundaries of the 1xx to 5xx classes
+            "99, false",
+            "100, true",
+            "200, true",
+            "599, true",
+            "600, false"})
+    void classifiesValidityByStatus(int code, boolean expectedValid) {
+        assertThat(isValid(code)).isEqualTo(expectedValid);
+    }
 
     @ParameterizedTest
     @CsvSource({

@@ -5,8 +5,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Closeable;
 
-import java.io.IOException;
-
 import static com.google.common.base.Preconditions.checkNotNull;
 
 /// Handles `GET /ui/api/displayables/stream` — opens a server-sent-events stream and threads the per-user request-context invalidation through to it.
@@ -22,7 +20,7 @@ public final class DisplayablesSseHandler extends BaseSseApiPathHandler {
     }
 
     @Override
-    protected Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException {
+    protected Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) {
         return sseService.startSse(request, response, onStreamClosed);
     }
 }

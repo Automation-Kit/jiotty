@@ -2,10 +2,7 @@ package net.yudichev.jiotty.user.ui.sse;
 
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.google.common.reflect.TypeToken;
-import jakarta.servlet.AsyncContext;
-import jakarta.servlet.AsyncEvent;
-import jakarta.servlet.AsyncListener;
-import jakarta.servlet.ServletRequest;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
@@ -15,6 +12,11 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.MutableReference;
+import net.yudichev.jiotty.common.metrics.GuardMetrics;
+import net.yudichev.jiotty.user.ui.io.AsyncExchange;
+import net.yudichev.jiotty.user.ui.io.Deadline;
+import net.yudichev.jiotty.user.ui.io.testing.FakeAsyncContext;
+import net.yudichev.jiotty.user.ui.io.testing.UnserialisablePayload;
 import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,15 +29,23 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+import static com.google.common.net.HttpHeaders.RETRY_AFTER;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_EVENT_STREAM;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.user.ui.sse.testing.SseFrames.allDataOf;
 import static net.yudichev.jiotty.user.ui.sse.testing.SseFrames.dataOf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -43,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Named.named;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -51,14 +62,16 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/// Transport-level behaviour of the shared SSE channel: headers, wire format, hello and heartbeat frames, per-client and broadcast delivery, the client
-/// capacity cap, and the close paths. What is streamed over a channel is covered by each feature's own test.
+/// Transport-level behaviour of the shared SSE channel: headers, wire format, hello and heartbeat frames, per-client and broadcast delivery, frames
+/// superseding each other for a slow reader, the client and budget caps, and the close paths. What is streamed over a channel is covered by each feature's own
+/// test.
 @ExtendWith(MockitoExtension.class)
 class SseChannelTest {
     /// Rooted at [Object], as every channel's writer is, so each frame is serialised from its own type.
     private static final ObjectWriter WRITER = Json.createWriterFor(new TypeToken<>() {});
 
     private final TestAdminAlertService alertService = new TestAdminAlertService();
+    private final List<SseCapture> captures = new ArrayList<>();
     private ProgrammableClock clock;
     private RejectingSchedulingExecutor executor;
     private SseChannel channel;
@@ -77,19 +90,22 @@ class SseChannelTest {
             channel.close();
             clock.tick();
         }
+        for (SseCapture capture : captures) {
+            assertThat(capture.out.leakedBuffers()).as("pooled buffers given back once every exchange has ended").isEmpty();
+        }
     }
 
     @Test
     void openWritesEventStreamHeaders() {
         SseCapture capture = openClient();
 
-        verify(capture.response).setContentType("text/event-stream");
+        verify(capture.response).setContentType(CONTENT_TYPE_EVENT_STREAM);
         verify(capture.response).setCharacterEncoding("utf-8");
         verify(capture.response).setHeader("Cache-Control", "no-cache");
         verify(capture.response).setHeader("Connection", "keep-alive");
         verify(capture.response).setHeader("X-Accel-Buffering", "no");
         verify(capture.response).setHeader("X-Client-Id-Seq-Num", "1");
-        verify(capture.asyncContext).setTimeout(0);
+        assertThat(capture.asyncContext.getTimeout()).isZero();
     }
 
     @Test
@@ -131,7 +147,6 @@ class SseChannelTest {
         capture.reset();
 
         sinkRef.get().send("later", Map.of("value", 42));
-        clock.tick();
 
         assertThat(capture.output()).contains("event: later").contains("42");
     }
@@ -143,11 +158,27 @@ class SseChannelTest {
         capture1.reset();
         capture2.reset();
 
-        channel.broadcast("update", Map.of("value", "v"));
+        channel.broadcastSink().send("update", Map.of("value", "v"));
         clock.tick();
 
         assertThat(capture1.output()).contains("event: update");
         assertThat(capture2.output()).contains("event: update");
+    }
+
+    /// Unsuperseded frames reach a slow client one by one, however many share their event name, as a list of removals must.
+    @Test
+    void anUnsupersededBroadcastReachesASlowClientWhole() {
+        SseCapture capture = openClient("host1", 1111);
+        capture.reset();
+        capture.out.stallReading();
+        channel.broadcastSink().send("held", Map.of("value", "in flight"));
+
+        channel.broadcastSink().sendUnsuperseded("ticket-removed", Map.of("ids", "a"));
+        channel.broadcastSink().sendUnsuperseded("ticket-removed", Map.of("ids", "b"));
+        clock.tick();
+        capture.out.resumeReading();
+
+        assertThat(allDataOf(capture.output(), "ticket-removed")).containsExactly("{\"ids\":\"a\"}", "{\"ids\":\"b\"}");
     }
 
     @Test
@@ -168,18 +199,66 @@ class SseChannelTest {
         assertThat(secondPingTime).isNotEqualTo(firstPingTime);
     }
 
+    /// A client reading slower than frames arrive receives only the newest frame for each key, at that frame's own position in the queue, so an update sent
+    /// after a snapshot follows that snapshot.
     @Test
-    void clientDisconnectStopsDelivery() {
-        SseCapture capture = openClient();
+    void framesWaitingForASlowReaderAreSupersededByLaterOnesWithTheSameKey() {
+        var sinkRef = new MutableReference<SseChannel.SseStream>();
+        SseCapture capture = openClient("host1", 1111, sinkRef::set);
         capture.reset();
+        capture.out.stallReading();
+        SseChannel.SseStream stream = sinkRef.get();
+        stream.send("held", Map.of("value", "in flight"));
 
-        asUnchecked(() -> capture.asyncListener.get().onComplete(null));
+        stream.send("user-update", "user:1", Map.of("version", 1));
+        stream.send("users-snapshot", Map.of("users", "all"));
+        stream.send("user-update", "user:1", Map.of("version", 2));
+        stream.sendUnsuperseded("ticket-removed", Map.of("ids", "a"));
+        stream.sendUnsuperseded("ticket-removed", Map.of("ids", "b"));
+        capture.out.resumeReading();
+
+        String output = capture.output();
+        assertThat(allDataOf(output, "user-update")).containsExactly("{\"version\":2}");
+        assertThat(allDataOf(output, "ticket-removed")).containsExactly("{\"ids\":\"a\"}", "{\"ids\":\"b\"}");
+        assertThat(output.indexOf("event: users-snapshot")).isLessThan(output.indexOf("event: user-update"));
+    }
+
+    /// Frames keep arriving for a dropped client until its removal runs on the channel executor; each one overflows the client's queue again, and none
+    /// increments the drop counter again.
+    @Test
+    void aClientThatFallsFullyBehindIsDroppedAndCountedOnceAsASlowReader() {
+        var meterRegistry = new SimpleMeterRegistry();
+        StalledClient client = openClientHoldingAWrite(meterRegistry);
+
+        for (int i = 0; i <= PendingFrames.CAPACITY + 1; i++) {
+            client.stream().sendUnsuperseded("update", i);
+        }
         clock.tick();
 
-        channel.broadcast("update", Map.of("value", "v"));
+        verify(client.capture().onStreamClosed).run();
+        assertThat(client.capture().asyncContext.isCompleted()).isTrue();
+        assertThat(channel.clientCount()).isZero();
+        assertThat(meterRegistry.counter(SseAdmissionImpl.DROPPED_COUNTER).count()).isEqualTo(1);
+    }
+
+    /// A held write that times out is a client that stopped reading; one that fails otherwise is a client that went away, which is no slow reader.
+    @ParameterizedTest
+    @MethodSource
+    void aClientWhoseHeldWriteFailsIsDroppedAndCountedAsASlowReaderOnlyOnATimeout(Throwable writeFailure, double expectedDropCount) {
+        var meterRegistry = new SimpleMeterRegistry();
+        StalledClient client = openClientHoldingAWrite(meterRegistry);
+
+        client.capture().out.failHeldWrite(writeFailure);
         clock.tick();
 
-        assertThat(capture.output()).doesNotContain("event: update");
+        verify(client.capture().onStreamClosed).run();
+        assertThat(channel.clientCount()).isZero();
+        assertThat(meterRegistry.counter(SseAdmissionImpl.DROPPED_COUNTER).count()).isEqualTo(expectedDropCount);
+    }
+
+    static Stream<Arguments> aClientWhoseHeldWriteFailsIsDroppedAndCountedAsASlowReaderOnlyOnATimeout() {
+        return Stream.of(arguments(named("idle timeout", new TimeoutException("Idle timeout expired")), 1.0),
+                         arguments(named("connection reset", new IOException("connection reset")), 0.0));
     }
 
     @ParameterizedTest
@@ -188,47 +267,49 @@ class SseChannelTest {
         SseCapture capture = openClient();
         capture.reset();
 
-        asUnchecked(() -> event.deliverTo(capture.asyncListener.get(), capture.asyncContext));
+        event.deliverTo(capture.asyncContext);
         clock.tick();
 
-        channel.broadcast("update", Map.of("value", "v"));
+        channel.broadcastSink().send("update", Map.of("value", "v"));
         clock.tick();
 
         assertThat(capture.output()).doesNotContain("event: update");
         assertThat(channel.clientCount()).isZero();
+        verify(capture.onStreamClosed).run();
     }
 
     static Stream<Arguments> everyContainerEndOfLifeEventStopsDelivery() {
-        return Stream.of(arguments(named("onTimeout", (ContainerEvent) (listener, _) -> listener.onTimeout(null))),
-                         arguments(named("onError",
-                                         (ContainerEvent) (listener, context) ->
-                                                 listener.onError(new AsyncEvent(context, new IllegalStateException("connection reset"))))));
+        return Stream.of(arguments(named("abort", (ContainerEvent) FakeAsyncContext::abort)),
+                         arguments(named("completion", (ContainerEvent) FakeAsyncContext::complete)));
     }
 
-    @Test
-    void aStreamStaysDeliverableWhenTheContainerRestartsAsync() {
-        SseCapture capture = openClient();
-        capture.reset();
-
-        asUnchecked(() -> capture.asyncListener.get().onStartAsync(null));
-        clock.tick();
-
-        channel.broadcast("update", Map.of("value", "v"));
-        clock.tick();
-
-        assertThat(capture.output()).contains("event: update");
-    }
-
+    /// When a client has gone before its headers went out, the channel, which holds the exchange's claim, completes the exchange and gives the client's slots
+    /// back.
     @Test
     void aClientWhoseHeadersCannotBeWrittenGivesItsCapacitySlotBack() {
-        var capture = new SseCapture("host1", 1111);
+        SseCapture capture = newCapture("host1", 1111);
         asUnchecked(() -> doThrow(new IOException("gone")).when(capture.response).flushBuffer());
 
-        assertThatThrownBy(() -> channel.open(capture.asyncContext, capture.response, capture.onStreamClosed, _ -> {}))
-                .isInstanceOf(IOException.class);
+        assertThat(channel.open(exchangeOf(capture), capture.onStreamClosed, _ -> {})).isPresent();
         clock.tick();
 
         assertThat(channel.clientCount()).isZero();
+        assertThat(capture.asyncContext.isCompleted()).isTrue();
+        verify(capture.onStreamClosed).run();
+        assertThat(alertService.activeAlertsById()).isEmpty();
+    }
+
+    /// An exchange answered before the stream opens has nothing left to stream to, so the stream is refused and its slots go back.
+    @Test
+    void aStreamOnAnExchangeClaimedFirstIsRefusedAndGivesItsSlotsBack() {
+        SseCapture capture = newCapture("host1", 1111);
+        AsyncExchange exchange = exchangeOf(capture);
+        assertThat(exchange.claim()).isPresent();
+
+        assertThat(channel.open(exchange, capture.onStreamClosed, _ -> {})).isEmpty();
+
+        assertThat(channel.clientCount()).isZero();
+        verify(capture.response, never()).setContentType(any());
     }
 
     @Test
@@ -236,43 +317,65 @@ class SseChannelTest {
         // A real SchedulingExecutor rejects work once its queue is full or it has shut down; the deterministic one accepts everything, so stand one in.
         when(rejectingExecutor.scheduleAtFixedRate(any(), any())).thenReturn(Closeable.noop());
         doThrow(new RejectedExecutionException("queue full")).when(rejectingExecutor).execute(any(), any());
-        var rejectingChannel = new SseChannel("rejecting", rejectingExecutor, clock, WRITER, alertService, 1);
+        var rejectingChannel = new SseChannel("rejecting", rejectingExecutor, clock, WRITER, alertService, SseAdmission.unlimited(), 1);
         rejectingChannel.start();
-        var capture = new SseCapture("host1", 1111);
+        SseCapture capture = newCapture("host1", 1111);
 
-        assertThatThrownBy(() -> rejectingChannel.open(capture.asyncContext, capture.response, capture.onStreamClosed, _ -> {}))
+        assertThatThrownBy(() -> rejectingChannel.open(exchangeOf(capture), capture.onStreamClosed, _ -> {}))
                 .isInstanceOf(RejectedExecutionException.class);
 
         assertThat(rejectingChannel.clientCount()).isZero();
         verify(capture.onStreamClosed).run();
     }
 
+    /// A stream closed before its open task runs, while the executor rejects the removal task that follows, has its `onStreamClosed` run once that open
+    /// task runs.
     @Test
-    void aClientWhoseListenerCannotBeRegisteredIsDropped() {
-        var capture = new SseCapture("host1", 1111);
-        doThrow(new IllegalStateException("async already complete")).when(capture.asyncContext).addListener(any(AsyncListener.class));
+    void aStreamThatEndsBeforeRegistrationRunsOnStreamClosedWhenItsRemovalIsRejected(@Mock SchedulingExecutor queueFullExecutor) {
+        when(queueFullExecutor.scheduleAtFixedRate(any(), any())).thenReturn(Closeable.noop());
+        var registration = new MutableReference<Runnable>();
+        doAnswer(invocation -> {
+            registration.set(invocation.getArgument(1));
+            return null;
+        }).when(queueFullExecutor).execute(any(), any());
+        when(queueFullExecutor.tryExecute(any(), any())).thenThrow(new RejectedExecutionException("queue full"));
+        var queueFullChannel = new SseChannel("queue-full", queueFullExecutor, clock, WRITER, alertService, SseAdmission.unlimited(), 1);
+        queueFullChannel.start();
+        SseCapture capture = newCapture("host1", 1111);
+        SseChannel.SseStream stream = queueFullChannel.open(exchangeOf(capture), capture.onStreamClosed, _ -> {}).orElseThrow();
 
-        getAsUnchecked(() -> channel.open(capture.asyncContext, capture.response, capture.onStreamClosed, _ -> {}));
+        stream.close();
+        registration.get().run();
+
+        verify(capture.onStreamClosed).run();
+    }
+
+    /// An exchange the container aborted before the stream opened, as when the client went away, explains the failure to open, so it raises no alert.
+    @Test
+    void aClientWhoseExchangeEndedBeforeItOpenedIsDroppedWithoutAnAlert() {
+        SseCapture capture = newCapture("host1", 1111);
+        AsyncExchange exchange = exchangeOf(capture);
+        capture.asyncContext.abort();
+
+        channel.open(exchange, capture.onStreamClosed, _ -> {});
         clock.tick();
 
         verify(capture.onStreamClosed).run();
         assertThat(channel.clientCount()).isZero();
+        assertThat(alertService.activeAlertsById()).isEmpty();
     }
 
     @Test
     void aClientWhoseInitialImageThrowsIsDropped() {
         SseCapture healthy = openClient("host1", 1111);
-        var capture = new SseCapture("host2", 2222);
+        SseCapture capture = newCapture("host2", 2222);
 
-        getAsUnchecked(() -> channel.open(capture.asyncContext,
-                                          capture.response,
-                                          capture.onStreamClosed,
-                                          _ -> {throw new IllegalStateException("feature blew up");}));
+        channel.open(exchangeOf(capture), capture.onStreamClosed, _ -> {throw new IllegalStateException("feature blew up");});
         clock.tick();
         capture.reset();
         healthy.reset();
 
-        channel.broadcast("update", Map.of("value", "v"));
+        channel.broadcastSink().send("update", Map.of("value", "v"));
         clock.tick();
 
         assertThat(capture.output()).as("a client whose initial image failed is no longer in the broadcast set").isEmpty();
@@ -284,7 +387,7 @@ class SseChannelTest {
     @Test
     void aStreamClosesEvenWhenTheContainerRefusesToCompleteIt() {
         SseCapture capture = openClient();
-        doThrow(new IllegalStateException("already dispatched")).when(capture.asyncContext).complete();
+        capture.asyncContext.refuseCompletion();
 
         capture.closeHandle.get().close();
         clock.tick();
@@ -297,10 +400,9 @@ class SseChannelTest {
     void openAfterTheChannelIsClosedIsRefused() {
         channel.close();
         clock.tick();
-        var capture = new SseCapture("host1", 1111);
+        SseCapture capture = newCapture("host1", 1111);
 
-        Optional<SseChannel.SseStream> refusedStream = getAsUnchecked(
-                () -> channel.open(capture.asyncContext, capture.response, capture.onStreamClosed, _ -> {}));
+        Optional<SseChannel.SseStream> refusedStream = channel.open(exchangeOf(capture), capture.onStreamClosed, _ -> {});
 
         assertThat(refusedStream).isEmpty();
         assertThat(capture.output()).isEmpty();
@@ -308,10 +410,10 @@ class SseChannelTest {
 
     @Test
     void startStreamStartsTheRequestsAsyncContextAndOpensAStreamOnIt(@Mock HttpServletRequest request) {
-        var capture = new SseCapture("host1", 1111);
+        SseCapture capture = newCapture("host1", 1111);
         when(request.startAsync()).thenReturn(capture.asyncContext);
 
-        Closeable stream = getAsUnchecked(() -> channel.startStream(request, capture.response, capture.onStreamClosed, sink -> sink.send("image", 1)));
+        Closeable stream = channel.startStream(request, capture.response, capture.onStreamClosed, sink -> sink.send("image", 1));
         clock.tick();
 
         assertThat(capture.output()).contains("event: hello").contains("event: image");
@@ -321,27 +423,84 @@ class SseChannelTest {
     }
 
     @Test
-    void startStreamOnAClosedChannelCompletesTheExchangeAndReportsTheStreamClosed(@Mock HttpServletRequest request) {
+    void startStreamOnAClosedChannelAnswersUnavailableAndReportsTheStreamClosed(@Mock HttpServletRequest request) {
         channel.close();
         clock.tick();
-        var capture = new SseCapture("host1", 1111);
+        SseCapture capture = newCapture("host1", 1111);
         when(request.startAsync()).thenReturn(capture.asyncContext);
 
-        Closeable refusedStream = getAsUnchecked(() -> channel.startStream(request, capture.response, capture.onStreamClosed, _ -> {}));
+        Closeable refusedStream = channel.startStream(request, capture.response, capture.onStreamClosed, _ -> {});
 
-        verify(capture.asyncContext).complete();
+        assertRefusal(capture, SseChannel.CLOSED_ERROR, SseChannel.CLOSED_RETRY_AFTER);
         verify(capture.onStreamClosed).run();
-        assertThat(capture.output()).isEmpty();
         // The refused stream has nothing left to end, so closing it completes nothing and reports nothing a second time.
         assertThatCode(refusedStream::close).doesNotThrowAnyException();
         clock.tick();
-        verify(capture.asyncContext, times(1)).complete();
+        assertThat(capture.asyncContext.completions()).isEqualTo(1);
         verify(capture.onStreamClosed, times(1)).run();
     }
 
     @Test
+    void startStreamBeyondTheChannelsCapAnswersThatTheUserIsAtCapacity(@Mock HttpServletRequest request) {
+        var meterRegistry = new SimpleMeterRegistry();
+        recreateChannel(1, new SseAdmissionImpl(10, meterRegistry));
+        openClient("host1", 1111);
+        SseCapture capture = newCapture("host2", 2222);
+        when(request.startAsync()).thenReturn(capture.asyncContext);
+
+        channel.startStream(request, capture.response, capture.onStreamClosed, _ -> {});
+
+        assertRefusal(capture, SseChannel.CHANNEL_FULL_ERROR, SseChannel.CHANNEL_FULL_RETRY_AFTER);
+        verify(capture.onStreamClosed).run();
+        assertThat(meterRegistry.counter(GuardMetrics.REJECTED_COUNTER,
+                                         GuardMetrics.TAG_GUARD,
+                                         SseAdmissionImpl.GUARD,
+                                         GuardMetrics.TAG_OUTCOME,
+                                         GuardMetrics.OUTCOME_USER_AT_CAPACITY).count()).isEqualTo(1);
+    }
+
+    /// A client that went away holds its slot until the second heartbeat write after it left, so a retry sooner than two heartbeats can be refused again.
+    @Test
+    void aClientRefusedForAFullChannelRetriesAfterTwoHeartbeats() {
+        assertThat(SseChannel.CHANNEL_FULL_RETRY_AFTER).isGreaterThan(SseChannel.HEARTBEAT_PERIOD.multipliedBy(2));
+    }
+
+    @Test
+    void startStreamBeyondTheSharedBudgetAnswersThatTheServerIsAtCapacityAndGivesTheChannelSlotBack(@Mock HttpServletRequest request) {
+        var admission = new SseAdmissionImpl(1, new SimpleMeterRegistry());
+        SseChannel otherChannel = started(new SseChannel("other", executor, clock, WRITER, alertService, admission, 5));
+        recreateChannel(5, admission);
+        SseCapture otherCapture = newCapture("host1", 1111);
+        otherChannel.open(exchangeOf(otherCapture), otherCapture.onStreamClosed, _ -> {});
+        clock.tick();
+        SseCapture capture = newCapture("host2", 2222);
+        when(request.startAsync()).thenReturn(capture.asyncContext);
+
+        channel.startStream(request, capture.response, capture.onStreamClosed, _ -> {});
+
+        assertRefusal(capture, SseChannel.AT_CAPACITY_ERROR, SseChannel.AT_CAPACITY_RETRY_AFTER);
+        assertThat(channel.clientCount()).isZero();
+        otherChannel.close();
+        clock.tick();
+    }
+
+    @Test
+    void aStreamGivesItsPlaceInTheSharedBudgetBackWhenItEnds() {
+        var meterRegistry = new SimpleMeterRegistry();
+        recreateChannel(5, new SseAdmissionImpl(10, meterRegistry));
+        SseCapture capture = openClient();
+        assertThat(meterRegistry.get(SseAdmissionImpl.ACTIVE_CLIENTS_GAUGE).gauge().value()).isEqualTo(1);
+
+        capture.closeHandle.get().close();
+        clock.tick();
+
+        assertThat(meterRegistry.get(SseAdmissionImpl.ACTIVE_CLIENTS_GAUGE).gauge().value()).isZero();
+    }
+
+    @Test
     void aChannelMustAcceptAtLeastOneClient() {
-        assertThatThrownBy(() -> new SseChannel("test", executor, clock, WRITER, alertService, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new SseChannel("test", executor, clock, WRITER, alertService, SseAdmission.unlimited(), 0))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -352,11 +511,11 @@ class SseChannelTest {
         capture.closeHandle.get().close();
         clock.tick();
 
-        channel.broadcast("update", Map.of("value", "v"));
+        channel.broadcastSink().send("update", Map.of("value", "v"));
         clock.tick();
 
         assertThat(capture.output()).doesNotContain("event: update");
-        verify(capture.asyncContext).complete();
+        assertThat(capture.asyncContext.isCompleted()).isTrue();
         verify(capture.onStreamClosed).run();
     }
 
@@ -378,14 +537,13 @@ class SseChannelTest {
         SseCapture capture = openClient();
         capture.reset();
 
-        channel.broadcast("update", new Unserialisable());
+        channel.broadcastSink().send("update", UnserialisablePayload.create());
         clock.tick();
 
         assertThat(alertService.activeAlertsById().values())
                 .as("a frame the writer cannot map is a defect in the feature's frame types, not a disconnect")
                 .singleElement()
                 .satisfies(alert -> assertThat(alert.title()).isEqualTo(SseChannel.SERIALISATION_FAILED_ALERT_TITLE));
-        // The frame prefix is already on the wire when the writer fails, so the stream is unrecoverable and the client is dropped.
         verify(capture.onStreamClosed).run();
         assertThat(channel.clientCount()).isZero();
     }
@@ -400,10 +558,9 @@ class SseChannelTest {
 
         assertThat(channel.clientCount()).as("the slot is released even though the callback threw").isZero();
 
-        // Closing runs on the executor while it iterates the connected set, so the throw must not escape to abort that iteration either.
         SseCapture healthy = openClient("host2", 2222);
         healthy.reset();
-        channel.broadcast("update", Map.of("value", "v"));
+        channel.broadcastSink().send("update", Map.of("value", "v"));
         clock.tick();
 
         assertThat(broken.output()).doesNotContain("event: update");
@@ -425,11 +582,11 @@ class SseChannelTest {
 
     @Test
     void openTaskDrainedAfterChannelCloseClosesTheClientWithoutDeliveringAnImage() {
-        var capture = new SseCapture("localhost", 12345);
+        SseCapture capture = newCapture("localhost", 12345);
         var initialImageDelivered = new boolean[]{false};
 
         // Enqueue the registration task but do not tick, so it stays queued on the executor.
-        getAsUnchecked(() -> channel.open(capture.asyncContext, capture.response, capture.onStreamClosed, _ -> initialImageDelivered[0] = true));
+        channel.open(exchangeOf(capture), capture.onStreamClosed, _ -> initialImageDelivered[0] = true);
 
         // Only now close the channel and tick, so the queued task drains after teardown. It must skip all work and close the freshly-created client, which
         // close()'s own drain never saw.
@@ -437,7 +594,6 @@ class SseChannelTest {
         clock.tick();
 
         assertThat(initialImageDelivered[0]).isFalse();
-        assertThat(capture.output()).isEmpty();
         verify(capture.onStreamClosed).run();
     }
 
@@ -445,26 +601,22 @@ class SseChannelTest {
     void streamCloseIsIdempotentAcrossMultipleTriggers() {
         SseCapture capture = openClient();
 
+        capture.asyncContext.abort();
+        clock.tick();
         capture.closeHandle.get().close();
         clock.tick();
-        asUnchecked(() -> capture.asyncListener.get().onComplete(null));
-        clock.tick();
 
-        verify(capture.asyncContext, times(1)).complete();
+        assertThat(capture.asyncContext.completions()).as("an aborted exchange is not completed").isZero();
         verify(capture.onStreamClosed, times(1)).run();
     }
 
     @Test
     void openRefusesClientsBeyondTheCapacityCap() {
-        channel.close();
-        clock.tick();
-        channel = createChannel(1);
-        clock.tick();
+        recreateChannel(1, SseAdmission.unlimited());
 
         SseCapture capture1 = openClient("host1", 1111);
-        var capture2 = new SseCapture("host2", 2222);
-        Optional<SseChannel.SseStream> refusedStream = getAsUnchecked(
-                () -> channel.open(capture2.asyncContext, capture2.response, capture2.onStreamClosed, _ -> {}));
+        SseCapture capture2 = newCapture("host2", 2222);
+        Optional<SseChannel.SseStream> refusedStream = channel.open(exchangeOf(capture2), capture2.onStreamClosed, _ -> {});
         clock.tick();
 
         assertThat(refusedStream).isEmpty();
@@ -476,10 +628,7 @@ class SseChannelTest {
 
     @Test
     void capacityIsReleasedWhenAStreamCloses() {
-        channel.close();
-        clock.tick();
-        channel = createChannel(1);
-        clock.tick();
+        recreateChannel(1, SseAdmission.unlimited());
 
         SseCapture capture1 = openClient("host1", 1111);
         capture1.closeHandle.get().close();
@@ -497,7 +646,7 @@ class SseChannelTest {
         broken.out.failWrites(true);
         healthy.reset();
 
-        channel.broadcast("update", Map.of("value", "v"));
+        channel.broadcastSink().send("update", Map.of("value", "v"));
         clock.tick();
 
         assertThat(healthy.output()).contains("event: update");
@@ -507,67 +656,78 @@ class SseChannelTest {
         // Let writes succeed again, so a second broadcast reaching the dropped client would leave visible bytes in its capture.
         broken.out.failWrites(false);
         broken.reset();
-        channel.broadcast("update", Map.of("value", "v2"));
+        channel.broadcastSink().send("update", Map.of("value", "v2"));
         clock.tick();
 
         assertThat(broken.output()).as("a client dropped mid-broadcast is no longer in the broadcast set").isEmpty();
     }
 
+    /// The channel holds the exchange's claim once it opens a stream, so a stream that fails to open before its headers went out is answered with a 500 by
+    /// the channel, and alerted.
     @Test
-    void anUncommittedResponseIsLeftForTheCallerToAnswerOn(@Mock HttpServletResponse failingResponse) {
-        var capture = new SseCapture("host1", 1111);
-        when(failingResponse.isCommitted()).thenReturn(false);
-        doThrow(new IllegalStateException("headers rejected")).when(failingResponse).setContentType(any());
+    void anUncommittedStreamThatFailsToOpenIsAnsweredByTheChannel() {
+        SseCapture capture = newCapture("host1", 1111);
+        doThrow(new IllegalStateException("headers rejected")).when(capture.response).setContentType(CONTENT_TYPE_EVENT_STREAM);
 
-        assertThatThrownBy(() -> channel.open(capture.asyncContext, failingResponse, capture.onStreamClosed, _ -> {}))
-                .isInstanceOf(IllegalStateException.class);
+        assertThat(channel.open(exchangeOf(capture), capture.onStreamClosed, _ -> {})).isPresent();
         clock.tick();
 
-        verify(capture.asyncContext, never()).complete();
+        verify(capture.response).setStatus(INTERNAL_SERVER_ERROR_500);
+        assertThat(capture.asyncContext.isCompleted()).isTrue();
         assertThat(channel.clientCount()).isZero();
+        verify(capture.onStreamClosed).run();
+        assertThat(alertService.activeAlertsById().values())
+                .singleElement()
+                .satisfies(alert -> assertThat(alert.title()).isEqualTo(SseChannel.OPEN_FAILED_ALERT_TITLE));
     }
 
+    /// Once the headers are on the wire, completing is all that is left of an answer.
     @Test
-    void aCommittedResponseHasItsContextCompletedBeforeTheFailureIsRaised() {
-        var capture = new SseCapture("host1", 1111);
+    void aCommittedStreamThatFailsToOpenIsCompletedByTheChannel() {
+        SseCapture capture = newCapture("host1", 1111);
         when(capture.response.isCommitted()).thenReturn(true);
         asUnchecked(() -> doThrow(new IllegalStateException("stream gone")).when(capture.response).getOutputStream());
 
-        assertThatThrownBy(() -> channel.open(capture.asyncContext, capture.response, capture.onStreamClosed, _ -> {}))
-                .isInstanceOf(IllegalStateException.class);
+        assertThat(channel.open(exchangeOf(capture), capture.onStreamClosed, _ -> {})).isPresent();
         clock.tick();
 
-        verify(capture.asyncContext).complete();
+        verify(capture.response, never()).setStatus(INTERNAL_SERVER_ERROR_500);
+        assertThat(capture.asyncContext.isCompleted()).isTrue();
         assertThat(channel.clientCount()).isZero();
+        verify(capture.onStreamClosed).run();
     }
 
+    /// While the channel executor rejects every task, a closed stream completes and frees its slot at once, and its `onStreamClosed` runs by the next
+    /// heartbeat, which is scheduled and not queued.
     @Test
-    void aStreamWhoseCloseTheExecutorRejectsIsClosedByTheNextHeartbeat() {
+    void aStreamWhoseRemovalTheExecutorRejectsIsRemovedByTheNextHeartbeat() {
         SseCapture capture = openClient();
         executor.fillQueue();
 
         capture.closeHandle.get().close();
+        assertThat(capture.asyncContext.isCompleted()).isTrue();
+        assertThat(channel.clientCount()).isZero();
+        verify(capture.onStreamClosed, never()).run();
+
         clock.advanceTimeAndTick(SseChannel.HEARTBEAT_PERIOD);
         executor.emptyQueue();
 
-        verify(capture.asyncContext).complete();
         verify(capture.onStreamClosed).run();
-        assertThat(channel.clientCount()).isZero();
     }
 
     @Test
     void aClientWhoseHelloFrameFailsIsForgottenRatherThanWrittenToForever() {
         SseCapture healthy = openClient("host1", 1111);
-        var capture = new SseCapture("host2", 2222);
+        SseCapture capture = newCapture("host2", 2222);
         capture.out.failWrites(true);
 
-        getAsUnchecked(() -> channel.open(capture.asyncContext, capture.response, capture.onStreamClosed, _ -> {}));
+        channel.open(exchangeOf(capture), capture.onStreamClosed, _ -> {});
         clock.tick();
         healthy.reset();
         // Let writes succeed again, so a broadcast reaching this client would leave visible bytes in the capture.
         capture.out.failWrites(false);
 
-        channel.broadcast("update", Map.of("value", "v"));
+        channel.broadcastSink().send("update", Map.of("value", "v"));
         clock.tick();
 
         assertThat(capture.output()).as("a client dropped during its preamble is no longer in the broadcast set").isEmpty();
@@ -579,9 +739,29 @@ class SseChannelTest {
     // region helpers
 
     private SseChannel createChannel(int maxClients) {
-        var newChannel = new SseChannel("test", executor, clock, WRITER, alertService, maxClients);
+        return started(new SseChannel("test", executor, clock, WRITER, alertService, SseAdmission.unlimited(), maxClients));
+    }
+
+    private void recreateChannel(int maxClients, SseAdmission admission) {
+        channel.close();
+        clock.tick();
+        channel = started(new SseChannel("test", executor, clock, WRITER, alertService, admission, maxClients));
+        clock.tick();
+    }
+
+    private static SseChannel started(SseChannel newChannel) {
         newChannel.start();
         return newChannel;
+    }
+
+    /// Recreates the channel against a budget publishing to `meterRegistry`, and opens a client whose one write is held unread.
+    private StalledClient openClientHoldingAWrite(SimpleMeterRegistry meterRegistry) {
+        recreateChannel(SseChannel.UNBOUNDED, new SseAdmissionImpl(10, meterRegistry));
+        var streamRef = new MutableReference<SseChannel.SseStream>();
+        SseCapture capture = openClient("host1", 1111, streamRef::set);
+        capture.out.stallReading();
+        streamRef.get().send("held", 0);
+        return new StalledClient(capture, streamRef.get());
     }
 
     private SseCapture openClient() {
@@ -593,45 +773,57 @@ class SseChannelTest {
     }
 
     private SseCapture openClient(String host, int port, Consumer<? super SseChannel.SseStream> onOpen) {
-        var capture = new SseCapture(host, port);
-        capture.closeHandle.set(getAsUnchecked(() -> channel.open(capture.asyncContext, capture.response, capture.onStreamClosed, onOpen)).orElseThrow());
+        SseCapture capture = newCapture(host, port);
+        capture.closeHandle.set(channel.open(exchangeOf(capture), capture.onStreamClosed, onOpen).orElseThrow());
         clock.tick();
         return capture;
+    }
+
+    /// Starts the exchange of `capture`'s request, as the servlet opening its stream does.
+    private AsyncExchange exchangeOf(SseCapture capture) {
+        return AsyncExchange.start(alertService, capture.request, capture.response, Deadline.none());
+    }
+
+    private SseCapture newCapture(String host, int port) {
+        var capture = new SseCapture(host, port);
+        captures.add(capture);
+        return capture;
+    }
+
+    private static void assertRefusal(SseCapture capture, String error, Duration retryAfter) {
+        verify(capture.response).setStatus(SERVICE_UNAVAILABLE_503);
+        verify(capture.response).setHeader(RETRY_AFTER, String.valueOf(retryAfter.toSeconds()));
+        assertThat(capture.out.errorCode()).isEqualTo(error);
+        assertThat(capture.asyncContext.isCompleted()).isTrue();
     }
 
     // endregion
 
     // region test infrastructure
 
-    /// A payload Jackson cannot map, standing in for a frame record whose shape the feature got wrong.
-    private static final class Unserialisable {
-    }
+    private record StalledClient(SseCapture capture, SseChannel.SseStream stream) {}
 
     /// One way the servlet container reports on an async request's life.
     private interface ContainerEvent {
-        void deliverTo(AsyncListener listener, AsyncContext asyncContext) throws IOException;
+        void deliverTo(FakeAsyncContext asyncContext);
     }
 
     private static final class SseCapture {
-        final MutableReference<AsyncListener> asyncListener = new MutableReference<>();
         final MutableReference<Closeable> closeHandle = new MutableReference<>();
         final Runnable onStreamClosed = mock(Runnable.class);
-        final AsyncContext asyncContext = mock(AsyncContext.class);
         final HttpServletResponse response = mock(HttpServletResponse.class);
         final CapturingServletOutputStream out = new CapturingServletOutputStream();
+        final FakeAsyncContext asyncContext;
+
+        final HttpServletRequest request = mock(HttpServletRequest.class);
 
         // Fixture stubs, not per-test expectations: a test that refuses the client at the capacity or closed-channel guard never reads most of them.
         SseCapture(String host, int port) {
-            var request = mock(ServletRequest.class);
             lenient().when(request.getRemoteHost()).thenReturn(host);
             lenient().when(request.getRemotePort()).thenReturn(port);
-            lenient().when(asyncContext.getRequest()).thenReturn(request);
-            lenient().when(asyncContext.getResponse()).thenReturn(response);
             asUnchecked(() -> lenient().when(response.getOutputStream()).thenReturn(out));
-            lenient().doAnswer(invocation -> {
-                asyncListener.set(invocation.getArgument(0));
-                return null;
-            }).when(asyncContext).addListener(any(AsyncListener.class));
+            asyncContext = new FakeAsyncContext(request, response);
+            lenient().when(request.startAsync()).thenReturn(asyncContext);
         }
 
         String output() {

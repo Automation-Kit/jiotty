@@ -1,13 +1,13 @@
 package net.yudichev.jiotty.user.ui;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.security.LogRedaction;
 
 import java.time.Instant;
-import java.util.List;
-import java.util.Map;
 
 import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 
@@ -16,7 +16,7 @@ import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 /// carried by the record components themselves.
 ///
 /// @param groups history groups by a 'what' key, each with a list of entries (time + value)
-public record HistoryDisplayableDto(Map<String, List<Entry>> groups) implements DisplayableDto, StringFormattable {
+public record HistoryDisplayableDto(ImmutableMap<String, ImmutableList<Entry>> groups) implements DisplayableDto, StringFormattable {
     @Override
     @JsonProperty("type")
     public String type() {

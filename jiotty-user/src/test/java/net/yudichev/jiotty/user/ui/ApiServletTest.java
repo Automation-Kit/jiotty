@@ -6,15 +6,14 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.StreamInvalidationSubscription;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
 import net.yudichev.jiotty.user.ui.UIServerRuntime.DispatchResult;
+import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
-
+import static com.google.common.net.HttpHeaders.RETRY_AFTER;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
@@ -28,7 +27,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ApiServletTest {
     private final ApiServlet servlet = new ApiServlet();
-    private final StringWriter responseBody = new StringWriter();
+    private final CapturingServletOutputStream responseBody = new CapturingServletOutputStream();
     @Mock
     private HttpServletRequest request;
     @Mock
@@ -53,28 +52,28 @@ class ApiServletTest {
 
     @Test
     void notFound_writes404() {
-        stubWriter();
+        stubOutputStream();
         when(runtime.dispatchApiPath(request, response)).thenReturn(DispatchResult.NOT_FOUND);
 
         servlet.service(request, response);
 
         verify(response).setStatus(NOT_FOUND_404);
-        assertThat(responseBody.toString()).contains("Unknown path");
+        assertThat(responseBody.output()).contains(ApiServlet.UNKNOWN_PATH_ERROR);
     }
 
     @Test
     void unavailable_writesRetryable503() {
-        stubWriter();
+        stubOutputStream();
         when(runtime.dispatchApiPath(request, response)).thenReturn(DispatchResult.UNAVAILABLE);
 
         servlet.service(request, response);
 
         verify(response).setStatus(SERVICE_UNAVAILABLE_503);
-        verify(response).setHeader("Retry-After", "1");
-        assertThat(responseBody.toString()).contains("Temporarily unavailable");
+        verify(response).setHeader(RETRY_AFTER, "1");
+        assertThat(responseBody.output()).contains(ApiServlet.UNAVAILABLE_ERROR);
     }
 
-    private void stubWriter() {
-        asUnchecked(() -> when(response.getWriter()).thenReturn(new PrintWriter(responseBody)));
+    private void stubOutputStream() {
+        asUnchecked(() -> when(response.getOutputStream()).thenReturn(responseBody));
     }
 }

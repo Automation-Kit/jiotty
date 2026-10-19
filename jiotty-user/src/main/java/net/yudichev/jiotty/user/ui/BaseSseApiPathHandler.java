@@ -1,20 +1,17 @@
 package net.yudichev.jiotty.user.ui;
 
-import jakarta.servlet.AsyncListener;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
 
-import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeIfNotNull;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
 import static net.yudichev.jiotty.user.ui.RequestContextFilter.requestContext;
 
@@ -33,16 +30,15 @@ public abstract class BaseSseApiPathHandler implements ApiPathHandler {
         return path;
     }
 
-    /// @implNote three threads can act on the state below — the servlet thread running this method (T1), the stream's own [SchedulingExecutor], on
-    /// which `onStreamClosed` fires (T2), and Jetty's async I/O thread for [AsyncListener] callbacks (which always trampolines to T2 via
-    /// `executor.execute(...)`, so it collapses into T2 for the purposes of this analysis).
+    /// @implNote two threads can act on the state below — the servlet thread running this method (T1), and the thread `onStreamClosed` fires on (T2): the
+    /// channel's [SchedulingExecutor], or, once that executor has shut down, the container thread that ended the stream.
     ///
     /// Shared state:
     ///   - `streamClosed` ([AtomicBoolean]): written by T2 in `onStreamClosed`, read by T1 at the end.
     ///   - `invalidationSubscriptionRef` ([AtomicReference] of [Closeable]): [AtomicReference#set] by T1 once it has subscribed to the request context's
     /// invalidation, [AtomicReference#getAndSet] by both T1's `if (streamClosed)` branch and T2's `onStreamClosed`, via
     /// the subscription closer (CS).
-    ///   - `sseStream` itself: [Closeable#close()] is idempotent (the underlying SSE client guards with a `closed` flag).
+    ///   - `sseStream` itself: [Closeable#close()] is idempotent, whichever thread calls it.
     ///
     /// The atomicity hinge is [AtomicReference#getAndSet] inside CS: whichever thread reaches it first claims the subscription and closes it; the loser
     /// observes `null` and [Closeable#closeIfNotNull] no-ops. The two close paths are mutually exclusive by construction. The ordering inside T2's lambda is
@@ -68,20 +64,18 @@ public abstract class BaseSseApiPathHandler implements ApiPathHandler {
             response.setStatus(METHOD_NOT_ALLOWED_405);
             return;
         }
-        asUnchecked(() -> {
-            UIRequestContext context = requestContext(request);
-            var streamClosed = new AtomicBoolean();
-            var invalidationSubscriptionRef = new AtomicReference<Closeable>();
-            Closeable sseStream = startSse(request, response, () -> {
-                streamClosed.set(true);
-                closeSubscription(invalidationSubscriptionRef);
-            });
-            Closeable invalidationSubscription = context.subscribeToInvalidation(sseStream::close);
-            invalidationSubscriptionRef.set(invalidationSubscription);
-            if (streamClosed.get()) {
-                closeSubscription(invalidationSubscriptionRef);
-            }
+        UIRequestContext context = requestContext(request);
+        var streamClosed = new AtomicBoolean();
+        var invalidationSubscriptionRef = new AtomicReference<Closeable>();
+        Closeable sseStream = startSse(request, response, () -> {
+            streamClosed.set(true);
+            closeSubscription(invalidationSubscriptionRef);
         });
+        Closeable invalidationSubscription = context.subscribeToInvalidation(sseStream::close);
+        invalidationSubscriptionRef.set(invalidationSubscription);
+        if (streamClosed.get()) {
+            closeSubscription(invalidationSubscriptionRef);
+        }
     }
 
     /// Starts the stream this handler serves on `request`.
@@ -90,7 +84,7 @@ public abstract class BaseSseApiPathHandler implements ApiPathHandler {
     /// @return the stream, closed when the request context is invalidated
     /// @implSpec an implementation must start `request`'s async context itself, and must run `onStreamClosed` exactly once whenever the stream ends,
     /// including when it is refused before it opens.
-    protected abstract Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException;
+    protected abstract Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed);
 
     private static void closeSubscription(AtomicReference<Closeable> subscriptionRef) {
         closeIfNotNull(subscriptionRef.getAndSet(null));

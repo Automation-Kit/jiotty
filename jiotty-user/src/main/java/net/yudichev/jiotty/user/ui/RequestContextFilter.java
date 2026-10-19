@@ -42,7 +42,7 @@ final class RequestContextFilter implements Filter {
         requestAuthoriser.authorise(request, response, chain);
     }
 
-    static void setRequestContext(HttpServletRequest request, UIRequestContext requestContext) {
+    static void setRequestContext(ServletRequest request, UIRequestContext requestContext) {
         request.setAttribute(REQUEST_CONTEXT_ATTRIBUTE, requestContext);
     }
 

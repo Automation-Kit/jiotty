@@ -12,6 +12,7 @@ import java.util.List;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -98,6 +99,13 @@ class JsonTest {
         Json.writeTo(fromTypeTokenOutput, Json.createWriterFor(new TypeToken<Point>() {}), new Point(1, 2));
 
         assertThat(fromClassOutput).hasToString(fromTypeTokenOutput.toString());
+    }
+
+    @Test
+    void readsWithAPreBuiltReaderWhatTheSharedMapperWrites() {
+        Point point = getAsUnchecked(() -> Json.createReaderFor(Point.class).readValue("{\"x\":1,\"y\":2}".getBytes(UTF_8)));
+
+        assertThat(point).isEqualTo(new Point(1, 2));
     }
 
     /// Same buffer contract as the untyped overload: append, and leave the caller's builder usable after Jackson has closed the sink it was handed.

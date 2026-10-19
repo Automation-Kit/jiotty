@@ -1,14 +1,18 @@
 package net.yudichev.jiotty.user.ui;
 
-import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import jakarta.inject.Provider;
-import jakarta.servlet.AsyncContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.lang.Json;
+import net.yudichev.jiotty.user.ui.io.testing.DispatchedRequest;
+import net.yudichev.jiotty.user.ui.io.testing.FakeAsyncContext;
 import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,14 +24,15 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
@@ -35,7 +40,8 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class GetDisplayableItemHandlerTest {
-
+    private final CapturingServletOutputStream responseOutput = new CapturingServletOutputStream();
+    private final List<DispatchedRequest> dispatchedRequests = new ArrayList<>(1);
     private ProgrammableClock clock;
     private DisplayableRegistryImpl registry;
     private TestAdminAlertService alertService;
@@ -45,92 +51,123 @@ class GetDisplayableItemHandlerTest {
     private HttpServletRequest request;
     @Mock
     private HttpServletResponse response;
-    @Mock
-    private AsyncContext asyncContext;
+    private FakeAsyncContext asyncContext;
 
     @BeforeEach
     void setUp() {
+        asyncContext = new FakeAsyncContext(request, response);
         clock = new ProgrammableClock();
         Provider<SchedulingExecutor> executorProvider = () -> clock.createSingleThreadedSchedulingExecutor("test");
         registry = new DisplayableRegistryImpl(executorProvider);
         registry.start();
         alertService = new TestAdminAlertService();
-        handler = new GetDisplayableItemHandler(registry, alertService, executorProvider);
+        handler = new GetDisplayableItemHandler(registry, alertService, executorProvider, "user-1");
         handler.start();
         clock.tick();
-        lenient().when(request.getPathInfo()).thenReturn("/displayables/item");
+        lenient().when(request.getPathInfo()).thenReturn(GetDisplayableItemHandler.PATH);
         lenient().when(request.getMethod()).thenReturn("GET");
+        lenient().when(request.startAsync()).thenReturn(asyncContext);
+        asUnchecked(() -> lenient().when(response.getOutputStream()).thenReturn(responseOutput));
     }
 
+    /// Once the exchange has started, a deadline can complete it and the container recycle the request at any moment, so nothing reads it after dispatch.
     @AfterEach
     void tearDown() {
         handler.stop();
         registry.stop();
         clock.tick();
+        assertThat(dispatchedRequests).allSatisfy(dispatchedRequest -> assertThat(dispatchedRequest.callsAfterDispatch()).isEmpty());
     }
 
     @Test
-    void returnsDto() throws IOException {
-        var dto = new HistoryDisplayableDto(Map.of("key", List.of()));
-        registry.register(createDisplayable("d1", "Display 1", completedFuture(dto)));
+    void returnsDto() {
+        registry.register(createDisplayable("d1", "Display 1", completedFuture(new HistoryDisplayableDto(ImmutableMap.of("key", ImmutableList.of())))));
+        clock.tick();
+        when(request.getParameter(GetDisplayableItemHandler.ID_PARAMETER)).thenReturn("d1");
+
+        dispatch();
         clock.tick();
 
-        var writer = new CapturingServletOutputStream();
-        when(request.getParameter("id")).thenReturn("d1");
-        when(request.startAsync()).thenReturn(asyncContext);
-        when(response.getOutputStream()).thenReturn(writer);
+        assertThat(asyncContext.isCompleted()).isTrue();
+        JsonNode responseJson = Json.parse(responseOutput.output());
+        assertThat(responseJson.path("id").asText()).isEqualTo("d1");
+        assertThat(responseJson.has("dto")).isTrue();
+    }
 
-        handler.handle(request, response);
+    /// A DTO that never arrives is answered with a server fault once the deadline passes, and alerted.
+    @Test
+    void aDtoThatNeverArrivesIsAnsweredByTheDeadline() {
+        registry.register(createDisplayable("d1", "Display 1", new CompletableFuture<>()));
+        clock.tick();
+        when(request.getParameter(GetDisplayableItemHandler.ID_PARAMETER)).thenReturn("d1");
+        dispatch();
         clock.tick();
 
-        verify(asyncContext).complete();
-        Map<String, Object> parsed = parseJson(writer.output());
-        assertThat(parsed.get("id")).isEqualTo("d1");
-        assertThat(parsed).containsKey("dto");
+        asyncContext.expireDeadlines();
+
+        verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
+        assertThat(alertService.activeAlertsById().values())
+                .singleElement()
+                .satisfies(alert -> assertThat(alert.title()).isEqualTo(GetDisplayableItemHandler.TIMED_OUT_ALERT_TITLE));
     }
 
     @ParameterizedTest
     @CsvSource(value = {
-            "null, 400, MISSING_ID",
-            "'   ', 400, MISSING_ID",
-            "nonexistent, 404, UNKNOWN_ID"
+            "null, " + BAD_REQUEST_400 + ", " + ErrorResponse.MISSING_ID,
+            "'   ', " + BAD_REQUEST_400 + ", " + ErrorResponse.MISSING_ID,
+            "nonexistent, " + NOT_FOUND_404 + ", " + ErrorResponse.UNKNOWN_ID
     }, nullValues = "null")
-    void returnsErrorForInvalidId(String id, int expectedStatus, String expectedError) throws IOException {
-        var writer = new CapturingServletOutputStream();
-        when(request.getParameter("id")).thenReturn(id);
-        when(response.getOutputStream()).thenReturn(writer);
+    void returnsErrorForInvalidId(String id, int expectedStatus, String expectedError) {
+        when(request.getParameter(GetDisplayableItemHandler.ID_PARAMETER)).thenReturn(id);
 
-        handler.handle(request, response);
+        dispatch();
 
         verify(response).setStatus(expectedStatus);
-        assertThat(writer.output()).contains(expectedError);
+        assertThat(responseOutput.output()).contains(expectedError);
     }
 
     @Test
-    void returns500WhenDtoFails() throws IOException {
+    void returns500WhenDtoFails() {
         registry.register(createDisplayable("d1", "Display 1",
                                             CompletableFuture.failedFuture(new RuntimeException("DTO generation failed"))));
         clock.tick();
+        when(request.getParameter(GetDisplayableItemHandler.ID_PARAMETER)).thenReturn("d1");
 
-        var writer = new CapturingServletOutputStream();
-        when(request.getParameter("id")).thenReturn("d1");
-        when(request.startAsync()).thenReturn(asyncContext);
-        when(response.getOutputStream()).thenReturn(writer);
-
-        handler.handle(request, response);
+        dispatch();
         clock.tick();
 
-        verify(asyncContext).complete();
+        assertThat(asyncContext.isCompleted()).isTrue();
         verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
-        // The 500 body is a fixed opaque code — the internal exception text ("DTO generation failed") must not reach the client.
-        Map<String, Object> parsed = parseJson(writer.output());
-        assertThat((String) parsed.get("error")).isEqualTo("INTERNAL_ERROR");
-        // ...but the failure IS surfaced to operators as a WARNING admin alert.
+        // The 500 body is a fixed opaque code, so the exception text ("DTO generation failed") never reaches the client.
+        assertThat(responseOutput.errorCode()).isEqualTo(ErrorResponse.INTERNAL_ERROR);
+        assertRaisedAlert(GetDisplayableItemHandler.DTO_FAILED_ALERT_TITLE);
+    }
+
+    /// A DTO that fails to serialise is a server defect, so it raises a WARNING admin alert and the request is answered with a bare 500.
+    @Test
+    void alertsWhenTheDtoCannotBeSerialised() {
+        registry.register(createDisplayable("d1", "Display 1", completedFuture(new UnserialisableDto("value"))));
+        clock.tick();
+        when(request.getParameter(GetDisplayableItemHandler.ID_PARAMETER)).thenReturn("d1");
+
+        dispatch();
+        clock.tick();
+
+        assertThat(asyncContext.isCompleted()).isTrue();
+        verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
+        assertRaisedAlert(GetDisplayableItemHandler.ENCODING_FAILED_ALERT_TITLE);
+    }
+
+    private void dispatch() {
+        dispatchedRequests.add(DispatchedRequest.dispatch(request, asyncContext, dispatched -> handler.handle(dispatched, response)));
+    }
+
+    private void assertRaisedAlert(String title) {
         assertThat(alertService.activeAlertsById().values())
                 .singleElement()
                 .satisfies(alert -> {
                     assertThat(alert.severity()).isEqualTo(AdminAlertSeverity.WARNING);
-                    assertThat(alert.title()).isEqualTo("Displayable DTO generation failed");
+                    assertThat(alert.title()).isEqualTo(title);
                 });
     }
 
@@ -144,7 +181,18 @@ class GetDisplayableItemHandlerTest {
         return displayable;
     }
 
-    private static Map<String, Object> parseJson(String json) {
-        return getAsUnchecked(() -> UIJson.MAPPER.readValue(json, new TypeReference<>() {}));
+    /// A DTO with a property that throws when read, standing in for a mis-mapped DTO that fails to serialise.
+    private record UnserialisableDto(String value) implements DisplayableDto {
+        // Jackson calls it reflectively when it serialises the DTO, which is the failure under test.
+        @SuppressWarnings("unused")
+        @Override
+        public String value() {
+            throw new IllegalStateException("not readable");
+        }
+
+        @Override
+        public String type() {
+            return "unserialisable";
+        }
     }
 }

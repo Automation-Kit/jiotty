@@ -1,7 +1,8 @@
 package net.yudichev.jiotty.user.ui;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.LinkedListMultimap;
+import com.google.common.collect.ImmutableListMultimap;
 import com.google.inject.BindingAnnotation;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -21,7 +22,6 @@ import net.yudichev.jiotty.user.ui.sse.SseChannel.SseSink;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static java.lang.annotation.ElementType.FIELD;
@@ -46,6 +47,11 @@ import static net.yudichev.jiotty.user.ui.UIServerModule.SubjectId;
 
 /// Streams one user's options and displayables to their open UI clients over the shared [SseChannel] transport.
 public final class SseServiceImpl extends BaseLifecycleComponent implements SseService {
+    @VisibleForTesting
+    static final String OPTIONS_UPDATE_EVENT = "options-update";
+    @VisibleForTesting
+    static final String DISPLAYABLE_UPDATE_EVENT = "displayable-update";
+
     private static final Logger logger = LogManager.getLogger(SseServiceImpl.class);
     private static final Pattern TAB_NAME_TO_ID_CONVERSION_PATTERN = Pattern.compile("[^A-Za-z0-9_-]");
 
@@ -56,6 +62,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     private final AdminAlertService alertService;
     private final Duration optionsThrottlingPeriod;
     private final String userId;
+    private final int maxStreams;
     private final MeterRegistry meterRegistry;
     private final Timer headersToSnapshotStartTimer;
     private final Timer displayablesSnapshotTimer;
@@ -76,6 +83,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                           @Dependency AdminAlertService alertService,
                           @OptionsThrottlingPeriod Duration optionsThrottlingPeriod,
                           @SubjectId String userId,
+                          @MaxStreams int maxStreams,
                           MeterRegistry meterRegistry) {
         this.executorProvider = checkNotNull(executorProvider, "executorProvider");
         this.optionRegistry = checkNotNull(optionRegistry, "optionRegistry");
@@ -84,6 +92,8 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
         this.alertService = checkNotNull(alertService, "alertService");
         this.optionsThrottlingPeriod = checkNotNull(optionsThrottlingPeriod, "optionsThrottlingPeriod");
         this.userId = checkNotNull(userId, "userId");
+        checkArgument(maxStreams > 0, "maxStreams must be positive: %s", maxStreams);
+        this.maxStreams = maxStreams;
         this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
         headersToSnapshotStartTimer = meterRegistry.timer("sse_headers_to_snapshot_start_seconds");
         displayablesSnapshotTimer = meterRegistry.timer("sse_displayables_snapshot_seconds");
@@ -94,15 +104,15 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     protected void doStart() {
         executor = executorProvider.get();
         // Named after the user, because the channel logs from container threads, whose names carry no subject.
-        channel = channelFactory.create("ui-" + userId, executor, UIJson.WRITER, SseChannel.UNBOUNDED);
+        channel = channelFactory.create("ui-" + userId, executor, UIJson.WRITER, maxStreams);
         channel.start();
         optionSnapshotThrottle = new ThrottlingConsumer<>(executor,
                                                           optionsThrottlingPeriod,
-                                                          _ -> ifStartedAndNotLifecycling(() -> sendOptionSnapshotTo(channel::broadcast)));
+                                                          _ -> ifStartedAndNotLifecycling(() -> sendOptionSnapshotTo(channel.broadcastSink())));
         optionRegistrySubscription = optionRegistry.subscribeToSnapshotChanges(() -> optionSnapshotThrottle.accept(null));
-        displayableUpdateSubscription = displayableRegistry.subscribeToUpdates(displayable -> sendDisplayableUpdate(displayable, channel::broadcast));
+        displayableUpdateSubscription = displayableRegistry.subscribeToUpdates(displayable -> sendDisplayableUpdate(displayable, channel.broadcastSink()));
         displayableRegistrationSubscription =
-                displayableRegistry.subscribeToRegistrations(displayable -> sendDisplayableUpdate(displayable, channel::broadcast));
+                displayableRegistry.subscribeToRegistrations(displayable -> sendDisplayableUpdate(displayable, channel.broadcastSink()));
     }
 
     @Override
@@ -116,7 +126,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     }
 
     @Override
-    public Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException {
+    public Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) {
         Timer.Sample headersToSnapshotStartSample = Timer.start(meterRegistry);
         // Read under the lifecycle lock in every state, because a stopped channel refuses the stream and releases its exchange.
         SseChannel streamChannel = whenNotLifecycling(() -> {
@@ -164,14 +174,15 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                             .collect(toFutureOfList())
                             .whenCompleteAsync((allOptionDtos, throwable) -> {
                                 if (throwable == null) {
-                                    var optionsByTabName = LinkedListMultimap.<String, OptionDto>create(allOptionDtos.size());
+                                    var optionsByTabNameBuilder = ImmutableListMultimap.<String, OptionDto>builderWithExpectedKeys(allOptionDtos.size());
                                     for (OptionDto optionDto : allOptionDtos) {
-                                        optionsByTabName.put(optionDto.tabName(), optionDto);
+                                        optionsByTabNameBuilder.put(optionDto.tabName(), optionDto);
                                     }
-                                    var tabs = new ArrayList<OptionsTab>(optionsByTabName.keySet().size());
+                                    ImmutableListMultimap<String, OptionDto> optionsByTabName = optionsByTabNameBuilder.build();
+                                    var tabsBuilder = ImmutableList.<OptionsTab>builderWithExpectedSize(optionsByTabName.keySet().size());
                                     optionsByTabName.asMap()
-                                                    .forEach((tabName, tabDtos) -> tabs.add(new OptionsTab(toDomId(tabName), tabName, tabDtos)));
-                                    target.send("options-update", new OptionsUpdateFrame(tabs));
+                                                    .forEach((tabName, tabDtos) -> tabsBuilder.add(new OptionsTab(toDomId(tabName), tabName, tabDtos)));
+                                    target.send(OPTIONS_UPDATE_EVENT, new OptionsUpdateFrame(tabsBuilder.build()));
                                 } else {
                                     // A defect in this server, and it leaves the user's options tab stale, so it goes to an operator.
                                     alertService.raise(ERROR, "Failed to generate options DTOs", logger, throwable);
@@ -194,7 +205,7 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
                 alertService.raise(ERROR, "Displayable failed to generate its DTO", logger, displayable.getId(), throwable);
                 return;
             }
-            target.send("displayable-update", new DisplayableUpdateFrame(displayable.getId(), displayableDto));
+            target.send(DISPLAYABLE_UPDATE_EVENT, displayable.getId(), new DisplayableUpdateFrame(displayable.getId(), displayableDto));
         }, executor);
     }
 
@@ -212,5 +223,12 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface OptionsThrottlingPeriod {
+    }
+
+    /// The most clients the user's displayables stream accepts at once.
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface MaxStreams {
     }
 }

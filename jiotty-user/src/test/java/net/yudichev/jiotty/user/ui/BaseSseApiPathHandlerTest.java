@@ -6,6 +6,7 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.StreamInvalidationSubscription;
 import net.yudichev.jiotty.user.ui.UIRequestAuthoriser.UIRequestContext;
+import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -13,8 +14,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 
 import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
@@ -48,7 +47,7 @@ class BaseSseApiPathHandlerTest {
     void setUp() {
         handler = new BaseSseApiPathHandler(PATH) {
             @Override
-            protected Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException {
+            protected Closeable startSse(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) {
                 return streamStarter.start(request, response, onStreamClosed);
             }
         };
@@ -73,7 +72,7 @@ class BaseSseApiPathHandlerTest {
     @Test
     void wrongPathReturns404() throws IOException {
         when(request.getPathInfo()).thenReturn(PATH + "/extra");
-        when(response.getWriter()).thenReturn(new PrintWriter(new StringWriter()));
+        when(response.getOutputStream()).thenReturn(new CapturingServletOutputStream());
 
         handler.handle(request, response);
 
@@ -82,7 +81,7 @@ class BaseSseApiPathHandlerTest {
     }
 
     @Test
-    void wrongMethodReturns405() throws IOException {
+    void wrongMethodReturns405() {
         when(request.getPathInfo()).thenReturn(PATH);
         when(request.getMethod()).thenReturn("POST");
 
@@ -93,7 +92,7 @@ class BaseSseApiPathHandlerTest {
     }
 
     @Test
-    void invalidationCallbackClosesSseStream() throws IOException {
+    void invalidationCallbackClosesSseStream() {
         configureValidRequest();
         var capturedInvalidationCallback = new MutableReference<Runnable>();
         when(streamStarter.start(any(), any(), any())).thenReturn(sseStream);
@@ -110,7 +109,7 @@ class BaseSseApiPathHandlerTest {
     }
 
     @Test
-    void sseClosedBeforeInvalidationSubscriptionSet_subscriptionClosedImmediately(@Mock Closeable invalidationSubscription) throws IOException {
+    void sseClosedBeforeInvalidationSubscriptionSet_subscriptionClosedImmediately(@Mock Closeable invalidationSubscription) {
         configureValidRequest();
         when(streamStarter.start(any(), any(), any())).thenAnswer(inv -> {
             // The stream ends while it is still being started, before the handler has subscribed to the request's invalidation.
@@ -126,7 +125,7 @@ class BaseSseApiPathHandlerTest {
     }
 
     @Test
-    void sseClosedAfterInvalidationSubscriptionSet_subscriptionReleasedThen(@Mock Closeable invalidationSubscription) throws IOException {
+    void sseClosedAfterInvalidationSubscriptionSet_subscriptionReleasedThen(@Mock Closeable invalidationSubscription) {
         configureValidRequest();
         var capturedOnStreamClosed = new MutableReference<Runnable>();
         when(streamStarter.start(any(), any(), any())).thenAnswer(inv -> {
@@ -152,6 +151,6 @@ class BaseSseApiPathHandlerTest {
     }
 
     interface StreamStarter {
-        Closeable start(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed) throws IOException;
+        Closeable start(HttpServletRequest request, HttpServletResponse response, Runnable onStreamClosed);
     }
 }

@@ -1,23 +1,20 @@
 package net.yudichev.jiotty.user.ui;
 
-import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
+import net.yudichev.jiotty.user.ui.io.Answer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ExtendWith(MockitoExtension.class)
 class StatusHistoryDisplayableTest {
     private static final Instant T1 = Instant.parse("2026-01-01T00:00:00Z");
     private static final Instant T2 = T1.plus(Duration.ofMinutes(1));
@@ -168,7 +165,7 @@ class StatusHistoryDisplayableTest {
                 String::valueOf,
                 DeviceStatus::lastChanged,
                 null,
-                (_, _) -> CompletableFuture.completedFuture(null),
+                _ -> CompletableFuture.completedFuture(Displayable.NO_DOWNLOAD),
                 HistoryDisplayableDto.Format.OBJECT);
 
         objectDisplayable.addEvent("k1", "raw-value", T1);
@@ -191,7 +188,7 @@ class StatusHistoryDisplayableTest {
                 String::valueOf,
                 _ -> customTime,
                 (status, appendable) -> Append.to(appendable, status.status()),
-                (_, _) -> CompletableFuture.completedFuture(null),
+                _ -> CompletableFuture.completedFuture(Displayable.NO_DOWNLOAD),
                 HistoryDisplayableDto.Format.PLAIN_TEXT);
 
         customDisplayable.addEvent("k1", "val", T1);
@@ -205,26 +202,30 @@ class StatusHistoryDisplayableTest {
     }
 
     @Test
-    void handleDownloadDelegatesToHandler(@Mock HttpServletResponse response) {
+    void handleDownloadDelegatesToHandler() {
         var handlerCalled = new MutableReference<>(false);
-        CompletableFuture<Void> expectedFuture = CompletableFuture.completedFuture(null);
+        CompletableFuture<Answer> expectedFuture = CompletableFuture.completedFuture(Answer.of(OK_200));
         var customDisplayable = new StatusHistoryDisplayable<String, String>(
                 "title",
                 10,
                 String::valueOf,
                 DeviceStatus::lastChanged,
                 (status, appendable) -> Append.to(appendable, status.status()),
-                (downloadId, resp) -> {
+                downloadId -> {
                     handlerCalled.set(true);
                     assertThat(downloadId).isEqualTo("dl-1");
-                    assertThat(resp).isSameAs(response);
                     return expectedFuture;
                 },
                 HistoryDisplayableDto.Format.PLAIN_TEXT);
 
-        CompletableFuture<Void> result = customDisplayable.handleDownload("dl-1", response);
+        CompletableFuture<Answer> result = customDisplayable.handleDownload("dl-1");
         assertThat(handlerCalled.get()).isTrue();
         assertThat(result).isSameAs(expectedFuture);
+    }
+
+    @Test
+    void aDisplayableBuiltWithoutADownloadHandlerAnswersEveryDownloadWithNoDownload() {
+        assertThat(displayable.handleDownload("dl-1")).isCompletedWithValue(Displayable.NO_DOWNLOAD);
     }
 
     @Test

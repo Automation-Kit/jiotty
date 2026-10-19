@@ -17,6 +17,8 @@ import net.yudichev.jiotty.user.push.PushDeviceModule;
 import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import net.yudichev.jiotty.user.ui.options.OptionPersistenceImpl;
+import net.yudichev.jiotty.user.ui.sse.SseAdmission;
+import net.yudichev.jiotty.user.ui.sse.SseChannel;
 import net.yudichev.jiotty.user.ui.sse.SseChannelModule;
 
 import java.lang.annotation.Annotation;
@@ -58,6 +60,8 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
     private final BindingSpec<VarStore> varStoreSpec;
     private final BindingSpec<AdminAlertService> adminAlertServiceSpec;
     private final BindingSpec<UIServer> uiServerSpec;
+    private final BindingSpec<SseAdmission> sseAdmissionSpec;
+    private final BindingSpec<Integer> maxSseStreamsSpec;
     private final List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs;
 
     private UIServerModule(BindingSpec<String> threadNameSuffixSpec,
@@ -65,12 +69,16 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                            BindingSpec<VarStore> varStoreSpec,
                            BindingSpec<AdminAlertService> adminAlertServiceSpec,
                            BindingSpec<UIServer> uiServerSpec,
+                           BindingSpec<SseAdmission> sseAdmissionSpec,
+                           BindingSpec<Integer> maxSseStreamsSpec,
                            List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs) {
         this.threadNameSuffixSpec = checkNotNull(threadNameSuffixSpec);
         this.optionsThrottlingPeriodSpec = checkNotNull(optionsThrottlingPeriodSpec);
         this.varStoreSpec = checkNotNull(varStoreSpec);
         this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec);
         this.uiServerSpec = checkNotNull(uiServerSpec);
+        this.sseAdmissionSpec = checkNotNull(sseAdmissionSpec);
+        this.maxSseStreamsSpec = checkNotNull(maxSseStreamsSpec);
         this.apiPathHandlerSpecs = ImmutableList.copyOf(apiPathHandlerSpecs);
     }
 
@@ -88,7 +96,16 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         adminAlertServiceSpec.bind(AdminAlertService.class)
                              .annotatedWith(Dependency.class)
                              .installedBy(this::installLifecycleComponentModule);
-        installLifecycleComponentModule(SseChannelModule.builder().setAlertService(annotatedWith(Dependency.class)).build());
+        sseAdmissionSpec.bind(SseAdmission.class)
+                        .annotatedWith(Dependency.class)
+                        .installedBy(this::installLifecycleComponentModule);
+        installLifecycleComponentModule(SseChannelModule.builder()
+                                                        .setAlertService(annotatedWith(Dependency.class))
+                                                        .setAdmission(annotatedWith(Dependency.class))
+                                                        .build());
+        maxSseStreamsSpec.bind(Integer.class)
+                         .annotatedWith(SseServiceImpl.MaxStreams.class)
+                         .installedBy(this::installLifecycleComponentModule);
 
         // Registered ahead of every component that resolves the executor in its doStart(): lifecycle components start in registration order, and
         // ExecutorProvider supplies the executor only once it has started itself.
@@ -171,12 +188,22 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         private BindingSpec<VarStore> varStoreSpec = boundTo(VarStore.class);
         private BindingSpec<AdminAlertService> adminAlertServiceSpec;
         private BindingSpec<UIServer> uiServerSpec = boundTo(UIServerImpl.class);
+        private BindingSpec<SseAdmission> sseAdmissionSpec = literally(SseAdmission.unlimited());
+        private BindingSpec<Integer> maxSseStreamsSpec = literally(SseChannel.UNBOUNDED);
 
         private Builder() {
         }
 
         public Builder setAdminAlertService(BindingSpec<AdminAlertService> adminAlertServiceSpec) {
             this.adminAlertServiceSpec = checkNotNull(adminAlertServiceSpec);
+            return this;
+        }
+
+        /// Caps the displayables stream at `maxStreamsSpec` clients, each also counted against `admissionSpec`'s budget; uncapped and unbudgeted when not
+        /// called.
+        public Builder withSseLimits(BindingSpec<SseAdmission> admissionSpec, BindingSpec<Integer> maxStreamsSpec) {
+            sseAdmissionSpec = checkNotNull(admissionSpec);
+            maxSseStreamsSpec = checkNotNull(maxStreamsSpec);
             return this;
         }
 
@@ -214,6 +241,8 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                                       varStoreSpec,
                                       adminAlertServiceSpec,
                                       uiServerSpec,
+                                      sseAdmissionSpec,
+                                      maxSseStreamsSpec,
                                       apiPathHandlerSpecs);
         }
     }

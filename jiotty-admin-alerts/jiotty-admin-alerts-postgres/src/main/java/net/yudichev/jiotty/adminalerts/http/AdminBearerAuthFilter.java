@@ -2,6 +2,7 @@ package net.yudichev.jiotty.adminalerts.http;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CharMatcher;
+import com.google.common.net.HttpHeaders;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import jakarta.servlet.Filter;
@@ -11,6 +12,7 @@ import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.common.rest.BearerTokens;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -18,6 +20,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -25,6 +28,8 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CHARSET_UTF_8;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_JSON;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 
 /// Validates the `Authorization: Bearer TOKEN` header on admin endpoints and stows the `X-Grafana-User` value as a request attribute consumed by downstream
@@ -38,7 +43,6 @@ public final class AdminBearerAuthFilter implements Filter {
     /// Ceiling on the caller-supplied claim; a Grafana login is far shorter.
     @VisibleForTesting
     static final int MAX_CLAIMED_ACTOR_LENGTH = 128;
-    private static final String BEARER_PREFIX = "Bearer ";
     /// The characters a Grafana login is made of, precomputed because this matches on every admin request.
     private static final CharMatcher CLAIMED_ACTOR_CHARACTERS = CharMatcher.inRange('a', 'z')
                                                                            .or(CharMatcher.inRange('A', 'Z'))
@@ -60,13 +64,8 @@ public final class AdminBearerAuthFilter implements Filter {
         checkArgument(servletResponse instanceof HttpServletResponse, "Expected HttpServletResponse");
         var request = (HttpServletRequest) servletRequest;
         var response = (HttpServletResponse) servletResponse;
-        String authHeader = request.getHeader("Authorization");
-        if (authHeader == null || !authHeader.startsWith(BEARER_PREFIX)) {
-            writeUnauthorized(response);
-            return;
-        }
-        String token = authHeader.substring(BEARER_PREFIX.length()).trim();
-        if (!matchesExpectedToken(token)) {
+        String token = BearerTokens.fromAuthorizationHeader(Optional.ofNullable(request.getHeader(HttpHeaders.AUTHORIZATION))).orElse(null);
+        if (token == null || !matchesExpectedToken(token)) {
             writeUnauthorized(response);
             return;
         }
@@ -76,8 +75,8 @@ public final class AdminBearerAuthFilter implements Filter {
 
     private static void writeUnauthorized(HttpServletResponse response) throws IOException {
         response.setStatus(UNAUTHORIZED_401);
-        response.setCharacterEncoding("utf-8");
-        response.setContentType("application/json");
+        response.setCharacterEncoding(CHARSET_UTF_8);
+        response.setContentType(CONTENT_TYPE_JSON);
         response.getWriter().print("{\"error\":\"Unauthorized\"}");
     }
 

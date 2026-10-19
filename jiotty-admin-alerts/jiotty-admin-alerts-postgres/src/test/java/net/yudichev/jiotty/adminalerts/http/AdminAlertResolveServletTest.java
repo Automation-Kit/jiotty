@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.adminalerts.http;
 
+import com.google.common.net.HttpHeaders;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.adminalerts.AdminAlertData;
@@ -25,8 +26,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -39,10 +45,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.BearerTokens.BEARER_PREFIX;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_JSON;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.CONFLICT_409;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NOT_FOUND_404;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
@@ -56,6 +67,9 @@ class AdminAlertResolveServletTest {
     private static final String VALID_TOKEN = "tok-correct";
     private static final String GRAFANA_USER = "alice@example.com";
     private static final String DOMAIN_NAME = "admin_alerts";
+    /// Bound and addressed on one concrete loopback address: `localhost` resolves to both families, so a request can reach whichever server in this JVM holds
+    /// that port number on the other one.
+    private static final String LOOPBACK = "127.0.0.1";
 
     @RegisterExtension
     private static final EmbeddedPostgresExtension postgres = new EmbeddedPostgresExtension();
@@ -90,6 +104,7 @@ class AdminAlertResolveServletTest {
         var mount = new AdminAlertResolveServletMount(new AdminBearerAuthFilter(VALID_TOKEN), new AdminAlertResolveServlet(alertService));
         server = new Server();
         var connector = new ServerConnector(server);
+        connector.setHost(LOOPBACK);
         connector.setPort(0);
         server.addConnector(connector);
         server.setHandler(new Handler.Sequence(mount.buildHandler()));
@@ -132,6 +147,18 @@ class AdminAlertResolveServletTest {
         HttpResponse<String> response = sendResolve("a-nonexistent", GRAFANA_USER);
 
         assertThat(response.statusCode()).isEqualTo(NOT_FOUND_404);
+    }
+
+    /// A stopped service throws from its resolve call, and the request is answered 500 at once.
+    @Test
+    void stoppedService_returns500() {
+        String alertId = raiseActive();
+        // tearDown stops it again, which a stopped component ignores.
+        alertService.stop();
+
+        HttpResponse<String> response = sendResolve(alertId, GRAFANA_USER);
+
+        assertThat(response.statusCode()).isEqualTo(INTERNAL_SERVER_ERROR_500);
     }
 
     @Test
@@ -183,6 +210,62 @@ class AdminAlertResolveServletTest {
 
         assertThat(response.statusCode()).isEqualTo(PAYLOAD_TOO_LARGE_413);
         assertThat(readResolvedBy(alertId)).isEmpty();
+    }
+
+    /// A note is kept as the operator wrote it; a blank one, an absent one, or no body at all resolves with none.
+    @ParameterizedTest
+    @CsvSource(nullValues = "-", value = {"'{\"note\":\"chased up\"}', chased up", "'{\"note\":\"   \"}', -", "'{}', -", "'', -"})
+    void resolve_keepsOnlyANoteWithContent(String body, @Nullable String expectedNote) {
+        String alertId = raiseActive();
+
+        assertThat(sendResolve(alertId, GRAFANA_USER, body).statusCode()).isEqualTo(NO_CONTENT_204);
+        assertThat(readColumnById(alertId, "resolution_note")).isEqualTo(Optional.ofNullable(expectedNote));
+    }
+
+    @Test
+    void malformedBody_returns400AndDoesNotResolve() {
+        String alertId = raiseActive();
+
+        assertThat(sendResolve(alertId, GRAFANA_USER, "not json").statusCode()).isEqualTo(BAD_REQUEST_400);
+        assertThat(readResolvedBy(alertId)).isEmpty();
+    }
+
+    /// A body the client stops sending part-way is answered at once, and resolves nothing.
+    @Test
+    void bodyCutOffMidUpload_returns400AndDoesNotResolve() {
+        String alertId = raiseActive();
+        String partialBody = "{\"note\":\"cut sh";
+        String head = "POST /admin/api/alerts/" + alertId + AdminAlertResolveServlet.RESOLVE_SUFFIX + " HTTP/1.1\r\n"
+                      + HttpHeaders.HOST + ": " + LOOPBACK + "\r\n"
+                      + HttpHeaders.AUTHORIZATION + ": " + BEARER_PREFIX + VALID_TOKEN + "\r\n"
+                      + HttpHeaders.CONTENT_LENGTH + ": " + (partialBody.length() + 100) + "\r\n\r\n";
+
+        String statusLine = getAsUnchecked(() -> {
+            try (var socket = new Socket(LOOPBACK, port)) {
+                socket.setSoTimeout(10_000);
+                socket.getOutputStream().write((head + partialBody).getBytes(UTF_8));
+                socket.shutdownOutput();
+                return new BufferedReader(new InputStreamReader(socket.getInputStream(), UTF_8)).readLine();
+            }
+        });
+
+        assertThat(statusLine).startsWith("HTTP/1.1 " + BAD_REQUEST_400);
+        assertThat(readResolvedBy(alertId)).isEmpty();
+    }
+
+    /// Only a single id followed by `/resolve` addresses an alert.
+    @ParameterizedTest
+    @ValueSource(strings = {"/admin/api/alerts/a-1/close", "/admin/api/alerts/%20/resolve", "/admin/api/alerts/a/b/resolve"})
+    void pathThatAddressesNoAlert_returns404(String path) {
+        var request = HttpRequest.newBuilder()
+                                 .uri(URI.create("http://" + LOOPBACK + ':' + port + path))
+                                 .POST(HttpRequest.BodyPublishers.noBody())
+                                 .header(HttpHeaders.AUTHORIZATION, BEARER_PREFIX + VALID_TOKEN)
+                                 .build();
+
+        HttpResponse<String> response = getAsUnchecked(() -> httpClient.send(request, HttpResponse.BodyHandlers.ofString()));
+
+        assertThat(response.statusCode()).isEqualTo(NOT_FOUND_404);
     }
 
     private String readDedupKey(String alertId) {
@@ -246,16 +329,17 @@ class AdminAlertResolveServletTest {
     }
 
     private HttpResponse<String> sendResolve(String alertId, @Nullable String grafanaUser, String body) {
-        return sendResolveAuthorized(alertId, "Bearer " + VALID_TOKEN, grafanaUser, body);
+        return sendResolveAuthorized(alertId, BEARER_PREFIX + VALID_TOKEN, grafanaUser, body);
     }
 
     private HttpResponse<String> sendResolveAuthorized(String alertId, @Nullable String authorization, @Nullable String grafanaUser, String body) {
         var requestBuilder = HttpRequest.newBuilder()
-                                        .uri(URI.create("http://localhost:" + port + "/admin/api/alerts/" + alertId + "/resolve"))
+                                        .uri(URI.create("http://" + LOOPBACK + ':' + port + "/admin/api/alerts/" + alertId
+                                                        + AdminAlertResolveServlet.RESOLVE_SUFFIX))
                                         .POST(HttpRequest.BodyPublishers.ofString(body))
-                                        .header("Content-Type", "application/json");
+                                        .header(HttpHeaders.CONTENT_TYPE, CONTENT_TYPE_JSON);
         if (authorization != null) {
-            requestBuilder.header("Authorization", authorization);
+            requestBuilder.header(HttpHeaders.AUTHORIZATION, authorization);
         }
         if (grafanaUser != null) {
             requestBuilder.header("X-Grafana-User", grafanaUser);

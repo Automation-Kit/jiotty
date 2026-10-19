@@ -24,6 +24,11 @@ public final class HttpStatuses {
     private HttpStatuses() {
     }
 
+    /// @return `true` when `code` is in the 1xx to 5xx classes HTTP defines.
+    public static boolean isValid(int code) {
+        return code >= 100 && code <= 599;
+    }
+
     /// @return `true` when `code` is a 2xx success.
     public static boolean isSuccess(int code) {
         return code / 100 == 2;

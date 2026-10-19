@@ -3,6 +3,7 @@ package net.yudichev.jiotty.common.lang;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.guava.GuavaModule;
@@ -132,5 +133,13 @@ public final class Json {
     /// @return a thread-safe writer for `type`
     public static ObjectWriter createWriterFor(Class<?> type) {
         return getAsUnchecked(() -> mapper.writerFor(type));
+    }
+
+    /// Returns an [ObjectReader] for `type`, caching Jackson's deserialiser for it once. Keep it in a `static final` field.
+    ///
+    /// @param type the value's compile-time type
+    /// @return a thread-safe reader for `type`
+    public static ObjectReader createReaderFor(Class<?> type) {
+        return mapper.readerFor(type);
     }
 }

@@ -56,6 +56,7 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.idempotent;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_EVENT_STREAM;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
@@ -278,7 +279,7 @@ final class MieleDishwasherImpl extends BaseLifecycleComponent implements MieleD
             request = new Request.Builder()
                     .url(baseUrl + "/devices/" + deviceId + "/events")
                     .header("Authorization", "Bearer " + accessToken)
-                    .header("Accept", "text/event-stream")
+                    .header("Accept", CONTENT_TYPE_EVENT_STREAM)
                     .build();
             reconnectBackoff = new ExponentialBackOff.Builder().setInitialIntervalMillis(10)
                                                                .setMaxIntervalMillis(10_000)

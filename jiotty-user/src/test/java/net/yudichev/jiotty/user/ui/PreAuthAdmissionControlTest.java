@@ -166,15 +166,15 @@ class PreAuthAdmissionControlTest {
         from(first, "10.0.0.1", null);
         from(second, "10.0.0.2", null);
 
-        assertThat(gauge(meterRegistry, "preauth_verify_inflight_limit")).isEqualTo(4.0);
-        assertThat(gauge(meterRegistry, "preauth_verify_inflight")).isZero();
+        assertThat(gauge(meterRegistry, PreAuthAdmissionControl.INFLIGHT_LIMIT_GAUGE)).isEqualTo(4.0);
+        assertThat(gauge(meterRegistry, PreAuthAdmissionControl.INFLIGHT_GAUGE)).isZero();
 
         control.tryAdmit(first);
         control.tryAdmit(second);
-        assertThat(gauge(meterRegistry, "preauth_verify_inflight")).isEqualTo(2.0);
+        assertThat(gauge(meterRegistry, PreAuthAdmissionControl.INFLIGHT_GAUGE)).isEqualTo(2.0);
 
         control.releaseInFlight();
-        assertThat(gauge(meterRegistry, "preauth_verify_inflight")).isEqualTo(1.0);
+        assertThat(gauge(meterRegistry, PreAuthAdmissionControl.INFLIGHT_GAUGE)).isEqualTo(1.0);
     }
 
     /// Each rejection is counted under its own outcome, which is what distinguishes an abusive source from a saturated server on the dashboard.
@@ -189,10 +189,10 @@ class PreAuthAdmissionControlTest {
         control.tryAdmit(request);          // second permit of this source's allowance, no slot free
         control.tryAdmit(request);          // allowance now spent
 
-        assertThat(rejections(meterRegistry, "rate_limited")).isEqualTo(1.0);
-        assertThat(rejections(meterRegistry, "verify_saturated")).isEqualTo(1.0);
+        assertThat(rejections(meterRegistry, GuardMetrics.OUTCOME_RATE_LIMITED)).isEqualTo(1.0);
+        assertThat(rejections(meterRegistry, GuardMetrics.OUTCOME_VERIFY_SATURATED)).isEqualTo(1.0);
         assertThat(control.tryAdmit(otherSource)).as("a fresh source is still refused while the pool is full").isEqualTo(VERIFY_SATURATED);
-        assertThat(rejections(meterRegistry, "verify_saturated")).isEqualTo(2.0);
+        assertThat(rejections(meterRegistry, GuardMetrics.OUTCOME_VERIFY_SATURATED)).isEqualTo(2.0);
     }
 
     /// A verification pool that admits nothing would shed all traffic, so it is rejected at construction. (The rate bound is validated by the rate limiter.)
@@ -208,7 +208,11 @@ class PreAuthAdmissionControlTest {
     }
 
     private static double rejections(SimpleMeterRegistry meterRegistry, String outcome) {
-        return meterRegistry.get(GuardMetrics.REJECTED_COUNTER).tag("guard", "pre_auth").tag("outcome", outcome).counter().count();
+        return meterRegistry.get(GuardMetrics.REJECTED_COUNTER)
+                            .tag(GuardMetrics.TAG_GUARD, PreAuthAdmissionControl.GUARD)
+                            .tag(GuardMetrics.TAG_OUTCOME, outcome)
+                            .counter()
+                            .count();
     }
 
     private PreAuthAdmissionControl control(boolean trustProxyHeaders) {

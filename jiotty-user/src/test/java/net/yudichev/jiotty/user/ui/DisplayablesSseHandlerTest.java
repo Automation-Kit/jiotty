@@ -11,8 +11,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.IOException;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
@@ -48,7 +46,7 @@ class DisplayablesSseHandlerTest {
     }
 
     @Test
-    void getDelegatesToSseService_andSubscribesToContextInvalidation() throws IOException {
+    void getDelegatesToSseService_andSubscribesToContextInvalidation() {
         when(request.getPathInfo()).thenReturn("/displayables/stream");
         when(request.getMethod()).thenReturn("GET");
         var context = new UIRequestContext(runtime, streamInvalidationSubscription);

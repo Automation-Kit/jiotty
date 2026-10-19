@@ -59,13 +59,15 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 /// segment is one of the [ServletMount] context paths registered with the server; any other path (browser auto-requests like `/favicon.ico`, probes, typos)
 /// collapses into a single `"unmatched"` bucket, and the root `/` stays as `/`. Tag values are drawn from this bounded identifier set only.
 final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpServer {
-    /// Bounded request-handling thread pool. SSE streams run async — their writes are marshalled onto the
-    /// UI executor, never held on a Jetty thread — so they do not occupy this pool per-stream; the max is
-    /// sized for concurrent short requests across the user base, not for stream count.
+    /// Bounded request-handling thread pool. Async responses, SSE streams included, are written without blocking, so a stream holds a thread of this pool
+    /// only while a write is being started; the max is sized for concurrent short requests across the user base, not for stream count.
     @VisibleForTesting
     static final int MAX_THREADS = 32;
     @VisibleForTesting
     static final int MIN_THREADS = 8;
+    /// The prefix of the name of each request-handling thread.
+    @VisibleForTesting
+    static final String THREAD_POOL_NAME = "ui-http";
     /// How long a connection may make no progress before Jetty closes it, reclaiming both an idle keep-alive connection and a peer that stops reading
     /// mid-response. A request suspended in async is exempt, held open by the servlet layer's own idle-timeout listener, so an SSE stream's lifetime is
     /// its token's expiry.
@@ -113,7 +115,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         // An internal invariant, not an argument check: the only production caller passes IDLE_TIMEOUT, and no binding or config reaches this.
         assert idleTimeout.isPositive() : "idleTimeout must be positive: " + idleTimeout;
         threadPool = new QueuedThreadPool(MAX_THREADS, MIN_THREADS);
-        threadPool.setName("ui-http");
+        threadPool.setName(THREAD_POOL_NAME);
         server = new Server(threadPool);
         var httpConfig = new HttpConfiguration();
         httpConfig.setFormEncodedMethods("POST");

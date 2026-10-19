@@ -2,16 +2,20 @@ package net.yudichev.jiotty.user.ui;
 
 import com.fasterxml.jackson.databind.ObjectWriter;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.user.ui.io.Answer;
+import net.yudichev.jiotty.user.ui.io.JsonBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 
-import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_JSON;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
 
-/// The `{"error": "<code>"}` envelope every handler in this package answers a failure with. `error` is a machine-readable code, and the client owns the
-/// sentence it shows for it, so no wording a user might read belongs in this field.
-record ErrorResponse(String error) {
+/// The `{"error": "<code>"}` envelope of a jiotty-user endpoint's failure response.
+///
+/// @param error a machine-readable code; must not carry wording meant for a user
+public record ErrorResponse(String error) {
     static final String INTERNAL_ERROR = "INTERNAL_ERROR";
     static final String MISSING_ID = "MISSING_ID";
     static final String UNKNOWN_ID = "UNKNOWN_ID";
@@ -20,16 +24,32 @@ record ErrorResponse(String error) {
 
     private static final Logger logger = LogManager.getLogger(ErrorResponse.class);
     private static final ObjectWriter WRITER = UIJson.createWriterFor(ErrorResponse.class);
+    /// The answer to a request that failed on this server's side.
+    public static final Answer SERVER_FAULT = createAnswer(INTERNAL_SERVER_ERROR_500, INTERNAL_ERROR);
 
-    /// Answers with `status` and `code`. A write that fails has nowhere left to report to — this response *is* the report — so it is logged and dropped.
+    public ErrorResponse {
+        checkNotNull(error, "error");
+    }
+
+    /// Creates an answer with `status` and this envelope for `code`.
+    public static Answer createAnswer(int status, String code) {
+        return Answer.of(status, createBody(code));
+    }
+
+    /// Writes `status` and this envelope for `code` to a response still on its servlet thread. A write that fails has nowhere left to report to — this
+    /// response *is* the report — so it is logged and dropped.
     static void write(HttpServletResponse response, int status, String code) {
         response.setStatus(status);
-        response.setCharacterEncoding("utf-8");
-        response.setContentType(CONTENT_TYPE_JSON);
+        JsonBody body = createBody(code);
+        body.applyHeadersTo(response);
         try {
-            WRITER.writeValue(response.getOutputStream(), new ErrorResponse(code));
+            body.writeTo(response.getOutputStream());
         } catch (IOException e) {
             logger.debug("Could not write the {} response", code, e);
         }
+    }
+
+    private static JsonBody createBody(String code) {
+        return new JsonBody(WRITER, new ErrorResponse(code));
     }
 }

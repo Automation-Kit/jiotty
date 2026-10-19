@@ -3,7 +3,9 @@ package net.yudichev.jiotty.user.ui;
 import com.google.inject.AbstractModule;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
+import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
+import com.google.inject.spi.ExposedBinding;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.adminalerts.LoggingAdminAlertServiceModule;
@@ -17,6 +19,7 @@ import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.Option;
+import net.yudichev.jiotty.user.ui.sse.SseAdmission;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -87,6 +90,18 @@ class UIServerModuleTest {
         Injector wrappedInjector = injectorWith(moduleBuilder().withUIServer(boundTo(PassThroughUIServer.class)));
 
         assertThat(wrappedInjector.getInstance(UIServer.class)).isSameAs(wrappedInjector.getInstance(UIServer.class));
+    }
+
+    /// The displayables stream takes its per-user cap, and the shared budget its streams count against, from [UIServerModule.Builder#withSseLimits].
+    @Test
+    void capsTheDisplayablesStreamWithTheLimitsItIsGiven() {
+        SseAdmission admission = SseAdmission.unlimited();
+        Injector limitedInjector = injectorWith(moduleBuilder().withSseLimits(literally(admission), literally(3)));
+        // Both bindings are private to the module, so they are read from its private injector, reached through the exposed UIServer binding.
+        Injector moduleInjector = ((ExposedBinding<?>) limitedInjector.getBinding(UIServer.class)).getPrivateElements().getInjector();
+
+        assertThat(moduleInjector.getInstance(Key.get(SseAdmission.class, UIServerModule.Dependency.class))).isSameAs(admission);
+        assertThat(moduleInjector.getInstance(Key.get(Integer.class, SseServiceImpl.MaxStreams.class))).isEqualTo(3);
     }
 
     private static UIServerModule.Builder moduleBuilder() {

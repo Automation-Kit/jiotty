@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.ui;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
@@ -25,8 +26,10 @@ import static net.yudichev.jiotty.common.lang.Closeable.noop;
 import static net.yudichev.jiotty.user.ui.Bindings.UIExecutor;
 
 public final class DisplayableRegistryImpl extends BaseLifecycleComponent implements DisplayableRegistry {
+    @VisibleForTesting
+    static final Duration UPDATE_THROTTLE = Duration.ofSeconds(1);
+
     private static final Logger logger = LogManager.getLogger(DisplayableRegistryImpl.class);
-    private static final Duration UPDATE_THROTTLE = Duration.ofSeconds(1);
 
     private final Map<String, Displayable> displayablesById = new LinkedHashMap<>();
     private final Listeners<Displayable> updateListeners = new Listeners<>();

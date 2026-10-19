@@ -1,35 +1,40 @@
 package net.yudichev.jiotty.user.ui;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectWriter;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.inject.BindingAnnotation;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.inject.Inject;
-import jakarta.servlet.AsyncContext;
-import jakarta.servlet.AsyncEvent;
-import jakarta.servlet.AsyncListener;
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.AdminAlertService;
+import net.yudichev.jiotty.common.rest.BearerTokens;
+import net.yudichev.jiotty.user.ui.io.Answer;
+import net.yudichev.jiotty.user.ui.io.AsyncExchange;
+import net.yudichev.jiotty.user.ui.io.Deadline;
+import net.yudichev.jiotty.user.ui.io.JsonBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
-import java.util.Map;
+import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.net.HttpHeaders.AUTHORIZATION;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.ERROR;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.CONFLICT_409;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
@@ -38,16 +43,54 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.user.ui.UserTokenAuthoriser.TokenAuthenticated;
 import static net.yudichev.jiotty.user.ui.UserTokenAuthoriser.TokenNotAuthenticated;
 import static net.yudichev.jiotty.user.ui.UserTokenAuthoriser.TokenNotAuthenticated.Reason;
+import static net.yudichev.jiotty.user.ui.UserTokenAuthoriser.TokenState;
 
 final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
+    @VisibleForTesting
+    static final String MISSING_TOKEN_MESSAGE = "Missing or invalid Authorization bearer token";
+    @VisibleForTesting
+    static final String PRE_AUTH_RATE_LIMITED_MESSAGE = "Too many authentication attempts";
+    @VisibleForTesting
+    static final String PER_UID_RATE_LIMITED_MESSAGE = "Too many requests";
+    @VisibleForTesting
+    static final String AUTHORISATION_FAILED_MESSAGE = "Authorisation failed";
+    @VisibleForTesting
+    static final String AUTHORISATION_FAILED_ALERT_TITLE = "Failed to complete authorisation of a request";
+    @VisibleForTesting
+    static final String AUTHORISATION_TIMED_OUT_ALERT_TITLE = "Authorisation of a request timed out";
+    /// How long a request waits for its token state: [HandlerDeadlines#TIMEOUT], the deadline of every handler's answer.
+    @VisibleForTesting
+    static final Duration AUTHORISATION_DEADLINE = HandlerDeadlines.TIMEOUT;
+    @VisibleForTesting
+    static final String AUTHORISE_TIMER = "ui_authorise_seconds";
+    /// The [#AUTHORISE_TIMER] tag naming how the authorisation ended.
+    @VisibleForTesting
+    static final String TAG_OUTCOME = "outcome";
+    @VisibleForTesting
+    static final String OUTCOME_MISSING_TOKEN = "missing_token";
+    @VisibleForTesting
+    static final String OUTCOME_AUTHENTICATED = "authenticated";
+    @VisibleForTesting
+    static final String OUTCOME_REJECTED = "rejected";
+
     private static final Logger logger = LogManager.getLogger(AuthenticatedUIRequestAuthoriser.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper(new JsonFactory());
-    private static final String AUTHORISE_TIMER = "ui_authorise_seconds";
+
+    private static final ObjectWriter FAILURE_WRITER = UIJson.createWriterFor(AuthorisationFailure.class);
+    private static final Answer MISSING_TOKEN_ANSWER = createFailureAnswer(statusFor(Reason.INVALID), Reason.INVALID, MISSING_TOKEN_MESSAGE);
+    private static final Answer PRE_AUTH_RATE_LIMITED_ANSWER =
+            createFailureAnswer(TOO_MANY_REQUESTS_429, Reason.TECHNICAL_FAILURE, PRE_AUTH_RATE_LIMITED_MESSAGE);
+    private static final Answer VERIFY_SATURATED_ANSWER =
+            createFailureAnswer(SERVICE_UNAVAILABLE_503, Reason.TECHNICAL_FAILURE, "Authentication temporarily unavailable");
+    private static final Answer PER_UID_RATE_LIMITED_ANSWER =
+            createFailureAnswer(TOO_MANY_REQUESTS_429, Reason.TECHNICAL_FAILURE, PER_UID_RATE_LIMITED_MESSAGE);
+    private static final Answer AUTHORISATION_FAILED_ANSWER =
+            createFailureAnswer(SERVICE_UNAVAILABLE_503, Reason.TECHNICAL_FAILURE, AUTHORISATION_FAILED_MESSAGE);
 
     private final UserTokenAuthoriser userTokenAuthoriser;
     private final PreAuthAdmissionControl admissionControl;
     private final PerUidRateLimiter perUidRateLimiter;
     private final AdminAlertService alertService;
+    private final Consumer<Throwable> encodingFailureHandler;
     private final MeterRegistry meterRegistry;
     private final Timer missingTokenAuthTimer;
     private final Timer authenticatedAuthTimer;
@@ -63,20 +106,20 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
         this.admissionControl = checkNotNull(admissionControl, "admissionControl");
         this.perUidRateLimiter = checkNotNull(perUidRateLimiter, "perUidRateLimiter");
         this.alertService = checkNotNull(alertService, "alertService");
+        encodingFailureHandler = failure -> alertService.raise(ERROR, "An authorisation failure could not be encoded", logger, failure);
         this.meterRegistry = checkNotNull(meterRegistry, "meterRegistry");
-        missingTokenAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "missing_token");
-        authenticatedAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "authenticated");
-        rejectedAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, "outcome", "rejected");
+        missingTokenAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, TAG_OUTCOME, OUTCOME_MISSING_TOKEN);
+        authenticatedAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, TAG_OUTCOME, OUTCOME_AUTHENTICATED);
+        rejectedAuthTimer = meterRegistry.timer(AUTHORISE_TIMER, TAG_OUTCOME, OUTCOME_REJECTED);
     }
 
     @Override
     public void authorise(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws IOException {
         Timer.Sample authSample = Timer.start(meterRegistry);
-        String token = bearerToken(request);
+        String token = BearerTokens.fromAuthorizationHeader(Optional.ofNullable(request.getHeader(AUTHORIZATION))).orElse(null);
         if (token == null) {
             authSample.stop(missingTokenAuthTimer);
-            writeAuthenticationFailure(response,
-                                       new TokenNotAuthenticated(Reason.INVALID, "Missing or invalid Authorization bearer token"));
+            write(response, MISSING_TOKEN_ANSWER);
             return;
         }
 
@@ -84,75 +127,94 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
         switch (admissionControl.tryAdmit(request)) {
             case RATE_LIMITED -> {
                 authSample.stop(rejectedAuthTimer);
-                writeAdmissionRejection(response, TOO_MANY_REQUESTS_429, "Too many authentication attempts");
+                write(response, PRE_AUTH_RATE_LIMITED_ANSWER);
                 return;
             }
             case VERIFY_SATURATED -> {
                 authSample.stop(rejectedAuthTimer);
-                writeAdmissionRejection(response, SERVICE_UNAVAILABLE_503, "Authentication temporarily unavailable");
+                write(response, VERIFY_SATURATED_ANSWER);
                 return;
             }
             case ADMITTED -> {
             }
         }
 
-        AsyncContext asyncContext = request.startAsync();
-        asyncContext.setTimeout(0);
         // The permit bounds concurrent *verifications*, so it is returned as soon as the token state has been acted on. A downstream handler may keep the
-        // async cycle open for hours (an SSE stream does), which would tie up a verification slot for that whole time. The `finally` covers every exit,
-        // including a throwable that propagates out of this body. The listener is a backstop for the paths that never reach the callback at all, and
-        // releases at onStartAsync too because a re-dispatch discards this listener (ServletRequest#startAsync clears the list after notifying it).
+        // request open for hours (an SSE stream does), which would tie up a verification slot for that whole time. The callback's `finally` covers every exit
+        // it reaches; the exchange's end is the backstop for a request that never reaches the callback at all.
         var permit = new SingleUseInFlightPermit(admissionControl);
-        asyncContext.addListener(permit.asBackstopListener());
-        userTokenAuthoriser.deliverTokenStateTo(token, state -> asyncContext.start(() -> {
-            try {
-                switch (state) {
-                    case TokenAuthenticated tokenAuthenticated when !perUidRateLimiter.tryAdmit(tokenAuthenticated.profile().id()) -> {
-                        // The user's identity is known only after verification, so this per-user limit runs here on the async body; the per-source guard runs
-                        // up front, before the request goes async.
-                        authSample.stop(rejectedAuthTimer);
-                        asUnchecked(() -> writeAdmissionRejection(response, TOO_MANY_REQUESTS_429, "Too many requests"));
-                        asyncContext.complete();
-                    }
-                    case TokenAuthenticated tokenAuthenticated -> {
-                        authSample.stop(authenticatedAuthTimer);
-                        tokenAuthenticated.customData()
-                                          .ifPresent(data -> request.setAttribute(UserTokenAuthoriser.CUSTOM_DATA_REQUEST_ATTRIBUTE, data));
-                        RequestContextFilter.setRequestContext(request, createRequestContext(token, tokenAuthenticated));
-                        asyncContext.dispatch();
-                    }
-                    case TokenNotAuthenticated tokenNotAuthenticated -> {
-                        authSample.stop(rejectedAuthTimer);
-                        asUnchecked(() -> writeAuthenticationFailure(response, tokenNotAuthenticated));
-                        asyncContext.complete();
-                    }
-                }
-            } catch (RuntimeException e) {
-                // Unlike a synchronous service() call, nothing above this body turns a thrown exception into a response: it would hang the request until the
-                // process dies. A client disconnecting mid-verification makes the write throw, so this path is a live one.
-                alertService.raise(ERROR, "Failed to complete authorisation of a request", logger, e);
-                completeExceptionally(asyncContext, response);
-            } finally {
-                permit.release();
-            }
-        }));
-    }
-
-    /// Completes the async cycle after the authorisation body failed, reporting the failure to the caller when the response is still uncommitted.
-    private static void completeExceptionally(AsyncContext asyncContext, HttpServletResponse response) {
+        var exchange = AsyncExchange.start(alertService, request, response, createDeadline(authSample));
+        exchange.whenEnded(permit::release);
         try {
-            if (!response.isCommitted()) {
-                writeAuthenticationFailure(response, new TokenNotAuthenticated(Reason.TECHNICAL_FAILURE, "Authorisation failed"));
-            }
-        } catch (IOException | RuntimeException e) {
-            logger.warn("Unable to report an authorisation failure to the caller", e);
-        } finally {
-            asyncContext.complete();
+            userTokenAuthoriser.deliverTokenStateTo(token, state -> exchange.runOnContainerThread(() -> {
+                try {
+                    actOnTokenState(token, state, exchange, authSample);
+                } finally {
+                    permit.release();
+                }
+            }));
+        } catch (RuntimeException e) {
+            // Thrown before any token state could arrive: the request has gone async, so nothing else would ever answer it.
+            failAuthorisation(exchange, e);
+            permit.release();
         }
     }
 
-    private static void writeAdmissionRejection(HttpServletResponse response, int status, String description) throws IOException {
-        writeJsonFailure(response, status, Reason.TECHNICAL_FAILURE, description);
+    /// Writes `answer` on the servlet thread, before the request goes async.
+    private static void write(HttpServletResponse response, Answer answer) throws IOException {
+        response.setStatus(answer.status());
+        answer.body().applyHeadersTo(response);
+        answer.body().writeTo(response.getOutputStream());
+    }
+
+    /// Creates the deadline of one request's authorisation, past which it is answered as failed, with an alert: the token state it waits on has not arrived.
+    private Deadline createDeadline(Timer.Sample authSample) {
+        return Deadline.after(AUTHORISATION_DEADLINE, AUTHORISATION_FAILED_ANSWER, encodingFailureHandler, _ -> {
+            authSample.stop(rejectedAuthTimer);
+            alertService.raise(WARNING, AUTHORISATION_TIMED_OUT_ALERT_TITLE, "No token state within " + AUTHORISATION_DEADLINE);
+        });
+    }
+
+    /// Answers the request, or dispatches it to its handler, by its token state. Runs on a container thread.
+    private void actOnTokenState(String token, TokenState state, AsyncExchange exchange, Timer.Sample authSample) {
+        // Empty once the deadline has answered the request.
+        exchange.claim().ifPresent(claim -> actOnTokenState(token, state, exchange, claim, authSample));
+    }
+
+    private void actOnTokenState(String token, TokenState state, AsyncExchange exchange, AsyncExchange.Claim claim, Timer.Sample authSample) {
+        try {
+            switch (state) {
+                case TokenAuthenticated tokenAuthenticated when !perUidRateLimiter.tryAdmit(tokenAuthenticated.profile().id()) -> {
+                    // The user's identity is known only after verification, so this per-user limit runs here on the async body; the per-source guard runs
+                    // up front, before the request goes async.
+                    authSample.stop(rejectedAuthTimer);
+                    claim.answer(PER_UID_RATE_LIMITED_ANSWER, encodingFailureHandler);
+                }
+                case TokenAuthenticated tokenAuthenticated -> {
+                    authSample.stop(authenticatedAuthTimer);
+                    ServletRequest request = claim.request();
+                    tokenAuthenticated.customData()
+                                      .ifPresent(data -> request.setAttribute(UserTokenAuthoriser.CUSTOM_DATA_REQUEST_ATTRIBUTE, data));
+                    RequestContextFilter.setRequestContext(request, createRequestContext(token, tokenAuthenticated));
+                    claim.dispatch();
+                }
+                case TokenNotAuthenticated tokenNotAuthenticated -> {
+                    authSample.stop(rejectedAuthTimer);
+                    Reason reason = tokenNotAuthenticated.reason();
+                    Answer failureAnswer = createFailureAnswer(statusFor(reason), reason, tokenNotAuthenticated.technicalDescription());
+                    claim.answer(failureAnswer, encodingFailureHandler);
+                }
+            }
+        } catch (RuntimeException e) {
+            // Nothing above this body turns a thrown exception into a response. The dispatch is the last step of its branch, so a throw always leaves the
+            // response this claim's to answer.
+            if (exchange.isOpen()) {
+                alertService.raise(ERROR, AUTHORISATION_FAILED_ALERT_TITLE, logger, e);
+            } else {
+                logger.debug("Could not act on a token state, as the exchange has ended", e);
+            }
+            claim.answer(AUTHORISATION_FAILED_ANSWER, encodingFailureHandler);
+        }
     }
 
     private UIRequestContext createRequestContext(String token, TokenAuthenticated tokenAuthenticated) {
@@ -169,28 +231,14 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
                                     }));
     }
 
-    private static @Nullable String bearerToken(HttpServletRequest request) {
-        String authHeader = request.getHeader("Authorization");
-        if (authHeader == null) {
-            return null;
-        }
-        if (!authHeader.startsWith("Bearer ")) {
-            return null;
-        }
-        String token = authHeader.substring("Bearer ".length()).trim();
-        return token.isBlank() ? null : token;
+    private void failAuthorisation(AsyncExchange exchange, RuntimeException failure) {
+        alertService.raise(ERROR, AUTHORISATION_FAILED_ALERT_TITLE, logger, failure);
+        exchange.answer(AUTHORISATION_FAILED_ANSWER, encodingFailureHandler);
     }
 
-    private static void writeAuthenticationFailure(HttpServletResponse response, TokenNotAuthenticated state) throws IOException {
-        writeJsonFailure(response, statusFor(state.reason()), state.reason(), state.technicalDescription());
-    }
-
-    /// Writes the failure envelope every rejection path shares, so its status, encoding and JSON keys have one owner.
-    private static void writeJsonFailure(HttpServletResponse response, int status, Reason reason, String description) throws IOException {
-        response.setCharacterEncoding("utf-8");
-        response.setContentType("application/json");
-        response.setStatus(status);
-        MAPPER.writeValue(response.getWriter(), Map.of("reason", reason.name(), "technicalDescription", description));
+    /// Creates the failure answer every rejection path shares, so its status, encoding and JSON keys have one owner.
+    private static Answer createFailureAnswer(int status, Reason reason, String description) {
+        return Answer.of(status, new JsonBody(FAILURE_WRITER, new AuthorisationFailure(reason.name(), description)));
     }
 
     private static int statusFor(Reason reason) {
@@ -204,45 +252,28 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
         };
     }
 
-    /// Returns an admitted request's verification permit to [PreAuthAdmissionControl] exactly once, however many of the completion paths run. The container
-    /// container can invoke several of them for one async cycle — Jetty follows [AsyncListener#onError] with [AsyncListener#onComplete] — and an unguarded
-    /// release would hand back a permit the cycle never took, growing the pool without bound.
+    private record AuthorisationFailure(String reason, String technicalDescription) {
+        private AuthorisationFailure {
+            checkNotNull(reason, "reason");
+            checkNotNull(technicalDescription, "technicalDescription");
+        }
+    }
+
+    /// Returns an admitted request's verification permit to [PreAuthAdmissionControl] exactly once. The token state's callback, a failure to deliver it and
+    /// the end of the request's exchange each release it, on different threads, and a second release would return a permit the request never took, growing
+    /// the pool without bound.
     private static final class SingleUseInFlightPermit {
         private final PreAuthAdmissionControl admissionControl;
         private final AtomicBoolean released = new AtomicBoolean();
 
         SingleUseInFlightPermit(PreAuthAdmissionControl admissionControl) {
-            this.admissionControl = admissionControl;
+            this.admissionControl = checkNotNull(admissionControl, "admissionControl");
         }
 
         void release() {
             if (released.compareAndSet(false, true)) {
                 admissionControl.releaseInFlight();
             }
-        }
-
-        AsyncListener asBackstopListener() {
-            return new AsyncListener() {
-                @Override
-                public void onComplete(AsyncEvent event) {
-                    release();
-                }
-
-                @Override
-                public void onTimeout(AsyncEvent event) {
-                    release();
-                }
-
-                @Override
-                public void onError(AsyncEvent event) {
-                    release();
-                }
-
-                @Override
-                public void onStartAsync(AsyncEvent event) {
-                    release();
-                }
-            };
         }
     }
 

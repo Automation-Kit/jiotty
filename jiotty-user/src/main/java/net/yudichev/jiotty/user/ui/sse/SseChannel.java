@@ -1,17 +1,14 @@
 package net.yudichev.jiotty.user.ui.sse;
 
 import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.reflect.TypeToken;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.BindingAnnotation;
 import com.google.inject.assistedinject.Assisted;
 import jakarta.inject.Inject;
-import jakarta.servlet.AsyncContext;
-import jakarta.servlet.AsyncEvent;
-import jakarta.servlet.AsyncListener;
-import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -19,7 +16,15 @@ import net.yudichev.jiotty.adminalerts.AdminAlertService;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import net.yudichev.jiotty.user.ui.ErrorResponse;
+import net.yudichev.jiotty.user.ui.io.Answer;
+import net.yudichev.jiotty.user.ui.io.AsyncExchange;
+import net.yudichev.jiotty.user.ui.io.ContainerOutput;
+import net.yudichev.jiotty.user.ui.io.Deadline;
+import net.yudichev.jiotty.user.ui.io.EndReason;
+import net.yudichev.jiotty.user.ui.io.OutputSource;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -29,55 +34,117 @@ import java.lang.annotation.Target;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.net.HttpHeaders.CACHE_CONTROL;
+import static com.google.common.net.HttpHeaders.CONNECTION;
+import static com.google.common.net.HttpHeaders.RETRY_AFTER;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.adminalerts.AdminAlertSeverity.WARNING;
+import static net.yudichev.jiotty.common.lang.AtomicIntegers.tryIncrementBelow;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.idempotent;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessageFormattable;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CHARSET_UTF_8;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_EVENT_STREAM;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
 import static net.yudichev.jiotty.common.security.LogRedaction.redact;
 
-/// The server-sent-events transport shared by every SSE feature: one channel, a client per request via [#open], writes through [SseStream] or [#broadcast].
-/// Client bookkeeping is confined to `executor`, which the owning feature also uses for the state it streams.
+/// The server-sent-events transport shared by every SSE feature: one channel, a client per request via [#open], writes through [SseStream] or
+/// [#broadcastSink()].
+/// Each client's frames are written by a [ContainerOutput] on container threads, so the channel executor never waits on a slow reader.
+// FieldAccessNotGuarded: the guard is the single-threaded executor rather than a lock, so IntelliJ cannot see that every access runs on it.
+@SuppressWarnings("FieldAccessNotGuarded")
 public final class SseChannel extends BaseIdempotentCloseable {
-    /// Passed as `maxClients` by a feature that does not cap concurrent streams.
+    /// The `maxClients` of a channel that accepts any number of concurrent streams.
     public static final int UNBOUNDED = Integer.MAX_VALUE;
+    /// The most concurrent streams one user's channel accepts: one per device the user is signed in on.
+    public static final int MAX_CLIENTS_PER_USER = 5;
+    /// The error code of a 503 refusing a stream because the user's channel is full.
+    @VisibleForTesting
+    static final String CHANNEL_FULL_ERROR = "USER_AT_CAPACITY";
+    /// How often every stream is written to, which is how a stream to a client that went away is found to have ended.
     @VisibleForTesting
     static final Duration HEARTBEAT_PERIOD = Duration.ofSeconds(15);
+    /// The `Retry-After` of a stream refused because its channel is full. Past two [heartbeats][#HEARTBEAT_PERIOD], because a client that went away holds
+    /// its slot until the second heartbeat write after it left: the first write to it succeeds locally.
+    @VisibleForTesting
+    static final Duration CHANNEL_FULL_RETRY_AFTER = Duration.ofSeconds(35);
+    @VisibleForTesting
+    static final Duration CLOSED_RETRY_AFTER = Duration.ofSeconds(1);
+    @VisibleForTesting
+    static final Duration AT_CAPACITY_RETRY_AFTER = Duration.ofSeconds(30);
+    /// The error code of a 503 refusing a stream because the channel is closed.
+    @VisibleForTesting
+    static final String CLOSED_ERROR = "UNAVAILABLE";
+    /// The error code of a 503 refusing a stream because the stream budget its channel shares is spent.
+    @VisibleForTesting
+    static final String AT_CAPACITY_ERROR = "AT_CAPACITY";
     @VisibleForTesting
     static final String SERIALISATION_FAILED_ALERT_TITLE = "SSE frame serialisation failed";
+    @VisibleForTesting
+    static final String OPEN_FAILED_ALERT_TITLE = "SSE stream could not be opened";
+
     private static final Logger logger = LogManager.getLogger(SseChannel.class);
+
+    /// The stream [#open] returns for one that failed to open and has been answered: what it is sent goes nowhere.
+    private static final SseStream FAILED_STREAM = new SseStream() {
+        @Override
+        public void send(String eventName, Object data) {
+        }
+
+        @Override
+        public void send(String eventName, String key, Object data) {
+        }
+
+        @Override
+        public void sendUnsuperseded(String eventName, Object data) {
+        }
+
+        @Override
+        public void close() {
+        }
+    };
+
     private final String name;
     private final SchedulingExecutor executor;
     private final CurrentDateTimeProvider currentDateTimeProvider;
     private final ObjectWriter jsonWriter;
     private final AdminAlertService alertService;
+    private final Consumer<Throwable> answerEncodingFailureHandler;
+    private final SseAdmission admission;
     private final int maxClients;
 
+    @GuardedBy("executor")
     private final Set<SseClient> sseClients = new HashSet<>();
-    /// Numbers clients on the servlet threads that open them, before any hop onto the channel executor.
+    /// Numbers clients on the servlet threads that open them, before any task for them runs on the channel executor.
     private final AtomicInteger clientIdSeqNumGenerator = new AtomicInteger();
-    /// Counts admitted clients for the synchronous capacity check in [#open], which runs on a servlet thread and so cannot read [#sseClients].
+    /// Admitted clients, incremented on the servlet thread opening a stream and decremented on whichever thread ends it or finds it cannot open; none of
+    /// those threads may read [#sseClients].
     private final AtomicInteger clientCount = new AtomicInteger();
+    private final SseSink broadcastSink = new BroadcastSink();
 
     private Closeable heartbeat = Closeable.noop();
 
     /// @param name         identifies this channel in log lines and in each client's id
-    /// @param jsonWriter   serialises event payloads; auto-close is stripped from it here, so an event write cannot close the shared stream. It must be
-    ///                     rooted at [Object] (`Json.createWriterFor(new TypeToken<>() {})`), because this channel writes its own `hello` and `ping` frames
-    ///                     through it as well as the feature's: a writer bound to one frame type fails on the `hello` that opens every stream, and the
-    ///                     client sees the event name with no data before the stream dies
-    /// @param alertService escalates a frame this channel cannot serialise, which is a defect in the feature's frame types
+    /// @param jsonWriter   serialises event payloads; auto-close is stripped from it here, so an event write cannot close the stream it writes into. It must
+    ///                     be rooted at [Object], as [Json#createWriterFor(TypeToken)] builds one from a [TypeToken] of [Object], because this channel
+    ///                     writes its own `hello` and `ping` frames through it as well as the feature's
+    /// @param alertService escalates a frame this channel cannot serialise, which is a defect in the feature's frame types, a stream it cannot open, and an
+    ///                     answer to a stream it cannot encode
+    /// @param admission    the budget of streams this channel shares with others, beside its own `maxClients`
     /// @param maxClients   the most concurrent streams this channel accepts, or [#UNBOUNDED]
     @Inject
     public SseChannel(@Assisted String name,
@@ -85,12 +152,15 @@ public final class SseChannel extends BaseIdempotentCloseable {
                       CurrentDateTimeProvider currentDateTimeProvider,
                       @Assisted ObjectWriter jsonWriter,
                       @Dependency AdminAlertService alertService,
+                      @Dependency SseAdmission admission,
                       @Assisted int maxClients) {
         this.name = checkNotNull(name, "name");
         this.executor = checkNotNull(executor, "executor");
         this.currentDateTimeProvider = checkNotNull(currentDateTimeProvider, "currentDateTimeProvider");
         this.jsonWriter = checkNotNull(jsonWriter, "jsonWriter").without(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
         this.alertService = checkNotNull(alertService, "alertService");
+        answerEncodingFailureHandler = failure -> alertService.raise(WARNING, "SSE stream answer could not be encoded", logger, failure);
+        this.admission = checkNotNull(admission, "admission");
         checkArgument(maxClients > 0, "maxClients must be positive, was %s", maxClients);
         this.maxClients = maxClients;
     }
@@ -102,163 +172,12 @@ public final class SseChannel extends BaseIdempotentCloseable {
     @Override
     protected void doClose() {
         closeSafelyIfNotNull(logger, heartbeat);
-        executor.execute("closeSseClients", () -> {
-            for (SseClient client : ImmutableList.copyOf(sseClients)) {
-                closeAndRemoveClient(client);
-            }
-        });
+        executor.execute("closeSseClients", () -> closeSafelyIfNotNull(logger, sseClients));
     }
 
-    /// Starts `request`'s async context and opens a stream on it. A stream this channel refuses has its exchange completed here and `onStreamClosed` run.
-    ///
-    /// @return the new stream, or a no-op handle when it was refused
-    /// @throws IOException as [#open] does
-    public Closeable startStream(HttpServletRequest request,
-                                 HttpServletResponse response,
-                                 Runnable onStreamClosed,
-                                 Consumer<? super SseStream> onOpen) throws IOException {
-        AsyncContext asyncContext = request.startAsync();
-        Optional<SseStream> stream = open(asyncContext, response, onStreamClosed, onOpen);
-        if (stream.isEmpty()) {
-            // Complete the exchange and report the stream closed, so the request does not hang on an async context nobody owns and the caller releases
-            // whatever it attached to the stream.
-            logger.debug("[SSE {}] stream refused", name);
-            asyncContext.complete();
-            onStreamClosed.run();
-            return Closeable.noop();
-        }
-        return stream.get();
-    }
-
-    /// Opens an SSE stream on an `asyncContext` the caller has already started, setting its timeout to zero.
-    ///
-    /// @param onStreamClosed run once when the stream ends, however it ends
-    /// @param onOpen         receives the new stream on the channel executor, for the initial image; it is the same object this method returns, so a feature
-    ///                         can attach per-stream state to it there without racing the handle's own publication
-    /// @return the new stream, or empty when the channel is at capacity or already closed — the caller then writes its own rejection
-    /// @throws IOException      if the event-stream headers could not be written
-    /// @throws RuntimeException if the stream could not be opened. A response already committed has had its context completed here, so the caller reports the
-    ///                         failure without writing to it; an uncommitted one is still the caller's to answer on
-    public Optional<SseStream> open(AsyncContext asyncContext,
-                                    HttpServletResponse response,
-                                    Runnable onStreamClosed,
-                                    Consumer<? super SseStream> onOpen) throws IOException {
-        if (isClosed() || !admitClient()) {
-            return Optional.empty();
-        }
-        SseClient client;
-        int clientIdSeqNum = clientIdSeqNumGenerator.incrementAndGet();
-        ServletRequest request = asyncContext.getRequest();
-        // The remote host is the client's IP, which is personal data; the sequence number already identifies the client, so the host is kept only as a
-        // redacted hint.
-        String clientId = name + '/' + clientIdSeqNum + '/' + redact(request.getRemoteHost()) + ':' + request.getRemotePort();
-        try {
-            asyncContext.setTimeout(0);
-            response.setCharacterEncoding("utf-8");
-            response.setContentType("text/event-stream");
-            response.setHeader("Cache-Control", "no-cache");
-            response.setHeader("Connection", "keep-alive");
-            response.setHeader("X-Accel-Buffering", "no");
-            response.setHeader("X-Client-Id-Seq-Num", String.valueOf(clientIdSeqNum));
-            response.flushBuffer();
-            client = new SseClient(asyncContext, clientId, clientIdSeqNum, idempotent(onStreamClosed::run));
-        } catch (IOException e) {
-            // The client was admitted against the cap but never created, so release its slot. The context is left for the caller: an I/O failure this early
-            // means the connection itself is gone, which its own error path already handles.
-            clientCount.decrementAndGet();
-            throw e;
-        } catch (RuntimeException e) {
-            clientCount.decrementAndGet();
-            if (response.isCommitted()) {
-                // The headers are already on the wire, so the caller has no response left to answer on — completing here is what makes this method's contract
-                // true. Uncommitted, the caller still owns the exchange and writes its own failure, so completing would pull it out from under that write.
-                completeQuietly(asyncContext, clientId);
-            }
-            throw e;
-        }
-        logger.debug("[SSE {}] created", clientId);
-        try {
-            executor.execute("openSseClient", () -> registerClient(asyncContext, client, onOpen));
-        } catch (RuntimeException e) {
-            // The registration task was refused, so nothing downstream will ever close this client: end it here, releasing its slot and completing its context.
-            client.closeNow();
-            throw e;
-        }
-        return Optional.of(client);
-    }
-
-    /// Every exit leaves `client` either fully wired up — in the connected set, preamble written, disconnect listener armed, initial image delivered — or
-    /// closed and dropped from the set.
-    private void registerClient(AsyncContext asyncContext, SseClient client, Consumer<? super SseStream> onOpen) {
-        String clientId = client.clientId;
-        if (isClosed()) {
-            // Closed between open() enqueuing this task and the executor draining it during teardown. The state this initial image reads has stopped too,
-            // so skip delivery and just close the freshly-created client to complete its stream and fire onStreamClosed — close()'s client drain never
-            // saw this client, as it was not yet in sseClients when it ran.
-            closeAndRemoveClient(client);
-            return;
-        }
-        sseClients.add(client);
-        client.init();
-        if (client.closed) {
-            // The hello frame could not be written, so the stream is already gone and its initial image has nowhere to go.
-            closeAndRemoveClient(client);
-            return;
-        }
-        try {
-            asyncContext.addListener(new AsyncListener() {
-                @Override
-                public void onComplete(AsyncEvent event) {
-                    logger.debug("[SSE {}] onComplete", clientId);
-                    removeClient();
-                }
-
-                @Override
-                public void onTimeout(AsyncEvent event) {
-                    logger.debug("[SSE {}] onTimeout", clientId);
-                    removeClient();
-                }
-
-                @Override
-                public void onError(AsyncEvent event) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("[SSE {}] onError: {}", clientId, humanReadableMessageFormattable(event.getThrowable()));
-                    }
-                    removeClient();
-                }
-
-                @Override
-                public void onStartAsync(AsyncEvent event) {
-                    logger.debug("[SSE {}] onStartAsync", clientId);
-                }
-
-                private void removeClient() {
-                    client.close();
-                }
-            });
-        } catch (RuntimeException e) {
-            logger.debug("[SSE {}] asyncContext.addListener failed", clientId, e);
-            closeAndRemoveClient(client);
-            return;
-        }
-        logger.debug("[SSE {}] delivering initial image", clientId);
-        try {
-            onOpen.accept(client);
-        } catch (RuntimeException e) {
-            // `onOpen` is feature code; a throw from it ends this stream, which releases the client's slot and completes its response.
-            logger.debug("[SSE {}] failed to deliver the initial image", clientId, e);
-            closeAndRemoveClient(client);
-        }
-    }
-
-    /// Marshals onto the channel executor, so a feature broadcasting from its own thread cannot interleave with this channel's writes.
-    public void broadcast(String eventName, Object data) {
-        // Over a copy: a client whose write fails drops itself from the connected set as part of that failure.
-        executor.tryExecute("broadcastSseEvent", () -> {
-            for (SseClient client : ImmutableList.copyOf(sseClients)) {
-                client.sendEvent(eventName, data);
-            }
-        });
+    /// Returns the sink that sends every event it is given to every open stream.
+    public SseSink broadcastSink() {
+        return broadcastSink;
     }
 
     /// Safe to call from any thread.
@@ -267,150 +186,386 @@ public final class SseChannel extends BaseIdempotentCloseable {
         return clientCount.get();
     }
 
-    /// Claims a slot against [#maxClients], or reports that the channel is full. Compare-and-set so two simultaneous opens at the limit cannot both admit.
-    private boolean admitClient() {
-        int current;
-        do {
-            current = clientCount.get();
-            if (current >= maxClients) {
-                if (logger.isDebugEnabled()) {
-                    logger.debug("[SSE {}] refusing client: at capacity of {}", name, maxClients);
-                }
-                return false;
+    /// Starts `request`'s exchange and opens a stream on it, answering a refused stream with a 503 carrying the refusal's code and a stream that fails to
+    /// open with an error. Its `onStreamClosed` runs in both cases.
+    ///
+    /// @return the new stream, or a no-op handle when it was refused or failed to open
+    public Closeable startStream(HttpServletRequest request,
+                                 HttpServletResponse response,
+                                 Runnable onStreamClosed,
+                                 Consumer<? super SseStream> onOpen) {
+        var exchange = AsyncExchange.start(alertService, request, response, Deadline.none());
+        return switch (tryOpen(exchange, onStreamClosed, onOpen)) {
+            case Opened(SseStream stream) -> stream;
+            case Refused(Refusal refusal) -> {
+                logger.debug("[SSE {}] stream refused: {}", name, refusal);
+                exchange.answer(refusal.answer, answerEncodingFailureHandler);
+                onStreamClosed.run();
+                yield Closeable.noop();
             }
-        } while (!clientCount.compareAndSet(current, current + 1));
-        return true;
+            case FailedToOpen _ -> Closeable.noop();
+        };
     }
 
-    /// Removes in a `finally`, so a client whose teardown throws still leaves the connected set and stops taking a failed write on every broadcast.
-    private void closeAndRemoveClient(SseClient client) {
+    /// Opens an SSE stream on an `exchange` the caller has started and not claimed.
+    ///
+    /// @param onStreamClosed run once when the stream ends, however it ends: on the channel executor; on the thread that ended the stream when that
+    ///                       executor has shut down or rejected the task; or on the calling thread when the stream fails to open
+    /// @param onOpen         invoked on the channel executor with the new stream, the same object this method returns, before any other task for it
+    /// @return the new stream; one that ignores what it is sent when the stream failed to open, which has been answered here; or empty when the channel is at
+    ///         capacity, its shared budget is spent, or it is closed, in which case nothing has been written to the response and the caller answers it
+    public Optional<SseStream> open(AsyncExchange exchange, Runnable onStreamClosed, Consumer<? super SseStream> onOpen) {
+        return switch (tryOpen(exchange, onStreamClosed, onOpen)) {
+            case Opened(SseStream stream) -> Optional.of(stream);
+            case Refused _ -> Optional.empty();
+            case FailedToOpen _ -> Optional.of(FAILED_STREAM);
+        };
+    }
+
+    private OpenOutcome tryOpen(AsyncExchange exchange, Runnable onStreamClosed, Consumer<? super SseStream> onOpen) {
+        if (isClosed()) {
+            return new Refused(Refusal.CLOSED);
+        }
+        // The two admissions are separate counters, so a stream refused by the shared budget holds its per-channel slot for a moment, and a concurrent open
+        // of the same channel can be refused CHANNEL_FULL meanwhile, counted under user_at_capacity. That open would have met the spent budget a moment
+        // later, so only the code of its 503 differs.
+        if (!admitClient()) {
+            admission.recordChannelFull();
+            return new Refused(Refusal.CHANNEL_FULL);
+        }
+        if (!admission.tryAdmit()) {
+            clientCount.decrementAndGet();
+            return new Refused(Refusal.AT_CAPACITY);
+        }
+        // Claimed only once admitted, so a refusal is left for the caller to answer.
+        Optional<AsyncExchange.Claim> heldClaim = exchange.claim();
+        if (heldClaim.isEmpty()) {
+            // Something answered the exchange first, so there is nothing left to stream to.
+            releaseSlots();
+            return new Refused(Refusal.CLOSED);
+        }
+        AsyncExchange.Claim claim = heldClaim.get();
+        int clientIdSeqNum = clientIdSeqNumGenerator.incrementAndGet();
+        SseClient client;
         try {
-            client.closeNow();
-        } finally {
-            sseClients.remove(client);
+            ServletRequest request = claim.request();
+            // The remote host is the client's IP, which is personal data; the sequence number already identifies the client, so the host is kept only as a
+            // redacted hint.
+            String clientId = name + '/' + clientIdSeqNum + '/' + redact(request.getRemoteHost()) + ':' + request.getRemotePort();
+            HttpServletResponse response = claim.response();
+            response.setCharacterEncoding(CHARSET_UTF_8);
+            response.setContentType(CONTENT_TYPE_EVENT_STREAM);
+            response.setHeader(CACHE_CONTROL, "no-cache");
+            response.setHeader(CONNECTION, "keep-alive");
+            response.setHeader("X-Accel-Buffering", "no");
+            response.setHeader("X-Client-Id-Seq-Num", String.valueOf(clientIdSeqNum));
+            response.flushBuffer();
+            client = new SseClient(claim, clientId, idempotent(onStreamClosed::run));
+        } catch (IOException e) {
+            // The connection has gone before the stream carried anything.
+            if (logger.isDebugEnabled()) {
+                logger.debug("[SSE {}] could not open stream {}: the client has gone", name, clientIdSeqNum, e);
+            }
+            claim.complete();
+            return failedToOpen(onStreamClosed);
+        } catch (RuntimeException e) {
+            if (exchange.isOpen()) {
+                alertService.raise(WARNING, OPEN_FAILED_ALERT_TITLE, logger, e);
+            } else if (logger.isDebugEnabled()) {
+                // The exchange ended first, as when the client went away, which explains the failure.
+                logger.debug("[SSE {}] could not open stream {}: the exchange has ended", name, clientIdSeqNum, e);
+            }
+            // The holder of the claim answers, and nobody else may: committed, the headers are on the wire and only completing is left.
+            if (claim.response().isCommitted()) {
+                claim.complete();
+            } else {
+                claim.answer(ErrorResponse.SERVER_FAULT, answerEncodingFailureHandler);
+            }
+            return failedToOpen(onStreamClosed);
+        }
+        logger.debug("[SSE {}] created", client.clientId);
+        try {
+            client.start(new HelloFrame(clientIdSeqNum, currentDateTimeProvider.currentInstant()));
+        } catch (RuntimeException e) {
+            // The container would not let the stream be written: end it, which gives back its slots and completes its exchange.
+            logger.debug("[SSE {}] could not start writing", client.clientId, e);
+            client.close();
+            return new Opened(client);
+        }
+        try {
+            executor.execute("openSseClient", () -> registerClient(client, onOpen));
+        } catch (RuntimeException e) {
+            // The registration task was rejected, so nothing downstream will deliver the initial image: end the stream, which gives back its slots. Its
+            // removal goes to the same full queue, so onStreamClosed runs here; it runs once however many paths reach it.
+            client.close();
+            closeSafelyIfNotNull(logger, client.onStreamClosed);
+            throw e;
+        }
+        return new Opened(client);
+    }
+
+    /// Claims a slot against [#maxClients], or reports that the channel is full. Compare-and-set so two simultaneous opens at the limit cannot both admit.
+    private boolean admitClient() {
+        if (tryIncrementBelow(clientCount, maxClients)) {
+            return true;
+        }
+        if (logger.isDebugEnabled()) {
+            logger.debug("[SSE {}] refusing client: at capacity of {}", name, maxClients);
+        }
+        return false;
+    }
+
+    private void releaseSlots() {
+        clientCount.decrementAndGet();
+        admission.release();
+    }
+
+    /// Gives back the slots of a stream admitted and never created, and runs its `onStreamClosed`: the stream has ended before it began.
+    private OpenOutcome failedToOpen(Runnable onStreamClosed) {
+        releaseSlots();
+        // Logged rather than propagated: the callback is feature code.
+        closeSafelyIfNotNull(logger, onStreamClosed::run);
+        return FailedToOpen.INSTANCE;
+    }
+
+    /// Every exit leaves `client` either in the connected set with its initial image offered, or closed.
+    private void registerClient(SseClient client, Consumer<? super SseStream> onOpen) {
+        if (isClosed()) {
+            // Closed between tryOpen() enqueuing this task and the executor draining it during teardown. The state this initial image reads has stopped too, so
+            // skip delivery and end the stream — close()'s client sweep never saw this client, as it was not yet in sseClients when it ran.
+            client.close();
+            return;
+        }
+        if (client.isClosed()) {
+            // The stream ended before it was registered. Its end queued a removal that finds nothing to remove, and that removal may also have been
+            // rejected, so onStreamClosed runs here; it runs once however many of the two reach it.
+            closeSafelyIfNotNull(logger, client.onStreamClosed);
+            return;
+        }
+        sseClients.add(client);
+        logger.debug("[SSE {}] delivering initial image", client.clientId);
+        try {
+            onOpen.accept(client);
+        } catch (RuntimeException e) {
+            // `onOpen` is feature code; a throw from it ends this stream, which releases the client's slots and completes its response.
+            logger.debug("[SSE {}] failed to deliver the initial image", client.clientId, e);
+            client.close();
         }
     }
 
     private void sendHeartbeat() {
-        var ping = new PingFrame(currentDateTimeProvider.currentInstant());
-        // Over a copy: a client whose write fails drops itself from the connected set as part of that failure.
+        var ping = SseFrame.createSuperseding("ping", "ping", new PingFrame(currentDateTimeProvider.currentInstant()), jsonWriter);
+        // Over a copy: removeAndNotify takes an ended client out of the set this walks.
         for (SseClient client : ImmutableList.copyOf(sseClients)) {
-            if (client.closeRejected) {
-                closeAndRemoveClient(client);
+            if (client.isClosed()) {
+                client.removeAndNotify();
             } else {
-                client.sendEvent("ping", ping);
+                client.offer(ping);
             }
         }
     }
 
-    /// Completes `asyncContext`, reporting rather than propagating a failure to do so: every caller is already unwinding some other failure, and a context
-    /// that refuses to complete is the container's business, not theirs.
-    private static void completeQuietly(AsyncContext asyncContext, String clientId) {
-        try {
-            asyncContext.complete();
-        } catch (RuntimeException e) {
-            logger.debug("[SSE {}] asyncContext.complete failed", clientId, e);
-        }
-    }
-
-    /// Somewhere events can be written: one open stream, or [SseChannel#broadcast] for all of them.
+    /// Somewhere events can be written: one open stream, or [SseChannel#broadcastSink()] for all of them. An unsent event is superseded by a later one
+    /// carrying the same key, and its `data` must be immutable, because a container thread serialises it after the send has returned.
     public interface SseSink {
-        /// Sends one event. Safe to call from any thread.
+        /// Sends one event, superseding an unsent one of the same name. Safe to call from any thread.
         void send(String eventName, Object data);
+
+        /// Sends one event, superseding an unsent one carrying the same `key`. Safe to call from any thread.
+        void send(String eventName, String key, Object data);
+
+        /// Sends one event that no later one supersedes. Safe to call from any thread.
+        void sendUnsuperseded(String eventName, Object data);
     }
 
     /// One open stream, held for as long as the feature is streaming to that client. [Closeable#close()] ends it and runs its `onStreamClosed` callback.
     public interface SseStream extends SseSink, Closeable {
     }
 
-    // HardcodedLineSeparator: the SSE wire format specifies LF, so the platform separator would corrupt the frames on any host that does not use it.
-    @SuppressWarnings("HardcodedLineSeparator")
-    private final class SseClient implements SseStream {
-        private final AsyncContext asyncContext;
-        private final ServletOutputStream out;
-        private final int clientIdSeqNum;
+    /// An [SseSink] that builds each event's [SseFrame] once and passes it to [#deliver].
+    private interface FrameSink extends SseSink {
+        /// Returns the writer the frames' payloads are serialised through.
+        ObjectWriter frameWriter();
+
+        void deliver(SseFrame frame);
+
+        @Override
+        default void send(String eventName, Object data) {
+            deliver(SseFrame.createSuperseding(eventName, eventName, data, frameWriter()));
+        }
+
+        @Override
+        default void send(String eventName, String key, Object data) {
+            deliver(SseFrame.createSuperseding(eventName, key, data, frameWriter()));
+        }
+
+        @Override
+        default void sendUnsuperseded(String eventName, Object data) {
+            deliver(SseFrame.createUnsuperseded(eventName, data, frameWriter()));
+        }
+    }
+
+    /// A [FrameSink] that marshals each frame onto the channel executor, which holds the set of clients.
+    private final class BroadcastSink implements FrameSink {
+        @Override
+        public ObjectWriter frameWriter() {
+            return jsonWriter;
+        }
+
+        @Override
+        public void deliver(SseFrame frame) {
+            executor.tryExecute("broadcastSseEvent", () -> {
+                for (SseClient client : sseClients) {
+                    client.offer(frame);
+                }
+            });
+        }
+    }
+
+    /// One client's stream, closed once that stream has ended, however it ended.
+    private final class SseClient extends BaseIdempotentCloseable implements SseStream, FrameSink, OutputSource {
         private final String clientId;
         private final Closeable onStreamClosed;
-        private boolean closed;
-        /// Set from any thread when a close could not be queued, so [#sendHeartbeat()] ends the stream instead.
-        private volatile boolean closeRejected;
+        private final PendingFrames pendingFrames = new PendingFrames();
+        private final ContainerOutput output;
+        /// Set by whichever offer first finds the client too far behind, on whichever thread made it.
+        private final AtomicBoolean droppedForFallingBehind = new AtomicBoolean();
 
-        SseClient(AsyncContext asyncContext, String clientId, int clientIdSeqNum, Closeable onStreamClosed) throws IOException {
-            this.asyncContext = checkNotNull(asyncContext);
-            this.clientId = checkNotNull(clientId);
-            out = asyncContext.getResponse().getOutputStream();
-            this.clientIdSeqNum = clientIdSeqNum;
-            this.onStreamClosed = checkNotNull(onStreamClosed);
+        /// @throws IOException if the response's output stream cannot be opened
+        @SuppressWarnings("ThisEscapedInObjectConstruction")
+        // the output only stores this client, and calls it no earlier than start()
+        SseClient(AsyncExchange.Claim claim, String clientId, Closeable onStreamClosed) throws IOException {
+            this.clientId = checkNotNull(clientId, "clientId");
+            this.onStreamClosed = checkNotNull(onStreamClosed, "onStreamClosed");
+            output = claim.createOutput(this, this::onEnded);
         }
 
-        /// Marshals onto the channel executor, so a feature streaming from its own thread cannot interleave with this channel's writes.
-        @Override
-        public void send(String eventName, Object data) {
-            executor.tryExecute("sendSseEvent", () -> sendEvent(eventName, data));
+        /// Offers the frame that opens the stream, then starts writing it. Runs on the thread opening the stream.
+        void start(HelloFrame hello) {
+            pendingFrames.offer(SseFrame.createOpening("hello", hello, jsonWriter));
+            output.start();
         }
 
-        /// Ends the stream on the channel executor, or on the next heartbeat when the executor's queue is full: the heartbeat is scheduled rather than
-        /// queued, so it still runs, and a stream past its authorisation is closed within one [#HEARTBEAT_PERIOD].
+        /// Ends the stream; an end the stream reaches on its own closes this client as well, so this runs at most once either way.
         @Override
-        public void close() {
+        protected void doClose() {
+            output.close();
+        }
+
+        @Override
+        public ObjectWriter frameWriter() {
+            return jsonWriter;
+        }
+
+        @Override
+        public void deliver(SseFrame frame) {
+            offer(frame);
+        }
+
+        @Override
+        public List<SseFrame> takeReady() {
+            return pendingFrames.takeAll();
+        }
+
+        @Override
+        public boolean hasReady() {
+            return !pendingFrames.isEmpty();
+        }
+
+        @Override
+        public boolean isFinished() {
+            return false;
+        }
+
+        void offer(SseFrame frame) {
+            // An expression, so an outcome added to the enum is a compile error here.
+            boolean accepted = switch (pendingFrames.offer(frame)) {
+                case ACCEPTED -> true;
+                case OVERFLOWED -> false;
+            };
+            if (accepted) {
+                output.sourceReady();
+            } else if (droppedForFallingBehind.compareAndSet(false, true)) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("[SSE {}] dropped: {} frames behind", clientId, PendingFrames.CAPACITY);
+                }
+                admission.recordSlowReaderDropped();
+                output.close();
+            }
+        }
+
+        /// Runs once, on the thread that ended the stream.
+        private void onEnded(EndReason reason) {
+            close();
+            releaseSlots();
+            switch (reason) {
+                case EndReason.EncodingFailed(Exception cause) ->
+                    // A frame the feature's writer cannot map is a defect in its frame types, not a client that went away, so it must not pass as one.
+                        alertService.raise(WARNING, SERIALISATION_FAILED_ALERT_TITLE, logger, "serialising a frame", cause);
+                case EndReason.Failed(Throwable cause) when cause instanceof TimeoutException -> {
+                    // The container's idle timeout ends a write the client has stopped reading.
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("[SSE {}] dropped: stopped reading ({})", clientId, humanReadableMessageFormattable(cause));
+                    }
+                    admission.recordSlowReaderDropped();
+                }
+                case EndReason.Failed(Throwable cause) -> logger.debug("[SSE {}] ended: {}", clientId, cause);
+                case EndReason.Finished _, EndReason.Closed _ -> logger.debug("[SSE {}] closed", clientId);
+            }
+            // The callback is feature code, and runs on the channel executor so it is ordered with the feature's own work there.
             try {
-                executor.tryExecute("closeSseClient", () -> closeAndRemoveClient(this));
+                if (!executor.tryExecute("closeSseClient", this::removeAndNotify)) {
+                    // The executor has shut down and runs nothing more, so this runs the feature's onStreamClosed directly; sseClients is read only on that
+                    // executor, so it is left as it is.
+                    closeSafelyIfNotNull(logger, onStreamClosed);
+                }
             } catch (RejectedExecutionException e) {
-                logger.debug("[SSE {}] close deferred to the next heartbeat: {}", clientId, humanReadableMessageFormattable(e));
-                closeRejected = true;
+                // A full queue: the heartbeat, which is scheduled, removes a registered client it finds ended, and registration notifies one that ended
+                // before it ran.
+                if (logger.isDebugEnabled()) {
+                    logger.debug("[SSE {}] removal deferred: {}", clientId, humanReadableMessageFormattable(e));
+                }
             }
         }
 
-        private void init() {
-            try {
-                logger.debug("[SSE {}] init", clientId);
-                out.print("retry: 3000\n\n");
-                sendEvent("hello", new HelloFrame(clientIdSeqNum, currentDateTimeProvider.currentInstant()));
-                out.flush();
-            } catch (IOException e) {
-                logger.debug("[SSE {}] failed to write the stream preamble", clientId, e);
-                closeNow();
-            }
-        }
-
-        // OverlyBroadCatchBlock: writeValue declares StreamWriteException and DatabindException, but both are JsonProcessingException and both mean the
-        // same thing here — the frame could not be serialised — so the parent is the precise catch, not a broad one.
-        @SuppressWarnings("OverlyBroadCatchBlock")
-        private void sendEvent(String eventName, Object data) {
-            if (closed) {
-                return;
-            }
-            try {
-                logger.debug("[SSE {}] send event {}", clientId, eventName);
-                out.print("event: ");
-                out.print(eventName);
-                out.print('\n');
-                out.print("data: ");
-                jsonWriter.writeValue(out, data);
-                out.print("\n\n");
-                out.flush();
-            } catch (JsonProcessingException e) {
-                // A frame the feature's writer cannot map is a defect in its frame types, not a client that went away, so it must not pass as one.
-                alertService.raise(WARNING, SERIALISATION_FAILED_ALERT_TITLE, logger, "serialising the " + eventName + " frame", e);
-                closeAndRemoveClient(this);
-            } catch (IOException e) {
-                logger.debug("[SSE {}] failed to send event {}", clientId, eventName, e);
-                closeAndRemoveClient(this);
-            }
-        }
-
-        /// Every close path arrives here, on the channel executor.
-        private void closeNow() {
-            if (closed) {
-                return;
-            }
-            closed = true;
-            clientCount.decrementAndGet();
-            logger.debug("[SSE {}] closed", clientId);
-            completeQuietly(asyncContext, clientId);
-            // Logged rather than propagated: the callback is feature code, and this often runs while iterating the connected set, where a throw would skip
-            // every client after this one.
+        /// Safe to run more than once: the heartbeat runs it for a client whose own removal task was rejected.
+        void removeAndNotify() {
+            sseClients.remove(this);
+            // Logged rather than propagated: the callback is feature code, and the heartbeat runs this while iterating the connected set, where a throw
+            // would skip every client after this one.
             closeSafelyIfNotNull(logger, onStreamClosed);
+        }
+    }
+
+    private sealed interface OpenOutcome {}
+
+    private record Opened(SseStream stream) implements OpenOutcome {
+        private Opened {
+            checkNotNull(stream, "stream");
+        }
+    }
+
+    private record Refused(Refusal refusal) implements OpenOutcome {
+        private Refused {
+            checkNotNull(refusal, "refusal");
+        }
+    }
+
+    /// The stream was admitted and could not be opened; the exchange has been answered, and the stream's `onStreamClosed` has run.
+    private static final class FailedToOpen implements OpenOutcome {
+        static final FailedToOpen INSTANCE = new FailedToOpen();
+    }
+
+    /// The reason a stream was refused, with the error code and `Retry-After` delay of its 503 answer.
+    private enum Refusal {
+        CLOSED(CLOSED_ERROR, CLOSED_RETRY_AFTER),
+        CHANNEL_FULL(CHANNEL_FULL_ERROR, CHANNEL_FULL_RETRY_AFTER),
+        AT_CAPACITY(AT_CAPACITY_ERROR, AT_CAPACITY_RETRY_AFTER);
+
+        private final Answer answer;
+
+        Refusal(String code, Duration retryAfter) {
+            answer = ErrorResponse.createAnswer(SERVICE_UNAVAILABLE_503, code).withHeader(RETRY_AFTER, String.valueOf(retryAfter.toSeconds()));
         }
     }
 
@@ -418,14 +573,15 @@ public final class SseChannel extends BaseIdempotentCloseable {
 
     private record PingFrame(Instant serverTime) {}
 
-    /// Qualifies the [AdminAlertService] a channel escalates its own defects through, so each feature wires the alerting it already uses.
+    /// Qualifies the collaborators a channel takes from the feature that wires it: the [AdminAlertService] it escalates its own defects through, and the
+    /// [SseAdmission] its streams count against.
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     public @interface Dependency {
     }
 
-    /// Builds channels for the feature that owns them: the feature supplies what only it knows, and its wiring supplies the rest.
+    /// Creates channels from the parameters that differ between channels; the injector supplies the rest.
     public interface Factory {
         SseChannel create(String name, SchedulingExecutor executor, ObjectWriter jsonWriter, int maxClients);
     }

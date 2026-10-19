@@ -1,12 +1,12 @@
 package net.yudichev.jiotty.user.ui;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.inject.Provider;
-import jakarta.servlet.AsyncContext;
-import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
@@ -17,12 +17,15 @@ import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
+import net.yudichev.jiotty.user.ui.io.testing.FakeAsyncContext;
+import net.yudichev.jiotty.user.ui.io.testing.FakeServletInputStream;
 import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionDto;
 import net.yudichev.jiotty.user.ui.options.OptionMeta;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import net.yudichev.jiotty.user.ui.options.TextOption;
 import net.yudichev.jiotty.user.ui.sse.SseChannel;
+import net.yudichev.jiotty.user.ui.sse.SseInternals;
 import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
 import net.yudichev.jiotty.user.ui.sse.testing.SseChannels;
 import org.junit.jupiter.api.AfterEach;
@@ -33,21 +36,23 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.user.ui.sse.testing.SseFrames.allDataOf;
 import static net.yudichev.jiotty.user.ui.sse.testing.SseFrames.dataOf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
@@ -61,10 +66,14 @@ class SseServiceImplTest {
     private static final Duration THROTTLING_PERIOD = Duration.ofMillis(100);
 
     private static final String USER_ID = "user-1";
+    private static final int MAX_STREAMS = 2;
+    private static final String LOCAL_HOST = "localhost";
+    private static final int LOCAL_PORT = 12345;
     /// Deadlock safety net for a read parked on another thread, long enough that a loaded machine never trips it.
     private static final Duration PARKED_READ_TIMEOUT = Duration.ofSeconds(5);
     /// How long a stop is watched before concluding it is waiting on the parked read.
     private static final Duration STOP_BLOCK_OBSERVATION = Duration.ofMillis(200);
+    private static final HistoryDisplayableDto EMPTY_HISTORY = createHistory("key");
 
     private final TestAdminAlertService alertService = new TestAdminAlertService();
     private ProgrammableClock clock;
@@ -83,14 +92,7 @@ class SseServiceImplTest {
         optionRegistry = new OptionRegistryImpl(persistence);
         displayableRegistry = new DisplayableRegistryImpl(executorProvider);
         meterRegistry = new SimpleMeterRegistry();
-        sseService = new SseServiceImpl(executorProvider,
-                                        optionRegistry,
-                                        displayableRegistry,
-                                        SseChannels.factory(clock, alertService),
-                                        alertService,
-                                        THROTTLING_PERIOD,
-                                        USER_ID,
-                                        meterRegistry);
+        sseService = newService(executorProvider, optionRegistry, MAX_STREAMS);
         optionRegistry.start();
         displayableRegistry.start();
         sseService.start();
@@ -109,22 +111,20 @@ class SseServiceImplTest {
 
     @Test
     void sseDeliversInitialDisplayableImageOnConnect() {
-        displayableRegistry.register(createDisplayable("d1", "Display 1",
-                                                       completedFuture(new HistoryDisplayableDto(Map.of("key", List.of())))));
+        displayableRegistry.register(createDisplayable("d1", "Display 1", completedFuture(EMPTY_HISTORY)));
         clock.tick();
 
-        var capture = connectSseClient();
+        SseCapture capture = connectSseClient();
 
         String output = capture.output();
         assertThat(output).contains("event: hello");
-        assertThat(output).contains("event: displayable-update");
+        assertThat(output).contains("event: " + SseServiceImpl.DISPLAYABLE_UPDATE_EVENT);
         assertThat(output).contains("\"id\":\"d1\"");
     }
 
     @Test
     void connectingSseClient_recordsPostFlushDisplayablesAndOptionsSnapshotTimers() {
-        displayableRegistry.register(createDisplayable("d1", "Display 1",
-                                                       completedFuture(new HistoryDisplayableDto(Map.of("key", List.of())))));
+        displayableRegistry.register(createDisplayable("d1", "Display 1", completedFuture(EMPTY_HISTORY)));
         clock.tick();
 
         connectSseClient();
@@ -146,16 +146,10 @@ class SseServiceImplTest {
     @Test
     void displayableUpdateBroadcastsToAllSseClients() {
         var updateTrigger = new MutableReference<Runnable>();
-        var displayable = createDisplayable("d1", "Display 1",
-                                            completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
-        when(displayable.supportsData()).thenReturn(true);
-        when(displayable.subscribeForUpdates(any())).thenAnswer(invocation -> {
-            updateTrigger.set(invocation.getArgument(0));
-            return (Closeable) () -> {};
-        });
+        var displayable = createUpdatingDisplayable("d1", updateTrigger, new MutableReference<>(EMPTY_HISTORY));
 
-        var capture1 = connectSseClient("host1", 1111);
-        var capture2 = connectSseClient("host2", 2222);
+        SseCapture capture1 = connectSseClient("host1", 1111);
+        SseCapture capture2 = connectSseClient("host2", 2222);
         displayableRegistry.register(displayable);
         clock.tick();
 
@@ -164,10 +158,10 @@ class SseServiceImplTest {
 
         updateTrigger.get().run();
         clock.tick();
-        clock.advanceTimeAndTick(Duration.ofSeconds(1));
+        clock.advanceTimeAndTick(DisplayableRegistryImpl.UPDATE_THROTTLE);
 
-        assertThat(capture1.output()).contains("event: displayable-update");
-        assertThat(capture2.output()).contains("event: displayable-update");
+        assertThat(capture1.output()).contains("event: " + SseServiceImpl.DISPLAYABLE_UPDATE_EVENT);
+        assertThat(capture2.output()).contains("event: " + SseServiceImpl.DISPLAYABLE_UPDATE_EVENT);
     }
 
     @Test
@@ -182,13 +176,13 @@ class SseServiceImplTest {
         });
         when(displayable.toDto()).thenAnswer(_ -> {
             callCount[0]++;
-            return completedFuture(new HistoryDisplayableDto(Map.of("key", List.of())));
+            return completedFuture(EMPTY_HISTORY);
         });
 
         displayableRegistry.register(displayable);
         clock.tick();
 
-        var capture = connectSseClient();
+        SseCapture capture = connectSseClient();
         int baseCount = callCount[0];
         capture.reset();
 
@@ -202,29 +196,28 @@ class SseServiceImplTest {
         int afterRapidCount = callCount[0] - baseCount;
         assertThat(afterRapidCount).isEqualTo(1);
 
-        clock.advanceTimeAndTick(Duration.ofSeconds(1));
+        clock.advanceTimeAndTick(DisplayableRegistryImpl.UPDATE_THROTTLE);
         int afterThrottleCount = callCount[0] - baseCount;
         assertThat(afterThrottleCount).isEqualTo(2);
     }
 
     @Test
     void displayableUnregistrationStopsUpdates() {
-        var displayable = createDisplayable("d1", "Display 1",
-                                            completedFuture(new HistoryDisplayableDto(Map.of("key", List.of()))));
+        var displayable = createDisplayable("d1", "Display 1", completedFuture(EMPTY_HISTORY));
         when(displayable.supportsData()).thenReturn(true);
         when(displayable.subscribeForUpdates(any())).thenReturn(() -> {});
 
         Closeable registration = displayableRegistry.register(displayable);
         clock.tick();
 
-        var capture = connectSseClient();
+        SseCapture capture = connectSseClient();
         capture.reset();
 
         registration.close();
         clock.tick();
 
         String output = capture.output();
-        assertThat(output).doesNotContain("event: displayable-update");
+        assertThat(output).doesNotContain("event: " + SseServiceImpl.DISPLAYABLE_UPDATE_EVENT);
     }
 
     // endregion
@@ -244,17 +237,17 @@ class SseServiceImplTest {
         clock.tick();
 
         String output = capture.output();
-        assertThat(output).contains("event: options-update").contains("\"tabs\"").contains("\"opt1\"").doesNotContain("\"opt2\"");
+        assertThat(output).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT).contains("\"tabs\"").contains("\"opt1\"").doesNotContain("\"opt2\"");
         capture.reset();
 
-        assertThat(capture.output()).doesNotContain("event: options-update");
+        assertThat(capture.output()).doesNotContain("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
 
         clock.advanceTimeAndTick(THROTTLING_PERIOD.dividedBy(2));
-        assertThat(capture.output()).doesNotContain("event: options-update");
+        assertThat(capture.output()).doesNotContain("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
 
         clock.advanceTimeAndTick(THROTTLING_PERIOD.dividedBy(2));
         output = capture.output();
-        assertThat(output).contains("event: options-update").contains("\"tabs\"").contains("\"opt1\"").contains("\"opt2\"");
+        assertThat(output).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT).contains("\"tabs\"").contains("\"opt1\"").contains("\"opt2\"");
     }
 
     @Test
@@ -266,7 +259,7 @@ class SseServiceImplTest {
 
         registerTestOption("tab1", "opt1", "Option 1");
         clock.advanceTimeAndTick(THROTTLING_PERIOD.dividedBy(10));
-        assertThat(countOccurrences(capture.output(), "event: options-update")).isEqualTo(1);
+        assertThat(countOccurrences(capture.output(), "event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT)).isEqualTo(1);
         capture.reset();
         registerTestOption("tab1", "opt2", "Option 2");
         clock.advanceTimeAndTick(THROTTLING_PERIOD.dividedBy(10));
@@ -274,7 +267,7 @@ class SseServiceImplTest {
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         String output = capture.output();
-        assertThat(countOccurrences(output, "event: options-update")).isEqualTo(1);
+        assertThat(countOccurrences(output, "event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT)).isEqualTo(1);
 
         assertThat(output).contains("\"opt1\"");
         assertThat(output).contains("\"opt2\"");
@@ -287,15 +280,15 @@ class SseServiceImplTest {
         registerTestOption("tab1", "opt2", "Option 2");
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-        var capture = connectSseClient();
+        SseCapture capture = connectSseClient();
         capture.reset();
 
         reg1.close();
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         String output = capture.output();
-        assertThat(output).contains("event: options-update");
-        String eventData = dataOf(output, "options-update");
+        assertThat(output).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
+        String eventData = dataOf(output, SseServiceImpl.OPTIONS_UPDATE_EVENT);
         assertThat(eventData).doesNotContain("\"opt1\"");
         assertThat(eventData).contains("\"opt2\"");
     }
@@ -305,10 +298,10 @@ class SseServiceImplTest {
         registerTestOption("tab1", "opt1", "Option 1");
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-        var capture = connectSseClient();
+        SseCapture capture = connectSseClient();
 
         String output = capture.output();
-        assertThat(output).contains("event: options-update");
+        assertThat(output).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
         assertThat(output).contains("\"opt1\"");
     }
 
@@ -317,17 +310,15 @@ class SseServiceImplTest {
         registerTestOption("MyTab", "my.key", "My Label");
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-        var capture = connectSseClient();
-        Map<String, Object> parsed = dataOf(capture.output(), "options-update", new TypeToken<>() {});
+        SseCapture capture = connectSseClient();
+        Map<String, Object> optionsUpdate = dataOf(capture.output(), SseServiceImpl.OPTIONS_UPDATE_EVENT, new TypeToken<>() {});
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> tabs = (List<Map<String, Object>>) parsed.get("tabs");
+        List<Map<String, Object>> tabs = objectsOf(optionsUpdate, "tabs");
         assertThat(tabs).hasSize(1);
         assertThat(tabs.getFirst().get("name")).isEqualTo("MyTab");
         assertThat(tabs.getFirst().get("id")).isEqualTo("MyTab");
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> options = (List<Map<String, Object>>) tabs.getFirst().get("options");
+        List<Map<String, Object>> options = objectsOf(tabs.getFirst(), "options");
         assertThat(options).hasSize(1);
         assertThat(options.getFirst().get("key")).isEqualTo("my.key");
         assertThat(options.getFirst().get("label")).isEqualTo("My Label");
@@ -345,21 +336,16 @@ class SseServiceImplTest {
             optionRegistry.register(option);
             clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-            var capture = connectSseClient();
+            SseCapture capture = connectSseClient();
             capture.reset();
 
             var request = mock(HttpServletRequest.class);
             var response = mock(HttpServletResponse.class);
-            var asyncContext = mock(AsyncContext.class);
             when(request.getMethod()).thenReturn("POST");
-            when(request.startAsync()).thenReturn(asyncContext);
-            doAnswer(invocation -> {
-                invocation.getArgument(0, Runnable.class).run();
-                return null;
-            }).when(asyncContext).start(any(Runnable.class));
-            when(request.getParameter("name")).thenReturn("opt1");
-            when(request.getParameter("value")).thenReturn("new value");
-            lenient().when(request.getParameterMap()).thenReturn(Map.of());
+            when(request.startAsync()).thenReturn(new FakeAsyncContext(request, response));
+            String form = OptionsPostHandler.NAME_FIELD + "=opt1&" + OptionsPostHandler.VALUE_FIELD + "=new+value";
+            when(request.getContentLengthLong()).thenReturn((long) form.length());
+            asUnchecked(() -> when(request.getInputStream()).thenReturn(FakeServletInputStream.of(form)));
             // This test asserts on the SSE broadcast, not the POST's own body, so the response only has to accept the bytes.
             asUnchecked(() -> when(response.getOutputStream()).thenReturn(new CapturingServletOutputStream()));
 
@@ -367,8 +353,8 @@ class SseServiceImplTest {
             clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
             String output = capture.output();
-            assertThat(output).contains("event: options-update");
-            String eventData = dataOf(output, "options-update");
+            assertThat(output).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
+            String eventData = dataOf(output, SseServiceImpl.OPTIONS_UPDATE_EVENT);
             assertThat(eventData).contains("\"opt1\"");
             assertThat(eventData).contains("new value");
         } finally {
@@ -383,15 +369,15 @@ class SseServiceImplTest {
         optionRegistry.register(option);
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-        var capture = connectSseClient();
+        SseCapture capture = connectSseClient();
         capture.reset();
 
         option.setValue("programmatic value");
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
         String output = capture.output();
-        assertThat(output).contains("event: options-update");
-        String eventData = dataOf(output, "options-update");
+        assertThat(output).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
+        String eventData = dataOf(output, SseServiceImpl.OPTIONS_UPDATE_EVENT);
         assertThat(eventData).contains("\"opt1\"");
         assertThat(eventData).contains("programmatic value");
     }
@@ -402,58 +388,32 @@ class SseServiceImplTest {
 
     @Test
     void doStopClosesSseClients() {
-        var onStreamClosed = mock(Runnable.class);
-        var request = mock(HttpServletRequest.class);
-        var response = mock(HttpServletResponse.class);
-        var asyncContext = mock(AsyncContext.class);
-        var capture = new SseCapture();
-
-        when(request.getRemoteHost()).thenReturn("localhost");
-        when(request.getRemotePort()).thenReturn(12345);
-        when(request.startAsync()).thenReturn(asyncContext);
-        when(asyncContext.getRequest()).thenReturn(request);
-        lenient().when(asyncContext.getResponse()).thenReturn(response);
-        asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
-
-        asUnchecked(() -> sseService.startSse(request, response, onStreamClosed));
-        clock.tick();
+        SseCapture capture = connectSseClient();
 
         sseService.stop();
         clock.tick();
 
-        verify(onStreamClosed).run();
+        verify(capture.onStreamClosed).run();
     }
 
     @Test
     void startSseInitialImageDrainedAfterStopClosesClientWithoutReadingRegistries() {
-        var onStreamClosed = mock(Runnable.class);
-        var request = mock(HttpServletRequest.class);
-        var response = mock(HttpServletResponse.class);
-        var asyncContext = mock(AsyncContext.class);
-        var capture = new SseCapture();
-
-        when(request.getRemoteHost()).thenReturn("localhost");
-        when(request.getRemotePort()).thenReturn(12345);
-        when(request.startAsync()).thenReturn(asyncContext);
-        when(asyncContext.getRequest()).thenReturn(request);
-        lenient().when(asyncContext.getResponse()).thenReturn(response);
-        asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
+        var capture = new SseCapture(LOCAL_HOST, LOCAL_PORT);
 
         // Enqueue the initial-image task but do not tick, so it stays queued on the executor.
-        asUnchecked(() -> sseService.startSse(request, response, onStreamClosed));
+        capture.startOn(sseService);
 
-        // Tear down in reverse dependency order — the SSE service first, then the registries it reads — mirroring per-user injector teardown, and only now tick
-        // so the queued initial-image task drains after every component has stopped. It must skip all work and close the freshly-created client, not read the
-        // stopped registries.
+        // Tear down in reverse dependency order — the SSE service first, then the registries it reads — mirroring per-user injector teardown, and only now
+        // tick, so the queued initial-image task drains after every component has stopped and must close the new client without reading the registries.
         sseService.stop();
         displayableRegistry.stop();
         optionRegistry.stop();
         clock.tick();
 
-        // The drained task never initialised the stream (no hello/snapshot frames), proving it took the stopped-service short-circuit instead of reading the
-        // registries. onStreamClosed still fires so the connection is not leaked.
-        assertThat(capture.output()).isEmpty();
-        verify(onStreamClosed).run();
+        // A stream opened on a service that stopped before its initial image ran is sent no snapshot, and is closed.
+        assertThat(capture.output()).doesNotContain("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT)
+                                    .doesNotContain("event: " + SseServiceImpl.DISPLAYABLE_UPDATE_EVENT);
+        verify(capture.onStreamClosed).run();
     }
 
     @Test
@@ -491,31 +451,30 @@ class SseServiceImplTest {
 
     @Test
     void broadcastReachesAllConnectedClients() {
-        var capture1 = connectSseClient("host1", 1111);
-        var capture2 = connectSseClient("host2", 2222);
+        SseCapture capture1 = connectSseClient("host1", 1111);
+        SseCapture capture2 = connectSseClient("host2", 2222);
         capture1.reset();
         capture2.reset();
 
         registerTestOption("tab1", "opt1", "Option 1");
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-        assertThat(capture1.output()).contains("event: options-update");
-        assertThat(capture2.output()).contains("event: options-update");
+        assertThat(capture1.output()).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
+        assertThat(capture2.output()).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
     }
 
     @Test
     void newClientConnectionDoesNotRebroadcastDisplayablesToExistingClients() {
-        displayableRegistry.register(createDisplayable("d1", "Display 1",
-                                                       completedFuture(new HistoryDisplayableDto(Map.of("key", List.of())))));
+        displayableRegistry.register(createDisplayable("d1", "Display 1", completedFuture(EMPTY_HISTORY)));
         clock.tick();
 
-        var capture1 = connectSseClient("host1", 1111);
-        assertThat(capture1.output()).contains("event: displayable-update");
+        SseCapture capture1 = connectSseClient("host1", 1111);
+        assertThat(capture1.output()).contains("event: " + SseServiceImpl.DISPLAYABLE_UPDATE_EVENT);
         capture1.reset();
 
         connectSseClient("host2", 2222);
 
-        assertThat(capture1.output()).doesNotContain("event: displayable-update");
+        assertThat(capture1.output()).doesNotContain("event: " + SseServiceImpl.DISPLAYABLE_UPDATE_EVENT);
     }
 
     @Test
@@ -523,13 +482,62 @@ class SseServiceImplTest {
         registerTestOption("tab1", "opt1", "Option 1");
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-        var capture1 = connectSseClient("host1", 1111);
-        assertThat(capture1.output()).contains("event: options-update");
+        SseCapture capture1 = connectSseClient("host1", 1111);
+        assertThat(capture1.output()).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
         capture1.reset();
 
         connectSseClient("host2", 2222);
 
-        assertThat(capture1.output()).doesNotContain("event: options-update");
+        assertThat(capture1.output()).doesNotContain("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
+    }
+
+    @Test
+    void refusesAStreamPastTheUsersCapAndKeepsTheEarlierStreamsOpen() {
+        var admittedCaptures = new ArrayList<SseCapture>(MAX_STREAMS);
+        for (int i = 0; i < MAX_STREAMS; i++) {
+            admittedCaptures.add(connectSseClient("host" + i, 1000 + i));
+        }
+
+        SseCapture refusedCapture = connectSseClient("host-refused", 2000);
+
+        verify(refusedCapture.response).setStatus(SERVICE_UNAVAILABLE_503);
+        assertThat(refusedCapture.out.errorCode()).isEqualTo(SseInternals.CHANNEL_FULL_ERROR);
+        assertThat(refusedCapture.asyncContext.isCompleted()).isTrue();
+        verify(refusedCapture.onStreamClosed).run();
+        assertThat(admittedCaptures).noneSatisfy(capture -> assertThat(capture.asyncContext.isCompleted()).isTrue());
+    }
+
+    /// A client that reads slowly is sent the latest update of each displayable: an unsent update is superseded by a later one about the same displayable only.
+    @Test
+    void aSlowClientGetsTheLatestUpdateOfEachDisplayable() {
+        var firstTrigger = new MutableReference<Runnable>();
+        var firstDto = new MutableReference<DisplayableDto>(EMPTY_HISTORY);
+        displayableRegistry.register(createUpdatingDisplayable("d1", firstTrigger, firstDto));
+        var secondTrigger = new MutableReference<Runnable>();
+        var secondDto = new MutableReference<DisplayableDto>(EMPTY_HISTORY);
+        displayableRegistry.register(createUpdatingDisplayable("d2", secondTrigger, secondDto));
+        SseCapture capture = connectSseClient();
+        capture.stallReading();
+        // The d0 frame fills the write the client is not reading, so the updates registered after it stay pending.
+        displayableRegistry.register(createDisplayable("d0", "Held", completedFuture(EMPTY_HISTORY)));
+        clock.tick();
+
+        firstDto.set(createHistory("d1-superseded"));
+        firstTrigger.get().run();
+        clock.tick();
+        secondDto.set(createHistory("d2-only"));
+        secondTrigger.get().run();
+        clock.tick();
+        firstDto.set(createHistory("d1-latest"));
+        firstTrigger.get().run();
+        // Past the displayable registry's throttle, which holds back a second update to d1 until then.
+        clock.advanceTimeAndTick(DisplayableRegistryImpl.UPDATE_THROTTLE);
+        capture.resumeReading();
+
+        assertThat(allDataOf(capture.output(), SseServiceImpl.DISPLAYABLE_UPDATE_EVENT))
+                .noneSatisfy(data -> assertThat(data).contains("d1-superseded"))
+                .anySatisfy(data -> assertThat(data).contains("d2-only"))
+                .anySatisfy(data -> assertThat(data).contains("d1-latest"));
     }
 
     // endregion
@@ -562,18 +570,17 @@ class SseServiceImplTest {
 
     @Test
     void sseConnectDeliversBothDisplayablesAndOptions() {
-        displayableRegistry.register(createDisplayable("d1", "Display 1",
-                                                       completedFuture(new HistoryDisplayableDto(Map.of("key", List.of())))));
+        displayableRegistry.register(createDisplayable("d1", "Display 1", completedFuture(EMPTY_HISTORY)));
         clock.tick();
 
         registerTestOption("tab1", "opt1", "Option 1");
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-        var capture = connectSseClient();
+        SseCapture capture = connectSseClient();
         String output = capture.output();
 
-        assertThat(output).contains("event: displayable-update");
-        assertThat(output).contains("event: options-update");
+        assertThat(output).contains("event: " + SseServiceImpl.DISPLAYABLE_UPDATE_EVENT);
+        assertThat(output).contains("event: " + SseServiceImpl.OPTIONS_UPDATE_EVENT);
     }
 
     // endregion
@@ -582,12 +589,10 @@ class SseServiceImplTest {
 
     @Test
     void emptyOptionsProducesEmptyTabsArray() {
-        var capture = connectSseClient();
-        Map<String, Object> parsed = dataOf(capture.output(), "options-update", new TypeToken<>() {});
+        SseCapture capture = connectSseClient();
+        Map<String, Object> optionsUpdate = dataOf(capture.output(), SseServiceImpl.OPTIONS_UPDATE_EVENT, new TypeToken<>() {});
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> tabs = (List<Map<String, Object>>) parsed.get("tabs");
-        assertThat(tabs).isEmpty();
+        assertThat(objectsOf(optionsUpdate, "tabs")).isEmpty();
     }
 
     @Test
@@ -596,10 +601,10 @@ class SseServiceImplTest {
                                                        CompletableFuture.failedFuture(new RuntimeException("DTO generation failed"))));
         clock.tick();
 
-        var capture = connectSseClient();
+        SseCapture capture = connectSseClient();
 
         capture.reset();
-        clock.advanceTimeAndTick(Duration.ofSeconds(15));
+        clock.advanceTimeAndTick(SseInternals.HEARTBEAT_PERIOD);
         assertThat(capture.output()).contains("event: ping");
         // A displayable that cannot render is a defect in this server, and it leaves the user's screen stale, so an operator hears about it.
         assertThat(alertService.activeAlertsById().values())
@@ -615,77 +620,68 @@ class SseServiceImplTest {
         registerTestOption("My Tab!", "opt1", "Label");
         clock.advanceTimeAndTick(THROTTLING_PERIOD);
 
-        var capture = connectSseClient();
-        Map<String, Object> parsed = dataOf(capture.output(), "options-update", new TypeToken<>() {});
+        SseCapture capture = connectSseClient();
+        Map<String, Object> optionsUpdate = dataOf(capture.output(), SseServiceImpl.OPTIONS_UPDATE_EVENT, new TypeToken<>() {});
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> tabs = (List<Map<String, Object>>) parsed.get("tabs");
-        assertThat(tabs.getFirst().get("id")).isEqualTo("My-Tab-");
+        assertThat(objectsOf(optionsUpdate, "tabs").getFirst().get("id")).isEqualTo("My-Tab-");
     }
 
     @Test
-    void refusesAStreamOnceStoppedAndReleasesTheExchange(@Mock HttpServletRequest request,
-                                                         @Mock HttpServletResponse response,
-                                                         @Mock AsyncContext asyncContext,
-                                                         @Mock Runnable onStreamClosed) {
-        when(request.startAsync()).thenReturn(asyncContext);
+    void refusesAStreamOnceStoppedAndReleasesTheExchange() {
         sseService.stop();
         clock.tick();
+        var capture = new SseCapture(LOCAL_HOST, LOCAL_PORT);
 
-        Closeable handle = getAsUnchecked(() -> sseService.startSse(request, response, onStreamClosed));
+        Closeable handle = capture.startOn(sseService);
         clock.tick();
 
-        // Nobody owns the exchange once the channel is closed, so startSse has to complete it itself and say the stream ended.
-        verify(asyncContext).complete();
-        verify(onStreamClosed).run();
+        // A closed channel refuses the stream, so startSse writes its 503, completes the exchange and runs onStreamClosed.
+        verify(capture.response).setStatus(SERVICE_UNAVAILABLE_503);
+        assertThat(capture.asyncContext.isCompleted()).isTrue();
+        verify(capture.onStreamClosed).run();
         assertThatCode(handle::close).doesNotThrowAnyException();
     }
 
     @Test
-    void namesTheFaultWhenAskedForAStreamBeforeStarting(@Mock HttpServletRequest request,
-                                                        @Mock HttpServletResponse response,
-                                                        @Mock Runnable onStreamClosed) {
-        var unstartedService = new SseServiceImpl(() -> clock.createSingleThreadedSchedulingExecutor("unstarted"),
-                                                  optionRegistry,
-                                                  displayableRegistry,
-                                                  SseChannels.factory(clock, alertService),
-                                                  alertService,
-                                                  THROTTLING_PERIOD,
-                                                  USER_ID,
-                                                  meterRegistry);
+    void namesTheFaultWhenAskedForAStreamBeforeStarting() {
+        var unstartedService = newService(() -> clock.createSingleThreadedSchedulingExecutor("unstarted"), optionRegistry, MAX_STREAMS);
+        var capture = new SseCapture(LOCAL_HOST, LOCAL_PORT);
 
-        assertThatThrownBy(() -> unstartedService.startSse(request, response, onStreamClosed))
+        assertThatThrownBy(() -> capture.startOn(unstartedService))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("before it started");
+    }
+
+    @Test
+    void refusesANonPositiveStreamCap() {
+        assertThatThrownBy(() -> newService(() -> clock.createSingleThreadedSchedulingExecutor("capless"), optionRegistry, 0))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     // endregion
 
     // region helpers
 
+    private SseServiceImpl newService(Provider<SchedulingExecutor> executorProvider, OptionRegistry serviceOptionRegistry, int maxStreams) {
+        return new SseServiceImpl(executorProvider,
+                                  serviceOptionRegistry,
+                                  displayableRegistry,
+                                  SseChannels.createFactory(clock, alertService),
+                                  alertService,
+                                  THROTTLING_PERIOD,
+                                  USER_ID,
+                                  maxStreams,
+                                  meterRegistry);
+    }
+
     private SseCapture connectSseClient() {
-        return connectSseClient("localhost", 12345);
+        return connectSseClient(LOCAL_HOST, LOCAL_PORT);
     }
 
     private SseCapture connectSseClient(String host, int port) {
-        SseCapture capture = connectClientTo(sseService, host, port);
+        var capture = new SseCapture(host, port);
+        capture.startOn(sseService);
         clock.tick();
-        return capture;
-    }
-
-    private static SseCapture connectClientTo(SseServiceImpl service, String host, int port) {
-        var capture = new SseCapture();
-        var request = mock(HttpServletRequest.class);
-        var response = mock(HttpServletResponse.class);
-        var asyncContext = mock(AsyncContext.class);
-
-        when(request.getRemoteHost()).thenReturn(host);
-        when(request.getRemotePort()).thenReturn(port);
-        when(request.startAsync()).thenReturn(asyncContext);
-        when(asyncContext.getRequest()).thenReturn(request);
-        lenient().when(asyncContext.getResponse()).thenReturn(response);
-        asUnchecked(() -> when(response.getOutputStream()).thenReturn(capture.outputStream()));
-        getAsUnchecked(() -> service.startSse(request, response, capture.closedRunnable));
         return capture;
     }
 
@@ -742,6 +738,29 @@ class SseServiceImplTest {
         return displayable;
     }
 
+    /// A displayable whose updates `trigger` fires, rendering what `dto` holds at the time.
+    private static Displayable createUpdatingDisplayable(String id, MutableReference<Runnable> trigger, MutableReference<DisplayableDto> dto) {
+        var displayable = createDisplayable(id, id, null);
+        when(displayable.supportsData()).thenReturn(true);
+        when(displayable.subscribeForUpdates(any())).thenAnswer(invocation -> {
+            trigger.set(invocation.getArgument(0));
+            return (Closeable) () -> {};
+        });
+        when(displayable.toDto()).thenAnswer(_ -> completedFuture(dto.get()));
+        return displayable;
+    }
+
+    /// A history of one empty group, named `group` so a test can tell the frames rendering it apart.
+    private static HistoryDisplayableDto createHistory(String group) {
+        return new HistoryDisplayableDto(ImmutableMap.of(group, ImmutableList.of()));
+    }
+
+    /// Returns `node`'s `field`, a JSON array of objects.
+    @SuppressWarnings("unchecked") // Jackson maps a JSON array of objects to a List of Maps
+    private static List<Map<String, Object>> objectsOf(Map<String, Object> node, String field) {
+        return (List<Map<String, Object>>) node.get(field);
+    }
+
     private static long countOccurrences(String text, String substring) {
         long count = 0;
         int idx = 0;
@@ -764,14 +783,7 @@ class SseServiceImplTest {
         final Semaphore departures = new Semaphore(0);
         final SingleThreadedSchedulingExecutor executor = new SingleThreadedSchedulingExecutor("sse-teardown-race");
         final OptionRegistryImpl registry = new OptionRegistryImpl(persistence);
-        final SseServiceImpl service = new SseServiceImpl(() -> executor,
-                                                          registry,
-                                                          displayableRegistry,
-                                                          SseChannels.factory(clock, alertService),
-                                                          alertService,
-                                                          THROTTLING_PERIOD,
-                                                          USER_ID,
-                                                          meterRegistry);
+        final SseServiceImpl service = newService(() -> executor, registry, MAX_STREAMS);
 
         TeardownRace(Option<String> parkingOption, OptionDto parkingOptionDto) {
             stubParkingOnDto(parkingOption, parkingOptionDto, arrivals, departures);
@@ -782,7 +794,7 @@ class SseServiceImplTest {
         }
 
         void connectClient() {
-            connectClientTo(service, "localhost", 54321);
+            new SseCapture(LOCAL_HOST, LOCAL_PORT).startOn(service);
         }
 
         @Override
@@ -806,9 +818,26 @@ class SseServiceImplTest {
         }
     }
 
+    /// One client's exchange and the bytes the server pushed down it.
     private static final class SseCapture {
-        final Runnable closedRunnable = () -> {};
+        final HttpServletResponse response = mock(HttpServletResponse.class);
+        final Runnable onStreamClosed = mock(Runnable.class);
+        final FakeAsyncContext asyncContext;
+        private final HttpServletRequest request = mock(HttpServletRequest.class);
         private final CapturingServletOutputStream out = new CapturingServletOutputStream();
+
+        SseCapture(String host, int port) {
+            asyncContext = new FakeAsyncContext(request, response);
+            // Lenient, because a refused or faulted stream reads none of these.
+            lenient().when(request.getRemoteHost()).thenReturn(checkNotNull(host, "host"));
+            lenient().when(request.getRemotePort()).thenReturn(port);
+            lenient().when(request.startAsync()).thenReturn(asyncContext);
+            asUnchecked(() -> lenient().when(response.getOutputStream()).thenReturn(out));
+        }
+
+        Closeable startOn(SseServiceImpl service) {
+            return service.startSse(request, response, onStreamClosed);
+        }
 
         String output() {
             return out.output();
@@ -818,8 +847,12 @@ class SseServiceImplTest {
             out.reset();
         }
 
-        ServletOutputStream outputStream() {
-            return out;
+        void stallReading() {
+            out.stallReading();
+        }
+
+        void resumeReading() {
+            out.resumeReading();
         }
     }
 

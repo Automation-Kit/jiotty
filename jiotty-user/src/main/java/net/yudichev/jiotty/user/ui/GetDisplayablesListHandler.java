@@ -13,6 +13,7 @@ import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CHARSET_UTF_8;
 import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_JSON;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.METHOD_NOT_ALLOWED_405;
 
@@ -49,7 +50,7 @@ public final class GetDisplayablesListHandler implements ApiPathHandler {
     }
 
     private void writeList(HttpServletResponse response) throws IOException {
-        response.setCharacterEncoding("utf-8");
+        response.setCharacterEncoding(CHARSET_UTF_8);
         response.setContentType(CONTENT_TYPE_JSON);
         Collection<Displayable> displayables = registry.all();
         var items = ImmutableList.<Item>builderWithExpectedSize(displayables.size());
