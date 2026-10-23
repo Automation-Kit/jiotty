@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.async;
 
+import com.google.common.annotations.VisibleForTesting;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
@@ -25,10 +26,21 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 public final class ProgrammableClock implements CurrentDateTimeProvider, ExecutorFactory {
+    /// The most tasks a chain may run at one instant, each scheduled by the one before it, before the next task in the chain fails. A live executor would keep
+    /// its thread busy on such a chain, and since time stands still while a task runs, [#tick()] would never return.
+    @VisibleForTesting
+    static final int MAX_TASK_CHAIN_AT_ONE_INSTANT = 10_000;
+    @VisibleForTesting
+    static final String MDC_THREAD_KEY = "thread";
+    @VisibleForTesting
+    static final String MDC_TASK_DUE_KEY = "task.due";
+    private static final String MDC_CURRENT_TIME_KEY = "current.time";
+
     private final NavigableMap<Instant, List<Task>> tasksByTriggerTime = new TreeMap<>();
     private Instant currentTime = Instant.EPOCH;
     private boolean mdc;
     private @Nullable Instant currentTaskTime;
+    private @Nullable Task currentTask;
     private ZoneId zoneId = ZoneOffset.UTC;
     private boolean taskSeeingTargetTime;
     private boolean globalMdc;
@@ -131,11 +143,13 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
                 return (immediate ? "Immediate: " : "Delayed(" + delay + "): ") + command;
             }
         };
-        task.schedule(currentInstant().plus(delay));
+        task.schedule(dueAfter(delay));
         return task;
     }
 
     Closeable scheduleAtFixedRate(DeterministicExecutor executor, TemporalAmount initialDelay, TemporalAmount period, Runnable command) {
+        // a live executor rejects such a period too
+        checkArgument(Duration.from(period).isPositive(), "period must be positive, was %s", period);
         Task task = new Task(executor, false) {
             @Override
             public void doRun() {
@@ -157,8 +171,15 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
                 return "Periodic(" + initialDelay + "," + period + ": " + command;
             }
         };
-        task.schedule(currentInstant().plus(initialDelay));
+        task.schedule(dueAfter(initialDelay));
         return task;
+    }
+
+    /// A negative delay is due now, as a live executor runs it at once.
+    private Instant dueAfter(TemporalAmount delay) {
+        Instant now = currentInstant();
+        Instant due = now.plus(delay);
+        return due.isBefore(now) ? now : due;
     }
 
     /// Mirrors [SingleThreadedSchedulingExecutor#close()]: runs `executor`'s immediate-task backlog to completion — including the immediate follow-ups those
@@ -201,7 +222,7 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
                       "time cannot go backward from %s to %s", this.currentTime, currentTime);
         this.currentTime = checkNotNull(currentTime);
         if (globalMdc) {
-            ThreadContext.put("current.time", currentTime.toString());
+            ThreadContext.put(MDC_CURRENT_TIME_KEY, currentTime.toString());
         }
     }
 
@@ -215,6 +236,8 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
         /// respectively, mirroring the immediate/scheduled split in [SingleThreadedSchedulingExecutor].
         private final boolean immediate;
         protected @Nullable Instant due;
+        /// How many tasks precede this one in its chain at [#due]; running fails once it reaches [#MAX_TASK_CHAIN_AT_ONE_INSTANT].
+        private int precedingTaskCount;
 
         protected Task(DeterministicExecutor executor, boolean immediate) {
             this.executor = checkNotNull(executor);
@@ -227,33 +250,51 @@ public final class ProgrammableClock implements CurrentDateTimeProvider, Executo
                 // un-scheduled
                 return;
             }
-            String oldCurrentTimeAttr = null;
-            if (mdc) {
-                oldCurrentTimeAttr = ThreadContext.get("current.time");
-                ThreadContext.put("thread", executor.getThreadNameBase());
-                ThreadContext.put("task.due", due.toString());
-                ThreadContext.put("current.time", currentInstant().toString());
+            if (precedingTaskCount >= MAX_TASK_CHAIN_AT_ONE_INSTANT) {
+                Instant chainInstant = unSchedule();
+                throw new IllegalStateException(precedingTaskCount + " tasks in a row each scheduled the next for " + chainInstant
+                                                + ", which keeps a live executor's thread busy without end; the next: " + this);
             }
+            String oldCurrentTimeAttr = null;
+            String oldThreadAttr = null;
+            String oldTaskDueAttr = null;
+            if (mdc) {
+                oldCurrentTimeAttr = ThreadContext.get(MDC_CURRENT_TIME_KEY);
+                oldThreadAttr = ThreadContext.get(MDC_THREAD_KEY);
+                oldTaskDueAttr = ThreadContext.get(MDC_TASK_DUE_KEY);
+                ThreadContext.put(MDC_THREAD_KEY, executor.getThreadNameBase());
+                ThreadContext.put(MDC_TASK_DUE_KEY, due.toString());
+                ThreadContext.put(MDC_CURRENT_TIME_KEY, currentInstant().toString());
+            }
+            Instant previousTaskTime = currentTaskTime;
+            Task previousTask = currentTask;
             currentTaskTime = due;
+            currentTask = this;
             try {
                 doRun();
             } finally {
-                currentTaskTime = null;
+                currentTask = previousTask;
+                currentTaskTime = previousTaskTime;
                 if (mdc) {
-                    if (oldCurrentTimeAttr == null) {
-                        ThreadContext.remove("current.time");
-                    } else {
-                        ThreadContext.put("current.time", oldCurrentTimeAttr);
-                    }
-                    ThreadContext.remove("task.due");
-                    ThreadContext.remove("thread");
+                    restoreMdc(MDC_CURRENT_TIME_KEY, oldCurrentTimeAttr);
+                    restoreMdc(MDC_TASK_DUE_KEY, oldTaskDueAttr);
+                    restoreMdc(MDC_THREAD_KEY, oldThreadAttr);
                 }
+            }
+        }
+
+        private static void restoreMdc(String key, @Nullable String value) {
+            if (value == null) {
+                ThreadContext.remove(key);
+            } else {
+                ThreadContext.put(key, value);
             }
         }
 
         public void schedule(Instant due) {
             checkState(this.due == null, "already scheduled");
             this.due = due;
+            precedingTaskCount = currentTask != null && due.equals(currentTaskTime) ? currentTask.precedingTaskCount + 1 : 0;
             tasksByTriggerTime.computeIfAbsent(due, _ -> new ArrayList<>()).add(this);
         }
 

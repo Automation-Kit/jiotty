@@ -1,9 +1,13 @@
 package net.yudichev.jiotty.common.async;
 
 import net.yudichev.jiotty.common.lang.Closeable;
+import org.apache.logging.log4j.ThreadContext;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -14,6 +18,9 @@ import java.util.ArrayList;
 import java.util.concurrent.Callable;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static net.yudichev.jiotty.common.async.ProgrammableClock.MAX_TASK_CHAIN_AT_ONE_INSTANT;
+import static net.yudichev.jiotty.common.async.ProgrammableClock.MDC_TASK_DUE_KEY;
+import static net.yudichev.jiotty.common.async.ProgrammableClock.MDC_THREAD_KEY;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
@@ -273,6 +280,96 @@ class ProgrammableClockTest {
         runTimes.clear();
         clock.setTimeAndTick(Instant.ofEpochMilli(2000));
         assertThat(runTimes, contains(Instant.ofEpochSecond(1), Instant.ofEpochSecond(2)));
+    }
+
+    @Test
+    void scheduleWithNegativeDelay_runsNowSeeingTheCurrentTime() {
+        clock.setTime(Instant.ofEpochSecond(10));
+        var runTimes = new ArrayList<Instant>();
+        executor.schedule(Duration.ofSeconds(-5), () -> runTimes.add(clock.currentInstant()));
+
+        clock.tick();
+
+        Assertions.assertThat(runTimes).containsExactly(Instant.ofEpochSecond(10));
+    }
+
+    @Test
+    void scheduleAtFixedRateWithNegativeInitialDelay_firstRunsNowThenEveryPeriod() {
+        clock.setTime(Instant.ofEpochSecond(10));
+        var runTimes = new ArrayList<Instant>();
+        executor.scheduleAtFixedRate(Duration.ofSeconds(-5), Duration.ofSeconds(1), () -> runTimes.add(clock.currentInstant()));
+
+        clock.setTimeAndTick(Instant.ofEpochSecond(11));
+
+        Assertions.assertThat(runTimes).containsExactly(Instant.ofEpochSecond(10), Instant.ofEpochSecond(11));
+    }
+
+    @Test
+    void tasksThatKeepSchedulingTasksDueNow_failTheTick() {
+        var selfResubmittingTask = new Runnable() {
+            @Override
+            public void run() {
+                executor.execute("resubmit", this);
+            }
+        };
+        executor.execute("resubmit", selfResubmittingTask);
+
+        assertThatThrownBy(clock::tick).isInstanceOf(IllegalStateException.class)
+                                       .hasMessageContaining(MAX_TASK_CHAIN_AT_ONE_INSTANT + " tasks in a row each scheduled the next for " + Instant.EPOCH);
+    }
+
+    /// Closing an executor runs its pending tasks inside the closing task, which then resubmits itself as the next link of its chain.
+    @Test
+    void aChainWhoseTasksEachCloseAnExecutorWithPendingWork_failsTheTick(@Mock Runnable pendingTask) {
+        var selfResubmittingTask = new Runnable() {
+            @Override
+            public void run() {
+                SchedulingExecutor closedExecutor = clock.createSingleThreadedSchedulingExecutor("closed");
+                closedExecutor.execute("pending", pendingTask);
+                closedExecutor.close();
+                executor.execute("resubmit", this);
+            }
+        };
+        executor.execute("resubmit", selfResubmittingTask);
+
+        assertThatThrownBy(clock::tick).isInstanceOf(IllegalStateException.class)
+                                       .hasMessageContaining("tasks in a row each scheduled the next for " + Instant.EPOCH);
+    }
+
+    @Test
+    void moreIndependentTasksAtOneInstantThanTheChainBound_allRun() {
+        for (int i = 0; i <= MAX_TASK_CHAIN_AT_ONE_INSTANT; i++) {
+            executor.execute("submit follow-up", () -> executor.execute("follow-up", task));
+        }
+
+        clock.tick();
+
+        verify(task, times(MAX_TASK_CHAIN_AT_ONE_INSTANT + 1)).run();
+    }
+
+    @Test
+    void aTaskRunningAnotherExecutorsPendingWorkOnClose_keepsItsOwnLoggingContext(@Mock Runnable pendingTask) {
+        clock = new ProgrammableClock().withMdc();
+        executor = clock.createSingleThreadedSchedulingExecutor("threadName");
+        var contextAfterClose = new ArrayList<String>();
+        executor.execute("close another executor", () -> {
+            SchedulingExecutor closedExecutor = clock.createSingleThreadedSchedulingExecutor("closed");
+            closedExecutor.execute("pending", pendingTask);
+            closedExecutor.close();
+            contextAfterClose.add(ThreadContext.get(MDC_THREAD_KEY));
+            contextAfterClose.add(ThreadContext.get(MDC_TASK_DUE_KEY));
+        });
+
+        clock.tick();
+
+        Assertions.assertThat(contextAfterClose).containsExactly("threadName", Instant.EPOCH.toString());
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0, -1})
+    void scheduleAtFixedRateWithAPeriodThatIsNotPositive_isRejected(long periodSeconds) {
+        assertThatThrownBy(() -> executor.scheduleAtFixedRate(Duration.ofSeconds(1), Duration.ofSeconds(periodSeconds), task))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
