@@ -97,6 +97,26 @@ class BaseOptionTest {
         assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(FormSubmitResult.accepted("n=42"));
     }
 
+    @Test
+    void submitJsonAnswersWithWhatTheResponseMapperMakesOfTheSavedValue() {
+        CompletableFuture<FormSubmitResult> result = option.submitJson(Optional.of("42"), Integer.class, number -> "n=" + number, saved -> saved + "!");
+        clock.tick();
+
+        assertThat(result).succeedsWithin(Duration.ZERO).isEqualTo(FormSubmitResult.accepted("n=42!"));
+    }
+
+    /// The value is stored before the response mapper runs, so a mapper that throws fails the submission and the value stays stored.
+    @Test
+    void aResponseMapperThatThrowsFailsTheSubmissionAndKeepsTheValue() {
+        CompletableFuture<FormSubmitResult> result = option.submitJson(Optional.of("42"), Integer.class, number -> "n=" + number, _ -> {
+            throw new IllegalStateException("not applied");
+        });
+        clock.tick();
+
+        assertThat(result).failsWithin(Duration.ZERO).withThrowableThat().havingRootCause().withMessage("not applied");
+        assertThat(option.getValue()).contains("n=42");
+    }
+
     /// A client sending the wrong shape is not a fault of ours, so both shapes of unreadable body are refused rather than failed — and the answer repeats
     /// nothing of what was sent.
     @ParameterizedTest
@@ -128,6 +148,36 @@ class BaseOptionTest {
 
         assertThatThrownBy(() -> option.setValueSync("doomed")).isInstanceOf(IllegalStateException.class);
         assertThat(option.getValue()).contains("accepted-before");
+    }
+
+    @Test
+    void settingAValueWithoutApplyingNotifiesListenersButSkipsValidationAndOnChanged() {
+        List<String> heard = listenToChanges();
+        option.refuse = true;
+
+        option.setValueWithoutApplying("applied");
+
+        assertThat(option.getValue()).contains("applied");
+        assertThat(heard).containsExactly("applied");
+        assertThat(option.changes).containsExactly("accepted-before");
+    }
+
+    @Test
+    void settingTheCurrentValueWithoutApplyingNotifiesNoListener() {
+        List<String> heard = listenToChanges();
+
+        option.setValueWithoutApplying("accepted-before");
+
+        assertThat(heard).isEmpty();
+    }
+
+    /// @return the values a newly added change listener receives, excluding the current value it receives when added
+    private List<String> listenToChanges() {
+        List<String> heard = new ArrayList<>();
+        option.addChangeListener(changed -> heard.add(changed.value()));
+        clock.tick();
+        heard.clear();
+        return heard;
     }
 
     @Test

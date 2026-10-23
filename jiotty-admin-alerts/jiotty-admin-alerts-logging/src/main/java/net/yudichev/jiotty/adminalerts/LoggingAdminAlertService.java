@@ -33,13 +33,11 @@ public final class LoggingAdminAlertService implements AdminAlertService {
     }
 
     @Override
-    public CompletableFuture<Optional<String>> resolve(String key, String note) {
+    public void resolve(String key, String note) {
         AdminAlertSeverity severity = severityByKey.remove(key);
-        if (severity == null) {
-            return completedFuture(Optional.empty());
+        if (severity != null) {
+            logger.log(levelOf(severity), "ALERT RESOLVED {}: {}", key, note);
         }
-        logger.log(levelOf(severity), "ALERT RESOLVED {}: {}", key, note);
-        return completedFuture(Optional.of(key));
     }
 
     @Override

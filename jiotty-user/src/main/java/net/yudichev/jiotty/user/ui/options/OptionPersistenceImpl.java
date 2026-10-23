@@ -36,6 +36,7 @@ public final class OptionPersistenceImpl implements OptionPersistence {
         save(optionKey, value, false);
     }
 
+    @Override
     public void save(String optionKey, Object value, boolean sensitive) {
         if (sensitive) {
             varStore.saveValueEncrypted(createStoreKey(optionKey), value);
@@ -58,6 +59,7 @@ public final class OptionPersistenceImpl implements OptionPersistence {
         return load(valueType, optionKey, false);
     }
 
+    @Override
     public <T> Optional<T> load(TypeToken<T> valueType, String optionKey, boolean sensitive) {
         return sensitive
                ? varStore.readValueEncrypted(valueType, createStoreKey(optionKey))

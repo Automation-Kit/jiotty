@@ -26,6 +26,11 @@ public interface TaskExecutor extends Executor {
         }
     }
 
+    /// Submits `command` as [#submit(Runnable)] does, except that a [RejectedExecutionException] fails the returned future instead of being thrown.
+    default CompletableFuture<Void> submitOrFail(Runnable command) {
+        return submitOrFail(toCallable(command));
+    }
+
     @Override
     default void execute(Runnable command) {
         execute("task", command);

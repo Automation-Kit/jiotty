@@ -104,12 +104,11 @@ public interface AdminAlertService {
     /// this interface, which all funnel here.
     String raise(AdminAlertData data);
 
-    /// Server-driven resolution. Resolved-by is recorded as `"system"`. This method can only be called if the caller can guarantee that exactly the condition
-    /// that caused the alert with the specified key is no longer a problem. If such guarantee cannot be made, the method should not be called: the alert will
-    /// need to be left for the operator to resolve.
+    /// Resolves the active alert keyed `key`, if there is one, recording `"system"` as the resolver. Call it only when exactly the condition that raised the
+    /// alert is known to be over; otherwise leave the alert for an operator.
     ///
-    /// @return a future of the id of the resolved alert, or empty if no active alert matches the given key
-    CompletableFuture<Optional<String>> resolve(String key, String note);
+    /// @implSpec An implementation that fails to resolve the alert logs at WARN and does nothing else.
+    void resolve(String key, String note);
 
     /// Operator-driven resolution by alert id (used by the HTTP resolve endpoint).
     CompletableFuture<ResolveByIdOutcome> resolveById(String alertId, String resolvedBy, Optional<String> note);

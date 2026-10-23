@@ -1,11 +1,15 @@
 package net.yudichev.jiotty.adminalerts;
 
+import net.yudichev.jiotty.common.testutil.LogCapture;
+import net.yudichev.jiotty.common.testutil.LogCapture.CapturedLine;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 class LoggingAdminAlertServiceTest {
     private final LoggingAdminAlertService service = new LoggingAdminAlertService();
@@ -24,31 +28,44 @@ class LoggingAdminAlertServiceTest {
     }
 
     @Test
-    void resolve_returnsKeyWhenAlertActive() {
-        String key = service.raise(AdminAlertData.builder()
-                                                 .setSeverity(AdminAlertSeverity.ERROR)
-                                                 .setTitle("Sync failed")
-                                                 .setDescription("timeout")
-                                                 .build());
+    void resolve_logsTheResolutionOfAnActiveAlertAtItsSeverity() {
+        String key = raiseSyncFailure();
 
-        assertThat(service.resolve(key, "recovered")).isCompletedWithValue(Optional.of(key));
+        try (LogCapture log = LogCapture.capture(LoggingAdminAlertService.class, Level.INFO)) {
+            service.resolve(key, "recovered");
+
+            assertThat(log.lines()).extracting(CapturedLine::level, CapturedLine::message)
+                                   .containsExactly(tuple(Level.ERROR, "ALERT RESOLVED " + key + ": recovered"));
+        }
     }
 
     @Test
-    void resolve_isIdempotent_secondResolveReturnsEmpty() {
-        String key = service.raise(AdminAlertData.builder()
-                                                 .setSeverity(AdminAlertSeverity.ERROR)
-                                                 .setTitle("Sync failed")
-                                                 .setDescription("timeout")
-                                                 .build());
+    void resolve_isIdempotent_secondResolveLogsNothing() {
+        String key = raiseSyncFailure();
+        service.resolve(key, "recovered");
 
-        assertThat(service.resolve(key, "recovered")).isCompletedWithValue(Optional.of(key));
-        assertThat(service.resolve(key, "recovered again")).isCompletedWithValue(Optional.empty());
+        try (LogCapture log = LogCapture.capture(LoggingAdminAlertService.class, Level.INFO)) {
+            service.resolve(key, "recovered again");
+
+            assertThat(log.lines()).isEmpty();
+        }
     }
 
     @Test
-    void resolve_unknownKeyReturnsEmpty() {
-        assertThat(service.resolve("auto:never-raised", "note")).isCompletedWithValue(Optional.empty());
+    void resolve_unknownKeyLogsNothing() {
+        try (LogCapture log = LogCapture.capture(LoggingAdminAlertService.class, Level.INFO)) {
+            service.resolve("auto:never-raised", "note");
+
+            assertThat(log.lines()).isEmpty();
+        }
+    }
+
+    private String raiseSyncFailure() {
+        return service.raise(AdminAlertData.builder()
+                                           .setSeverity(AdminAlertSeverity.ERROR)
+                                           .setTitle("Sync failed")
+                                           .setDescription("timeout")
+                                           .build());
     }
 
     @Test

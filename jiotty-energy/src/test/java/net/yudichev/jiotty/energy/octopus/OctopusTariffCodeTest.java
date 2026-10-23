@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.energy.octopus;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -15,5 +16,13 @@ final class OctopusTariffCodeTest {
     })
     void productCode(String tariffCode, String expectedProductCode) {
         assertThat(OctopusTariffCode.productCode(tariffCode)).isEqualTo(expectedProductCode);
+    }
+
+    @Test
+    void createSingleRateElectricityCodeBuildsTheTariffCodeProductCodeReadsBack() {
+        String tariffCode = OctopusTariffCode.createSingleRateElectricityCode("AGILE-24-10-01", 'C');
+
+        assertThat(tariffCode).isEqualTo("E-1R-AGILE-24-10-01-C");
+        assertThat(OctopusTariffCode.productCode(tariffCode)).isEqualTo("AGILE-24-10-01");
     }
 }

@@ -98,7 +98,7 @@ public final class TestAdminAlertService implements AdminAlertService {
     }
 
     @Override
-    public CompletableFuture<Optional<String>> resolve(String key, String note) {
+    public void resolve(String key, String note) {
         checkNotNull(key, "key");
         checkNotNull(note, "note");
         if (beforeNextResolve != null) {
@@ -107,16 +107,14 @@ public final class TestAdminAlertService implements AdminAlertService {
             action.run();
         }
         String id = activeIdByKey.remove(key);
-        if (id == null) {
-            return completedFuture(Optional.empty());
+        if (id != null) {
+            alertsById.computeIfPresent(id, (_, existing) -> AdminAlert.builder()
+                                                                       .from(existing)
+                                                                       .setResolvedAt(timeProvider.currentInstant())
+                                                                       .setResolvedBy("system")
+                                                                       .setResolutionNote(note)
+                                                                       .build());
         }
-        alertsById.computeIfPresent(id, (_, existing) -> AdminAlert.builder()
-                                                                   .from(existing)
-                                                                   .setResolvedAt(timeProvider.currentInstant())
-                                                                   .setResolvedBy("system")
-                                                                   .setResolutionNote(note)
-                                                                   .build());
-        return completedFuture(Optional.of(id));
     }
 
     @Override

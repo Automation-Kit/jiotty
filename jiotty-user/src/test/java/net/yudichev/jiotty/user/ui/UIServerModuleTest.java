@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.ui;
 
+import com.google.common.reflect.TypeToken;
 import com.google.inject.AbstractModule;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
@@ -19,6 +20,8 @@ import net.yudichev.jiotty.persistence.varstore.InMemoryVarStore;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
 import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.options.Option;
+import net.yudichev.jiotty.user.ui.options.OptionPersistence;
+import net.yudichev.jiotty.user.ui.options.OptionPersistenceImpl;
 import net.yudichev.jiotty.user.ui.sse.SseAdmission;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -68,6 +71,13 @@ class UIServerModuleTest {
         assertThat(injector.getInstance(PushDeviceStore.class).list()).succeedsWithin(CALL_TIMEOUT)
                                                                       .asInstanceOf(LIST)
                                                                       .isEmpty();
+    }
+
+    @Test
+    void exposesOptionPersistenceOverTheVarStoreItIsGiven() {
+        injector.getInstance(OptionPersistence.class).save("test.option", "stored", false);
+
+        assertThat(new OptionPersistenceImpl(injector.getInstance(VarStore.class)).load(TypeToken.of(String.class), "test.option", false)).contains("stored");
     }
 
     @Test

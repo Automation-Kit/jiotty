@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentMap;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
+import static net.yudichev.jiotty.energy.octopus.OctopusTariffCode.AGILE_PRODUCT_CODE_PREFIX;
 
 /// App-scope lazy registry of [OctopusAgilePriceServiceImpl] instances keyed by `tariffCode`. The first [#forTariff] call for a given tariff opens an
 /// [OctopusRegionService] for the tariff's region (or reuses an already-opened one), constructs the per-tariff impl via the injected
@@ -26,7 +27,6 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 /// Closing the registry closes every created impl and every opened region service.
 public final class OctopusAgilePriceServiceRegistry extends BaseLifecycleComponent {
     private static final Logger logger = LogManager.getLogger(OctopusAgilePriceServiceRegistry.class);
-    private static final String AGILE_PRODUCT_CODE_PREFIX = "AGILE-";
 
     private final OctopusEnergy octopusEnergy;
     private final OctopusAgilePriceService.Factory factory;

@@ -101,8 +101,20 @@ public abstract class BaseOption<T> implements Option<T>, StringFormattable {
     /// @param type        what the body is expected to hold
     /// @param valueMapper turns that into this option's own value, on this option's executor
     protected final <B> CompletableFuture<FormSubmitResult> submitJson(Optional<String> body, Class<B> type, Function<B, T> valueMapper) {
+        return submitJson(body, type, valueMapper, saved -> saved);
+    }
+
+    /// Applies a value submitted as a JSON body and responds with the result of `responseMapper` applied to the saved value. An absent or unparseable body is
+    /// rejected in the same way as by [#submitJson(Optional, Class, Function)].
+    ///
+    /// @param responseMapper converts the saved value into the response, and runs on this option's executor. It may return `null` when the option has no
+    ///                       value, and an exception it throws fails the submission.
+    protected final <B> CompletableFuture<FormSubmitResult> submitJson(Optional<String> body,
+                                                                       Class<B> type,
+                                                                       Function<B, T> valueMapper,
+                                                                       Function<T, @Nullable Object> responseMapper) {
         return body.flatMap(encoded -> Json.tryParse(encoded, type))
-                   .map(parsed -> submit(() -> valueMapper.apply(parsed), saved -> saved))
+                   .map(parsed -> submit(() -> valueMapper.apply(parsed), responseMapper))
                    .orElseGet(() -> completedFuture(INVALID_BODY));
     }
 
@@ -148,6 +160,15 @@ public abstract class BaseOption<T> implements Option<T>, StringFormattable {
             throw rejection.toException();
         });
         return store(value);
+    }
+
+    /// Sets the value and notifies the change listeners, skipping [#validate(T)] and [#onChanged()]. Use it, on this option's executor, for a value the
+    /// option's owner has already applied.
+    protected final void setValueWithoutApplying(T value) {
+        if (!Objects.equals(this.value, value)) {
+            this.value = value;
+            changeListeners.notify(this);
+        }
     }
 
     /// Stores a value [#validate(T)] has already accepted, enriching it through [#onChanged()] and putting the previous value back if that fails.

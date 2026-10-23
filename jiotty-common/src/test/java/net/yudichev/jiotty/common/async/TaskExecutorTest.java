@@ -3,6 +3,8 @@ package net.yudichev.jiotty.common.async;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 
@@ -25,6 +27,28 @@ class TaskExecutorTest {
         executor.fillQueue();
 
         CompletableFuture<String> result = executor.submitOrFail(() -> "done");
+
+        assertThat(result).failsWithin(Duration.ZERO).withThrowableThat().withCauseInstanceOf(RejectedExecutionException.class);
+    }
+
+    @Test
+    void submitOrFailRunsACommand() {
+        List<String> ran = new ArrayList<>();
+
+        CompletableFuture<Void> result = executor.submitOrFail(() -> {
+            ran.add("command");
+        });
+        clock.tick();
+
+        assertThat(result).isCompleted();
+        assertThat(ran).containsExactly("command");
+    }
+
+    @Test
+    void submitOrFailFailsTheFutureWhenTheCommandIsRejected() {
+        executor.fillQueue();
+
+        CompletableFuture<Void> result = executor.submitOrFail(() -> {});
 
         assertThat(result).failsWithin(Duration.ZERO).withThrowableThat().withCauseInstanceOf(RejectedExecutionException.class);
     }

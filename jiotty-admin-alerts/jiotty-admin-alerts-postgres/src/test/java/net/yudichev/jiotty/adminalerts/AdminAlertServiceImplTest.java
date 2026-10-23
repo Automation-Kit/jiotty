@@ -5,15 +5,18 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.QueueFullException;
 import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.testutil.LogCapture;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
 import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -169,9 +172,11 @@ class AdminAlertServiceImplTest {
         service.raise(data(title, "d", AdminAlertSeverity.ERROR, labels));
         flush();
         String derivedKey = AdminAlertKeys.derive(title, AdminAlertSeverity.ERROR, labels);
-        String raisedId = service.findByKey(derivedKey).orElseThrow().id();
 
-        assertThat(service.resolve(derivedKey, "cleared")).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(Optional.of(raisedId));
+        service.resolve(derivedKey, "cleared");
+        flush();
+
+        assertThat(service.findByKey(derivedKey).orElseThrow().resolvedAt()).isPresent();
     }
 
     /// A request whose task the full executor rejects fails its future.
@@ -179,14 +184,26 @@ class AdminAlertServiceImplTest {
     void requestsTheExecutorRejectsFailTheirFutures() {
         rejectingExecutor.fillQueue();
 
-        assertThat(List.of(service.resolve("auto:key", "cleared"),
-                           service.resolveById("a1", "admin@example.com", Optional.empty()),
+        assertThat(List.of(service.resolveById("a1", "admin@example.com", Optional.empty()),
                            service.deleteResolvedOlderThan(Duration.ofDays(1)),
                            service.deleteByLabel("userId", "u1")))
                 .allSatisfy(future -> assertThat(future).failsWithin(Duration.ZERO)
                                                         .withThrowableThat()
                                                         .havingRootCause()
                                                         .isInstanceOf(RejectedExecutionException.class));
+    }
+
+    @Test
+    void aResolveTheFullExecutorRejectsIsLoggedAtWarn() {
+        rejectingExecutor.fillQueue();
+
+        try (LogCapture log = LogCapture.capture(AdminAlertServiceImpl.class, Level.WARN)) {
+            service.resolve("auto:key", "cleared");
+
+            assertThat(log.lines()).singleElement()
+                                   .satisfies(line -> assertThat(line.message()).isEqualTo("Failed to resolve alert with key auto:key"))
+                                   .satisfies(line -> assertThat(line.thrown()).anyMatch(thrown -> thrown.startsWith(QueueFullException.class.getName())));
+        }
     }
 
     @Test
@@ -254,8 +271,8 @@ class AdminAlertServiceImplTest {
         String firstId = service.findByKey(firstKey).orElseThrow().id();
 
         clock.setTime(T0.plus(ONE_MINUTE));
-        Optional<String> resolved = await(service.resolve(firstKey, "no longer firing"));
-        assertThat(resolved).contains(firstId);
+        service.resolve(firstKey, "no longer firing");
+        flush();
         AdminAlert resolvedAlert = service.findByKey(firstKey).orElseThrow();
         assertThat(resolvedAlert.resolvedAt()).contains(T0.plus(ONE_MINUTE));
         assertThat(resolvedAlert.resolvedBy()).contains("system");
@@ -278,20 +295,26 @@ class AdminAlertServiceImplTest {
         String id = service.findByKey(key).orElseThrow().id();
 
         clock.setTime(T0.plus(ONE_MINUTE.multipliedBy(2)));
-        await(service.resolve(key, "note"));
+        service.resolve(key, "note");
+        flush();
 
         assertThat(selectEvents(id)).extracting(EventRow::description).containsExactly("e1", "e2");
     }
 
     @Test
-    void resolve_alreadyResolved_returnsEmpty() {
+    void resolve_alreadyResolved_keepsTheFirstResolution() {
         String key = service.raise(data("title", "desc", AdminAlertSeverity.ERROR, Map.of()));
+        clock.setTime(T0.plus(ONE_MINUTE));
+        service.resolve(key, "first");
         flush();
-        await(service.resolve(key, "note"));
 
-        Optional<String> second = await(service.resolve(key, "note"));
+        clock.setTime(T0.plus(ONE_MINUTE.multipliedBy(2)));
+        service.resolve(key, "second");
+        flush();
 
-        assertThat(second).isEmpty();
+        AdminAlert alert = service.findByKey(key).orElseThrow();
+        assertThat(alert.resolvedAt()).contains(T0.plus(ONE_MINUTE));
+        assertThat(alert.resolutionNote()).contains("first");
     }
 
     @Test
@@ -305,7 +328,7 @@ class AdminAlertServiceImplTest {
         String key = service.raise(data("title", "desc", AdminAlertSeverity.ERROR, Map.of()));
         flush();
         String id = service.findByKey(key).orElseThrow().id();
-        await(service.resolve(key, "note"));
+        service.resolve(key, "note");
 
         assertThat(await(service.resolveById(id, "alice@example.com", Optional.empty())))
                 .isEqualTo(AdminAlertService.ResolveByIdOutcome.ALREADY_RESOLVED);
@@ -336,9 +359,11 @@ class AdminAlertServiceImplTest {
         String resolvedOldId = service.findByKey(oldKey).orElseThrow().id();
 
         clock.setTime(T0.plus(Duration.ofDays(10)));
-        await(service.resolve(oldKey, "note"));
+        service.resolve(oldKey, "note");
+        flush();
         clock.setTime(T0.plus(Duration.ofDays(200)));
-        await(service.resolve(recentKey, "note"));
+        service.resolve(recentKey, "note");
+        flush();
 
         clock.setTime(T0.plus(Duration.ofDays(201)));
         Integer deleted = await(service.deleteResolvedOlderThan(Duration.ofDays(180)));
@@ -382,7 +407,7 @@ class AdminAlertServiceImplTest {
         String activeKey = service.raise(data("active", "d", AdminAlertSeverity.ERROR, Map.of("userId", "u-1")));
         String resolvedKey = service.raise(data("resolved", "d", AdminAlertSeverity.ERROR, Map.of("userId", "u-1")));
         flush();
-        await(service.resolve(resolvedKey, "note"));
+        service.resolve(resolvedKey, "note");
 
         assertThat(await(service.deleteByLabel("userId", "u-1"))).isEqualTo(2);
         assertThat(service.findByKey(activeKey)).isEmpty();

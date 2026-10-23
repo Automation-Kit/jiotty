@@ -165,7 +165,8 @@ class AdminAlertResolveServletTest {
     void alreadyResolved_returns409() {
         String alertId = raiseActive();
         String key = readDedupKey(alertId);
-        getAsUnchecked(() -> alertService.resolve(key, "note").get(10, SECONDS));
+        alertService.resolve(key, "note");
+        flush();
 
         HttpResponse<String> response = sendResolve(alertId, GRAFANA_USER);
 

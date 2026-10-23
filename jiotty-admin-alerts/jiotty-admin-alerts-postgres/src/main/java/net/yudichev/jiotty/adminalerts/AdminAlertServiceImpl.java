@@ -120,8 +120,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         selectActiveBundleIdByKeySql = "SELECT id FROM " + alertTable + " WHERE dedup_key=? AND resolved_at IS NULL";
         resolveByDedupKeySql = "UPDATE " + alertTable +
                                " SET resolved_at=?, resolved_by=?, resolution_note=? " +
-                               "WHERE dedup_key=? AND resolved_at IS NULL " +
-                               "RETURNING id";
+                               "WHERE dedup_key=? AND resolved_at IS NULL";
         // Single-statement CTE: branch on existence-and-state in one round-trip with a snapshot-consistent view (Postgres evaluates all CTEs against the
         // same snapshot), so there is no race between the existence check and the resolve. Returns 'RESOLVED' / 'ALREADY_RESOLVED' / 'UNKNOWN'.
         resolveByIdSql = "WITH target AS (SELECT id FROM " + alertTable + " WHERE id=?), " +
@@ -199,12 +198,18 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
     }
 
     @Override
-    public CompletableFuture<Optional<String>> resolve(String key, String note) {
+    public void resolve(String key, String note) {
         validateKey(key);
         checkNotNull(note, "note");
-        return whenStartedAndNotLifecycling(() -> {
+        whenStartedAndNotLifecycling(() -> {
             logger.info("SYSTEM RESOLVE ALERT {}: {}", key, note);
-            return executor.submitOrFail(() -> doResolve(key, note));
+            executor.submitOrFail(() -> doResolve(key, note))
+                    .whenComplete((_, error) -> {
+                        if (error != null) {
+                            // Logged at WARN although jiotty library code otherwise logs no warnings, because [AdminAlertService#resolve] requires it.
+                            logger.warn("Failed to resolve alert with key {}", key, error);
+                        }
+                    });
         });
     }
 
@@ -389,7 +394,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
         return data.withLabels(augmented);
     }
 
-    private Optional<String> doResolve(String key, String note) {
+    private void doResolve(String key, String note) {
         Instant now = timeProvider.currentInstant();
         try (Connection connection = dataSource.getConnection();
              PreparedStatement stmt = connection.prepareStatement(resolveByDedupKeySql)) {
@@ -397,9 +402,7 @@ public final class AdminAlertServiceImpl extends BaseLifecycleComponent implemen
             stmt.setString(2, "system");
             stmt.setString(3, note);
             stmt.setString(4, key);
-            try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
-            }
+            stmt.executeUpdate();
         } catch (SQLException e) {
             throw new RuntimeException("Failed to resolve alert with key " + key, e);
         }

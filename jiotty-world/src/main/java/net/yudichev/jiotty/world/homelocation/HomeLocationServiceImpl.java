@@ -54,7 +54,7 @@ final class HomeLocationServiceImpl extends BaseLifecycleComponent implements Ho
         optionRegistration = uiServer.registerOption(new LocationOption(executor,
                                                                         OptionMeta.<LatLon>builder()
                                                                                   .setTabName("Misc")
-                                                                                  .setKey("homeLocation")
+                                                                                  .setKey(OPTION_KEY)
                                                                                   .setLabel("Home Location")
                                                                                   .setSensitive(true)
                                                                                   .build()) {

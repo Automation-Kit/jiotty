@@ -277,8 +277,7 @@ class PostgresqlDestinationImpl extends BaseIdempotentCloseable implements Postg
                         lastRecorded = recordable;
                         if (insertFailureAlertKey != null) {
                             // This insert is proof the condition the alert describes is over, which is what permits an application-driven resolve.
-                            alertService.resolve(insertFailureAlertKey, "recording succeeded")
-                                        .whenComplete(alertService.alertOnFailure(WARNING, "Failed to resolve a recording alert", logger, typeName));
+                            alertService.resolve(insertFailureAlertKey, "recording succeeded");
                             insertFailureAlertKey = null;
                         }
                     } catch (SQLException e) {

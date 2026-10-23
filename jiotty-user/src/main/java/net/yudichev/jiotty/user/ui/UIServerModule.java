@@ -86,6 +86,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
     protected void configure() {
         varStoreSpec.bind(new TypeLiteral<>() {}).annotatedWith(OptionPersistenceImpl.Dependency.class).installedBy(this::installLifecycleComponentModule);
         bind(OptionPersistence.class).to(OptionPersistenceImpl.class);
+        expose(OptionPersistence.class);
 
         // The per-user suffix already names the UI executor's thread; bound here as well so a component logging from a container thread — where the thread
         // name carries no subject — can still say which user's stream it is talking about.

@@ -4,7 +4,14 @@ package net.yudichev.jiotty.energy.octopus;
 /// (product `AGILE-24-10-01`, region `A`) or `E-FLAT2R-SILVER-23-12-06-A` (product `SILVER-23-12-06`). The rate-type segment is **not** fixed-width — `1R`,
 /// `2R`, `FLAT2R` all occur — so the product code is everything between the second and the last dash, not a fixed-offset substring.
 public final class OctopusTariffCode {
+    public static final String AGILE_PRODUCT_CODE_PREFIX = "AGILE-";
+
     private OctopusTariffCode() {
+    }
+
+    /// @return the code of the single-rate electricity tariff of `productCode` in `region` (`AGILE-24-10-01`, `C` → `E-1R-AGILE-24-10-01-C`)
+    public static String createSingleRateElectricityCode(String productCode, char region) {
+        return "E-1R-" + productCode + '-' + region;
     }
 
     /// The product code embedded in a tariff code: the segments between the rate-type and the region — i.e. the text after the second dash and before the last

@@ -51,8 +51,9 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.energy.octopus.Bindings.ExecutorProvider;
+import static net.yudichev.jiotty.energy.octopus.OctopusTariffCode.AGILE_PRODUCT_CODE_PREFIX;
 
-/// The single source of truth for one user's Octopus energy provider. Acquires the per-credentials [OctopusAccountService] handle once, polls
+/// The single source of truth for one user's Octopus energy provider. Acquires the account's [OctopusAccountService] handle once per start, polls
 /// [OctopusAccountService#getAccount] on a fixed interval through a [RetryableOperationExecutor], and feeds the result to two views off the same fetch:
 ///
 /// - **prices** — derives the current tariff and region from each account update, routes to the cached app-scope Agile-prices instance for the tariff
@@ -66,7 +67,6 @@ import static net.yudichev.jiotty.energy.octopus.Bindings.ExecutorProvider;
 public final class OctopusEnergyProviderService extends BaseLifecycleComponent implements EnergyProviderService {
     private static final Logger logger = LogManager.getLogger(OctopusEnergyProviderService.class);
     private static final Duration ACCOUNT_POLL_INTERVAL = Duration.ofHours(12);
-    private static final String AGILE_PRODUCT_CODE_PREFIX = "AGILE-";
     /// How far back [#latestConsumptionInstant] looks for the most recent published consumption slot. This bounds the search, not a lag assumption: it
     /// comfortably exceeds Octopus' worst-case publication delay (hours to ~48 h), so the true frontier is found whenever the meter has reported at all.
     private static final Duration CONSUMPTION_FRONTIER_PROBE_WINDOW = Duration.ofDays(14);
@@ -74,8 +74,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     private final Provider<SchedulingExecutor> executorProvider;
     private final CurrentDateTimeProvider timeProvider;
     private final OctopusEnergy octopusEnergy;
-    private final String accountId;
-    private final String apiKey;
+    private final Provider<OctopusAccountService> accountServiceProvider;
     private final RetryableOperationExecutor retryExecutor;
     private final OctopusAgilePriceServiceRegistry octopusRegistry;
     private final PriceForecastServiceRegistry priceForecastRegistry;
@@ -108,8 +107,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     public OctopusEnergyProviderService(@ExecutorProvider Provider<SchedulingExecutor> executorProvider,
                                         CurrentDateTimeProvider timeProvider,
                                         OctopusEnergy octopusEnergy,
-                                        @AccountId String accountId,
-                                        @ApiKey String apiKey,
+                                        @Dependency Provider<OctopusAccountService> accountServiceProvider,
                                         @PollRetry RetryableOperationExecutor retryExecutor,
                                         OctopusAgilePriceServiceRegistry octopusRegistry,
                                         PriceForecastServiceRegistry priceForecastRegistry,
@@ -121,8 +119,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         this.executorProvider = checkNotNull(executorProvider);
         this.timeProvider = checkNotNull(timeProvider);
         this.octopusEnergy = checkNotNull(octopusEnergy);
-        this.accountId = checkNotNull(accountId);
-        this.apiKey = checkNotNull(apiKey);
+        this.accountServiceProvider = checkNotNull(accountServiceProvider);
         this.retryExecutor = checkNotNull(retryExecutor);
         this.octopusRegistry = checkNotNull(octopusRegistry);
         this.priceForecastRegistry = checkNotNull(priceForecastRegistry);
@@ -132,7 +129,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     @Override
     protected void doStart() {
         executor = executorProvider.get();
-        accountService = octopusEnergy.account(accountId, apiKey);
+        accountService = accountServiceProvider.get();
         pollSchedule = executor.scheduleAtFixedRate(Duration.ZERO, ACCOUNT_POLL_INTERVAL, this::poll);
     }
 
@@ -367,16 +364,11 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         return tariff.validFrom().equals(now) || tariff.validFrom().isBefore(now) && tariff.validTo().isAfter(now);
     }
 
+    /// Qualifies the [OctopusAccountService] provider. [#doStart()] obtains a new instance from it on each start, since [#doStop()] closes the previous one.
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
-    @interface ApiKey {
-    }
-
-    @BindingAnnotation
-    @Target({FIELD, PARAMETER, METHOD})
-    @Retention(RUNTIME)
-    @interface AccountId {
+    @interface Dependency {
     }
 
     /// Qualifies the long-window [RetryableOperationExecutor] used by the background account poll (see [#retryExecutor]). Annotated so the binding never
