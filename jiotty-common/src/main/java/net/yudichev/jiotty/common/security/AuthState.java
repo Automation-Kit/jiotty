@@ -7,6 +7,9 @@ import net.yudichev.jiotty.common.lang.StringFormattable;
 public sealed interface AuthState {
 
     record Success(String authInfo) implements AuthState, StringFormattable {
+        /// A success whose `authInfo` carries no credential.
+        public static final Success AUTHENTICATED = new Success("authenticated");
+
         @Override
         public String toString() {
             return toString(16);

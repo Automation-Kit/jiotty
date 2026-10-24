@@ -1,11 +1,5 @@
 package net.yudichev.jiotty.connector.google.calendar;
 
-import com.google.api.client.googleapis.json.GoogleJsonResponseException;
-import com.google.api.client.http.HttpRequestInitializer;
-import com.google.api.client.http.HttpTransport;
-import com.google.api.client.http.javanet.NetHttpTransport;
-import com.google.api.client.json.gson.GsonFactory;
-import com.google.api.services.calendar.Calendar;
 import com.google.api.services.calendar.model.CalendarList;
 import com.google.api.services.calendar.model.CalendarListEntry;
 import com.google.common.annotations.VisibleForTesting;
@@ -14,25 +8,29 @@ import com.google.common.collect.ImmutableSet;
 import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
-import net.yudichev.jiotty.common.async.ExecutorFactory;
+import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.SequentialOperationQueue;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.rest.HttpResponseException;
+import net.yudichev.jiotty.common.rest.HttpStatuses;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.calendar.CalendarService;
 import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.Calendars;
 import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.NotYetAuthenticated;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
+import okhttp3.OkHttpClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
 
-import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,22 +39,26 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static java.util.concurrent.CompletableFuture.completedFuture;
+import static java.util.concurrent.CompletableFuture.failedFuture;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.GONE_410;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
-import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarRequests.createResponseFailure;
-import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarRequests.createTransportFailure;
-import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarRequests.errorReason;
-import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarRequests.reportCredentialRejection;
+import static net.yudichev.jiotty.common.rest.RestClients.newClient;
+import static net.yudichev.jiotty.common.rest.RestClients.shutdownNow;
+import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarApi.createResponseFailure;
+import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarApi.errorReason;
+import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarApi.reportCredentialRejection;
 
 @SuppressWarnings({"FieldAccessNotGuarded", "NonFinalGuard"}) // @GuardedBy("executor") marks executor confinement, which IntelliJ's lock analysis cannot see
-class GoogleCalendarService extends BaseLifecycleComponent implements CalendarService {
+public class GoogleCalendarService extends BaseLifecycleComponent implements CalendarService {
     /// What [#syncCalendarList] does, completing its failure messages.
     @VisibleForTesting
     static final String CALENDAR_LIST_SYNC = "sync the Google calendar list";
@@ -64,43 +66,43 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     static final String RATE_LIMIT_EXCEEDED_REASON = "rateLimitExceeded";
     @VisibleForTesting
     static final String USER_RATE_LIMIT_EXCEEDED_REASON = "userRateLimitExceeded";
+
     private static final Logger logger = LogManager.getLogger(GoogleCalendarService.class);
-    private static final String APPLICATION_NAME = "jiotty";
-    /// Re-emitted in place of the token manager's [AuthState.Success] so the raw access token is never exposed to subscribers.
-    private static final AuthState AUTHENTICATED = new AuthState.Success("authenticated");
+
     /// Calendar API 403 `reason` values that denote a transient rate/quota limit (retry with backoff) rather than a permanently-rejected credential — see
     /// [Handle API errors](https://developers.google.com/workspace/calendar/api/guides/errors). `dailyLimitExceeded` is the general Google quota reason,
     /// included defensively; a credential/permission problem is reported as a `401` or a different `403` reason, none of which appear here.
     private static final Set<String> TRANSIENT_403_REASONS =
             ImmutableSet.of(RATE_LIMIT_EXCEEDED_REASON, USER_RATE_LIMIT_EXCEEDED_REASON, "dailyLimitExceeded", "quotaExceeded");
+    private static final CompletableFuture<@Nullable Void> COMPLETED = completedFuture(null);
 
-    private final ExecutorFactory executorFactory;
+    private final Provider<SchedulingExecutor> executorProvider;
     private final OAuth2TokenManager tokenManager;
     private final String redirectUri;
     private final Optional<String> authCode;
     private final Optional<String> codeVerifier;
-    private final int timeoutMillis;
+    private final Duration timeout;
     private final String logSubjectId;
     private final ObservableValue<AuthState> authState;
-    /// Invoked when Google rejects the credential a request carried, by [#syncCalendarList] and by every [GoogleCalendar] this service creates.
-    private final Consumer<String> credentialRejectionHandler = this::invalidateRejectedCredential;
     /// The current calendar set, kept up to date by incremental `calendarList` sync (see [#syncCalendarList]). An unchanged calendar keeps its existing
     /// [GoogleCalendar] instance across refreshes, so the consumer's identity-based change detection only fires on real changes.
     @GuardedBy("executor")
     private final Map<String, GoogleCalendar> calendarsById = new LinkedHashMap<>();
-    /// Written by the token-state callback (which marshals onto the executor in [#doStart]) and read by the request initializer, which runs during Google
-    /// Calendar API calls that are themselves submitted to the executor. `null` until the first token arrives.
+    /// Written by the token-state callback and read when a sync or an events fetch starts. `null` until the first token arrives.
     @GuardedBy("executor")
     private @Nullable String accessToken;
     /// `calendarList` sync token from the last successful sync, or `null` when a full list is needed (first sync, or after the token expired).
     @GuardedBy("executor")
     private @Nullable String calendarListSyncToken;
     private SchedulingExecutor executor;
-    private Calendar calendarApi;
+    /// Runs the calendar-list syncs one after another, so each sync reads the [#calendarListSyncToken] and [#calendarsById] the previous one left.
+    private SequentialOperationQueue syncQueue;
+    private OkHttpClient httpClient;
+    private GoogleCalendarApi api;
     private @Nullable Closeable tokenSubscription;
 
     @Inject
-    public GoogleCalendarService(ExecutorFactory executorFactory,
+    public GoogleCalendarService(@Dependency Provider<SchedulingExecutor> executorProvider,
                                  @Dependency OAuth2TokenManager tokenManager,
                                  @RedirectUri String redirectUri,
                                  @AuthCode Optional<String> authCode,
@@ -109,38 +111,30 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                                  @LogSubjectId String logSubjectId,
                                  TaskFailureReporter taskFailureReporter) {
         checkNotNull(taskFailureReporter);
+        // Subscribers attach from the caller's thread, before start included, while the executor publishes.
         authState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"),
                                                e -> taskFailureReporter.onTaskException("Delivering the Google Calendar authentication state", e));
-        this.executorFactory = checkNotNull(executorFactory);
+        this.executorProvider = checkNotNull(executorProvider);
         this.tokenManager = checkNotNull(tokenManager);
         this.redirectUri = checkNotNull(redirectUri);
         this.authCode = checkNotNull(authCode);
         this.codeVerifier = checkNotNull(codeVerifier);
-        timeoutMillis = Math.toIntExact(checkNotNull(timeout).toMillis());
+        checkArgument(timeout.isPositive(), "timeout must be positive, but was %s", timeout);
+        this.timeout = timeout;
         this.logSubjectId = checkNotNull(logSubjectId);
     }
 
     @Override
     protected void doStart() {
-        // Tag the executor thread with the subject id so [%t] in the log pattern distinguishes concurrent per-user instances.
-        // The family is the coarse "Google-Calendar", shared across per-user instances.
-        executor = executorFactory.createSingleThreadedSchedulingExecutor(
-                logSubjectId.isBlank() ? "Google-Calendar" : "Google-Calendar-" + logSubjectId, "Google-Calendar", ExecutorFactory.DEFAULT_MAX_QUEUE_SIZE);
-        HttpRequestInitializer requestInitializer = request -> {
-            request.setConnectTimeout(timeoutMillis).setReadTimeout(timeoutMillis);
-            if (accessToken != null) {
-                request.getHeaders().setAuthorization("Bearer " + accessToken);
-            }
-        };
-        calendarApi = new Calendar.Builder(createHttpTransport(), GsonFactory.getDefaultInstance(), requestInitializer)
-                .setApplicationName(APPLICATION_NAME)
-                .build();
-        // Cache the latest access token for the request initializer and re-publish the token manager's state as our auth state (hiding the raw token). The
-        // callback fires on the token manager's executor, so marshal onto our executor to keep accessToken single-threaded with the API calls that read it.
+        executor = executorProvider.get();
+        syncQueue = new SequentialOperationQueue(executor);
+        httpClient = createHttpClient();
+        api = new GoogleCalendarApi(httpClient, logSubjectId);
+        // Cache the latest access token for the requests and re-publish the token manager's state as our auth state (hiding the raw token).
         tokenSubscription = tokenManager.subscribeToAccessTokenState(state -> executor.tryExecute("onTokenState", () -> ifNotStopped(() -> {
             if (state instanceof AuthState.Success(String authInfo)) {
                 accessToken = authInfo;
-                authState.accept(AUTHENTICATED);
+                authState.accept(AuthState.Success.AUTHENTICATED);
             } else {
                 authState.accept(state);
             }
@@ -151,14 +145,14 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
 
     @Override
     protected void doStop() {
-        closeSafelyIfNotNull(logger, tokenSubscription, executor);
-        tokenSubscription = null;
+        // Inline on whichever thread stops this service: closing the subscription and shutting the client are safe from any thread.
+        closeSafelyIfNotNull(logger, tokenSubscription, () -> shutdownNow(httpClient));
     }
 
-    /// The HTTP transport the Calendar client is built on. Overridden in tests to supply a mock transport that returns canned API responses.
+    /// The client every Calendar API call goes through. Overridden in tests to supply a mock returning canned API responses.
     @VisibleForTesting
-    HttpTransport createHttpTransport() {
-        return new NetHttpTransport();
+    OkHttpClient createHttpClient() {
+        return newClient(timeout);
     }
 
     @Override
@@ -173,75 +167,68 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
 
     @Override
     public CompletableFuture<CalendarsResult> retrieveCalendars() {
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
-            // Not authenticated yet — the auth-code exchange has not produced a token.
-            if (accessToken == null) {
-                return NotYetAuthenticated.INSTANCE;
-            }
-            syncCalendarList();
-            return new Calendars(ImmutableList.copyOf(calendarsById.values()));
-        }));
+        //noinspection Convert2MethodRef — a method reference would read syncQueue, null before start, ahead of the started check
+        return submitWhileStarted(sync -> syncQueue.submit(sync), this::syncCalendarList);
     }
 
-    /// Refreshes [#calendarsById] from the Calendar API. The first call (and any call after the sync token has expired) does a full list; later calls send the
-    /// stored sync token and apply only the changed and removed entries, so each refresh transfers just the delta. On a `410` expiry the token is dropped and a
-    /// single full resync is performed. Runs on [#executor], with [#accessToken] non-null.
-    private void syncCalendarList() {
-        // accessToken is confined to this executor and the blocking calls below never yield to the token-state callback that writes it, so it stays fixed for
-        // the whole sync and invalidateRejectedCredential invalidates exactly the token these requests carried.
-        boolean retriedAfterExpiry = false;
-        while (true) {
-            if (calendarListSyncToken == null) {
-                calendarsById.clear();
+    private CompletableFuture<CalendarsResult> syncCalendarList() {
+        // Not authenticated yet — the auth-code exchange has not produced a token.
+        if (accessToken == null) {
+            return completedFuture(NotYetAuthenticated.INSTANCE);
+        }
+        return syncCalendarList(accessToken);
+    }
+
+    /// Refreshes [#calendarsById] from the Calendar API: in full while [#calendarListSyncToken] is `null`, otherwise only what changed, with one full resync
+    /// after the sync token expires. Starts on [#executor]; the pages are fetched off it and applied back on it.
+    ///
+    /// @param token the access token every request of this sync carries, and so the one to invalidate if the API rejects it
+    private CompletableFuture<CalendarsResult> syncCalendarList(String token) {
+        String syncToken = calendarListSyncToken;
+        // Held until the last page arrives: the pages come in off the executor that confines calendarsById, and a listing failing part-way must leave
+        // calendarsById as it was.
+        List<CalendarListEntry> entries = new ArrayList<>(calendarsById.size());
+        CompletableFuture<CalendarList> listing = api.listCalendars(token, Optional.ofNullable(syncToken), page -> {
+            List<CalendarListEntry> items = page.getItems();
+            if (items != null) {
+                entries.addAll(items);
             }
-            try {
-                String pageToken = null;
-                String nextSyncToken = null;
-                do {
-                    CalendarList response = calendarApi.calendarList().list()
-                                                       .setShowDeleted(true)
-                                                       .setSyncToken(calendarListSyncToken)
-                                                       .setPageToken(pageToken)
-                                                       .execute();
-                    List<CalendarListEntry> items = response.getItems();
-                    if (items != null) {
-                        for (CalendarListEntry entry : items) {
-                            if (Boolean.TRUE.equals(entry.getDeleted())) {
-                                calendarsById.remove(entry.getId());
-                            } else {
-                                String id = entry.getId();
-                                calendarsById.put(id, new GoogleCalendar(calendarApi, id, calendarName(entry), executor, credentialRejectionHandler));
-                            }
-                        }
-                    }
-                    pageToken = response.getNextPageToken();
-                    if (response.getNextSyncToken() != null) {
-                        nextSyncToken = response.getNextSyncToken();
-                    }
-                } while (pageToken != null);
-                if (nextSyncToken != null) {
-                    calendarListSyncToken = nextSyncToken;
-                }
-                return;
-            } catch (GoogleJsonResponseException e) {
-                if (e.getStatusCode() == GONE_410 && calendarListSyncToken != null && !retriedAfterExpiry) {
-                    logger.info("Google calendar list sync token expired; performing a full resync");
-                    calendarListSyncToken = null;
-                    retriedAfterExpiry = true;
-                } else {
-                    Optional<String> reason = errorReason(e);
-                    if (isPermanentAuthError(e.getStatusCode(), reason.orElse(null))) {
-                        // The credential is no longer accepted by the API — revoked access, a deleted client project, or the API not being enabled — even
-                        // though the token itself may still refresh. Invalidate it (escalating to a permanent auth failure) rather than retrying this call
-                        // indefinitely against a credential that will never work.
-                        throw reportCredentialRejection(e, reason, CALENDAR_LIST_SYNC, credentialRejectionHandler);
-                    }
-                    throw createResponseFailure(e, reason, CALENDAR_LIST_SYNC);
-                }
-            } catch (IOException e) {
-                throw createTransportFailure(e, CALENDAR_LIST_SYNC);
+        });
+        return executor.handleWhile(this::isStarted,
+                                    listing,
+                                    "Applying the Google calendar list",
+                                    (lastPage, failure) -> failure == null
+                                                           ? completedFuture(applySync(syncToken, entries, lastPage))
+                                                           : onSyncFailure(token, syncToken, failure));
+    }
+
+    /// @param syncToken the token the listing continued from, or `null` for a full listing, which replaces every calendar
+    private CalendarsResult applySync(@Nullable String syncToken, List<CalendarListEntry> entries, CalendarList lastPage) {
+        if (syncToken == null) {
+            calendarsById.clear();
+        }
+        for (CalendarListEntry entry : entries) {
+            // A full listing leaves hidden calendars out and an incremental one reports them, so a hidden entry is removed here as a deleted one is.
+            if (Boolean.TRUE.equals(entry.getDeleted()) || Boolean.TRUE.equals(entry.getHidden())) {
+                calendarsById.remove(entry.getId());
+            } else {
+                String id = entry.getId();
+                calendarsById.put(id, new GoogleCalendar(api,
+                                                         executor,
+                                                         this::currentAccessToken,
+                                                         this::isStarted,
+                                                         this::invalidateRejectedCredential,
+                                                         id,
+                                                         calendarName(entry),
+                                                         logSubjectId));
             }
         }
+        // only the last page carries nextSyncToken
+        String nextSyncToken = lastPage.getNextSyncToken();
+        if (nextSyncToken != null) {
+            calendarListSyncToken = nextSyncToken;
+        }
+        return new Calendars(ImmutableList.copyOf(calendarsById.values()));
     }
 
     private static String calendarName(CalendarListEntry entry) {
@@ -253,27 +240,51 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
         return summary != null ? summary : entry.getId();
     }
 
-    /// Whether a Calendar API error response means the credential is permanently rejected and the user must re-authenticate: an unauthorised response, or a
-    /// forbidden one that is not a transient rate/quota limit. A deleted client project, revoked access, or the API not being enabled all surface as a
-    /// forbidden response without a rate-limit reason, whereas a rate limit is transient and must not trigger re-authentication.
-    ///
-    /// @param statusCode the response's HTTP status
-    /// @param reason     the error reason the response lists, or `null` when it lists none
-    private static boolean isPermanentAuthError(int statusCode, @Nullable String reason) {
-        if (statusCode == UNAUTHORIZED_401) {
-            return true;
+    /// @param syncToken the token the listing continued from, or `null` for a full listing, to which a {@value HttpStatuses#GONE_410} is a failure like any
+    ///                  other
+    private CompletableFuture<CalendarsResult> onSyncFailure(String token, @Nullable String syncToken, Throwable failure) {
+        Optional<HttpResponseException> httpFailureInChain = HttpResponseException.findIn(failure);
+        if (httpFailureInChain.isEmpty()) {
+            return failedFuture(new RuntimeException("Failed to " + CALENDAR_LIST_SYNC, failure));
         }
-        if (statusCode != FORBIDDEN_403) {
-            return false;
+        HttpResponseException httpFailure = httpFailureInChain.get();
+        if (httpFailure.statusCode() == GONE_410 && syncToken != null) {
+            logger.info("[{}] Google calendar list sync token expired; performing a full resync", logSubjectId);
+            calendarListSyncToken = null;
+            return syncCalendarList(token);
         }
-        // Treat a 403 without a recognised reason as permanent: better to prompt re-auth than to retry a genuinely-broken credential forever.
-        return reason == null || !TRANSIENT_403_REASONS.contains(reason);
+        if (isPermanentAuthError(httpFailure)) {
+            // The API rejects the credential — revoked access, a deleted client project, or the API not being enabled — even though the
+            // token itself may still refresh. Invalidate it (escalating to a permanent auth failure) rather than retrying this call indefinitely against a
+            // credential that will never work.
+            return failedFuture(reportCredentialRejection(httpFailure, CALENDAR_LIST_SYNC, token, this::invalidateRejectedCredential));
+        }
+        return failedFuture(createResponseFailure(httpFailure, CALENDAR_LIST_SYNC));
     }
 
-    /// Invalidates in [#tokenManager] the access token a rejected request carried, recording `rejection` as the cause. Runs on [#executor], as every
-    /// Calendar API request does, so [#accessToken] is that request's token.
-    private void invalidateRejectedCredential(String rejection) {
-        tokenManager.invalidate(accessToken, rejection);
+    /// Whether a Calendar API error means the credential is permanently rejected and the user must re-authenticate: an unauthorised response, or a forbidden
+    /// one that is not a transient rate/quota limit. A deleted client project, revoked access, or the API not being enabled all surface as a forbidden response
+    /// without a rate-limit reason, whereas a rate limit is transient and must not trigger re-authentication.
+    private static boolean isPermanentAuthError(HttpResponseException e) {
+        return switch (e.statusCode()) {
+            case UNAUTHORIZED_401 -> true;
+            // Treat a 403 without a recognised reason as permanent: better to prompt re-auth than to retry a genuinely-broken credential forever.
+            case FORBIDDEN_403 -> errorReason(e).map(reason -> !TRANSIENT_403_REASONS.contains(reason)).orElse(true);
+            default -> false;
+        };
+    }
+
+    /// Invalidates `rejectedToken` in [#tokenManager], recording `rejection` as the cause. Runs on [#executor], in a task that has found this service started.
+    private void invalidateRejectedCredential(String rejectedToken, String rejection) {
+        tokenManager.invalidate(rejectedToken, rejection);
+    }
+
+    /// @return the access token, or a future that never completes once this service has stopped
+    private CompletableFuture<String> currentAccessToken() {
+        return executor.handleWhile(this::isStarted, COMPLETED, "Reading the Google Calendar access token", (_, _) -> {
+            assert accessToken != null : "a calendar exists only once an access token has arrived";
+            return completedFuture(accessToken);
+        });
     }
 
     @BindingAnnotation

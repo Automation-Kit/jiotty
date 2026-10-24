@@ -16,6 +16,7 @@ import java.util.function.Function;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import static net.yudichev.jiotty.common.lang.CompletableFutures.isCancellation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.never;
@@ -178,9 +179,9 @@ class CompletableFuturesTest {
 
     @Test
     void isCancellation_findsACancellationAnywhereInTheCausalChain() {
-        assertThat(CompletableFutures.isCancellation(new CompletionException(new CancellationException()))).isTrue();
-        assertThat(CompletableFutures.isCancellation(new CompletionException(new IllegalStateException()))).isFalse();
-        assertThat(CompletableFutures.isCancellation(null)).isFalse();
+        assertThat(isCancellation(new CompletionException(new CancellationException()))).isTrue();
+        assertThat(isCancellation(new CompletionException(new IllegalStateException()))).isFalse();
+        assertThat(isCancellation(null)).isFalse();
     }
 
     @Test
@@ -189,6 +190,6 @@ class CompletableFuturesTest {
         var second = new IllegalStateException("second", first);
         first.initCause(second);
 
-        assertThatThrownBy(() -> CompletableFutures.isCancellation(first)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> isCancellation(first)).isInstanceOf(IllegalArgumentException.class);
     }
 }

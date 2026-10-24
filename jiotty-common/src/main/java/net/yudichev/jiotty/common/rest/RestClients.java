@@ -34,6 +34,11 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 
 public final class RestClients {
+    /// What [HttpResponseException#body()] carries in place of the response's body when a call made through
+    /// [#callSuppressingResponseBody(Call, Class, int)] or one of its overloads gets an unsuccessful response, unless the call's
+    /// [UnsuccessfulResponseDetailExtractor] extracts a part of the body to carry instead.
+    public static final String WITHHELD_BODY = "<withheld: may carry personal data>";
+
     private static final Logger logger = LogManager.getLogger(RestClients.class);
 
     private static final int DEFAULT_CALL_RETRY_COUNT = 3;
@@ -47,16 +52,25 @@ public final class RestClients {
         return newClient(_ -> {});
     }
 
+    /// Creates a client that gives up on a connect, a read, a write or a whole call once `timeout` has passed.
+    public static OkHttpClient newClient(Duration timeout) {
+        return createBuilder(timeout).build();
+    }
+
     public static OkHttpClient newClient(Consumer<? super OkHttpClient.Builder> customizer) {
-        OkHttpClient.Builder builder = new OkHttpClient.Builder()
-                .followRedirects(true)
-                .followSslRedirects(true)
-                .connectTimeout(DEFAULT_HTTP_TIMEOUT)
-                .callTimeout(DEFAULT_HTTP_TIMEOUT)
-                .readTimeout(DEFAULT_HTTP_TIMEOUT)
-                .writeTimeout(DEFAULT_HTTP_TIMEOUT);
+        OkHttpClient.Builder builder = createBuilder(DEFAULT_HTTP_TIMEOUT);
         customizer.accept(builder);
         return builder.build();
+    }
+
+    private static OkHttpClient.Builder createBuilder(Duration timeout) {
+        return new OkHttpClient.Builder()
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .connectTimeout(timeout)
+                .callTimeout(timeout)
+                .readTimeout(timeout)
+                .writeTimeout(timeout);
     }
 
     public static <T> CompletableFuture<T> call(Call theCall, Class<? extends T> responseType) {
@@ -83,17 +97,42 @@ public final class RestClients {
     /// [HttpResponseException], while the status and the body's length still travel.
     ///
     /// Use it wherever the upstream quotes the submitted value back — a transactional email API naming the recipient it rejected, say.
+    ///
+    /// @param <T> the type of the call's value
     public static <T> CompletableFuture<T> callSuppressingResponseBody(Call theCall, Class<? extends T> responseType, int retryCount) {
         return call(theCall, TypeToken.of(responseType), retryCount, false, ResponseBodyLogging.SUPPRESSED, null);
     }
 
     /// [#callSuppressingResponseBody(Call, Class, int)] for an endpoint whose URL itself carries personal data, such as a vehicle identifier in its path:
     /// `loggableUrl` stands in for the URL in every log line and failure message.
+    ///
+    /// @param <T> the type of the call's value
     public static <T> CompletableFuture<T> callSuppressingResponseBody(Call theCall,
                                                                        TypeToken<? extends T> responseType,
                                                                        int retryCount,
                                                                        StringFormattable loggableUrl) {
         return call(theCall, responseType, retryCount, false, ResponseBodyLogging.SUPPRESSED, checkNotNull(loggableUrl));
+    }
+
+    /// Calls as [#callSuppressingResponseBody(Call, TypeToken, int, StringFormattable)] does, except that `parser` turns the body into the call's value.
+    ///
+    /// @param <T>                                 the type of the call's value
+    /// @param parser                              turns a successful response's body into the call's value; a {@value HttpStatuses#NO_CONTENT_204} fails
+    ///                                            the call, as it does for a non-[Void] type
+    /// @param unsuccessfulResponseDetailExtractor extracts the part of an unsuccessful response's body that [HttpResponseException#body()] carries in place
+    ///                                            of the withheld body
+    public static <T> CompletableFuture<T> callSuppressingResponseBody(Call theCall,
+                                                                       Function<String, ? extends T> parser,
+                                                                       int retryCount,
+                                                                       StringFormattable loggableUrl,
+                                                                       UnsuccessfulResponseDetailExtractor unsuccessfulResponseDetailExtractor) {
+        return call(theCall,
+                    new ResponseReader<>(parser, false, "a body"),
+                    retryCount,
+                    false,
+                    ResponseBodyLogging.SUPPRESSED,
+                    checkNotNull(loggableUrl),
+                    checkNotNull(unsuccessfulResponseDetailExtractor));
     }
 
     private static <T> CompletableFuture<T> call(Call theCall,
@@ -104,6 +143,7 @@ public final class RestClients {
         return call(theCall, responseType, retryCount, attemptParsingUnsuccessfulResponse, responseBodyLogging, null);
     }
 
+    /// @param <T>         the type of the call's value
     /// @param loggableUrl what log lines and failure messages show in place of the request URL, or `null` to show the URL itself
     private static <T> CompletableFuture<T> call(Call theCall,
                                                  TypeToken<? extends T> responseType,
@@ -111,6 +151,24 @@ public final class RestClients {
                                                  boolean attemptParsingUnsuccessfulResponse,
                                                  ResponseBodyLogging responseBodyLogging,
                                                  @Nullable StringFormattable loggableUrl) {
+        return call(theCall,
+                    new ResponseReader<>(body -> Json.parse(body, responseType), responseType.getType() == Void.class, responseType),
+                    retryCount,
+                    attemptParsingUnsuccessfulResponse,
+                    responseBodyLogging,
+                    loggableUrl,
+                    UnsuccessfulResponseDetailExtractor.NONE);
+    }
+
+    /// @param <T>         the type of the call's value
+    /// @param loggableUrl what log lines and failure messages show in place of the request URL, or `null` to show the URL itself
+    private static <T> CompletableFuture<T> call(Call theCall,
+                                                 ResponseReader<T> responseReader,
+                                                 int retryCount,
+                                                 boolean attemptParsingUnsuccessfulResponse,
+                                                 ResponseBodyLogging responseBodyLogging,
+                                                 @Nullable StringFormattable loggableUrl,
+                                                 UnsuccessfulResponseDetailExtractor unsuccessfulResponseDetailExtractor) {
         int requestId = requestIdGenerator.incrementAndGet();
         CompletableFuture<T> future = new CompletableFuture<>();
         logger.debug("[{}] Sending {} {}", requestId, theCall.request().method(), loggableUrl == null ? theCall.request().url() : loggableUrl);
@@ -128,7 +186,13 @@ public final class RestClients {
                     // attemptParsingUnsuccessfulResponse, responseBodyLogging and loggableUrl are carried into the retry. Dropping one here would silently
                     // restore body or URL logging (or unsuccessful-response parsing) for every attempt after the first, which is precisely when a flaky
                     // endpoint is being retried.
-                    call(call.clone(), responseType, retryCount - 1, attemptParsingUnsuccessfulResponse, responseBodyLogging, loggableUrl)
+                    call(call.clone(),
+                         responseReader,
+                         retryCount - 1,
+                         attemptParsingUnsuccessfulResponse,
+                         responseBodyLogging,
+                         loggableUrl,
+                         unsuccessfulResponseDetailExtractor)
                             .whenComplete((result, exception) -> {
                                 if (exception == null) {
                                     future.complete(result);
@@ -146,13 +210,14 @@ public final class RestClients {
                         if (response.isSuccessful()) {
                             if (response.code() == NO_CONTENT_204) { // no body
                                 logger.debug("[{}] Response code 204", requestId);
-                                if (responseType.getType() == Void.class) {
+                                if (responseReader.acceptsNoContent()) {
                                     future.complete(null);
                                 } else {
                                     future.completeExceptionally(new RuntimeException(
-                                            "Response is successful but empty, however expected response type is " + responseType));
+                                            "Response is successful but empty, however expected response type is " + responseReader.expectedBodyDescription()));
                                 }
                             } else {
+                                // read whole, since logResponse and every ResponseReader parser take the body as one String
                                 String responseString = requireNonNull(responseBody).string();
                                 logResponse(requestId, response.code(), responseString);
                                 parseAndCompleteFuture(responseString);
@@ -166,11 +231,12 @@ public final class RestClients {
                             if (attemptParsingUnsuccessfulResponse && response.code() != UNAUTHORIZED_401) {
                                 parseAndCompleteFuture(responseString);
                             } else {
-                                // The status is kept — SharedUpstreamOutage classifies retryability from it — while the body, which is what an upstream uses
-                                // to quote the offending value back, is withheld on a suppressed endpoint.
+                                // The status is kept, since SharedUpstreamOutage classifies retryability from it. On a suppressed endpoint the body, which can
+                                // quote the offending value back, is replaced by whatever unsuccessfulResponseDetailExtractor extracts.
                                 future.completeExceptionally(new HttpResponseException(response.code(), switch (responseBodyLogging) {
                                     case FULL -> responseString;
-                                    case SUPPRESSED -> "<withheld: may carry personal data>";
+                                    case SUPPRESSED -> unsuccessfulResponseDetailExtractor.extract(response.code(), responseString)
+                                                                                          .orElse(WITHHELD_BODY);
                                 }));
                             }
                         }
@@ -195,7 +261,7 @@ public final class RestClients {
             private void parseAndCompleteFuture(String responseString) {
                 T responseData;
                 try {
-                    responseData = Json.parse(responseString, responseType);
+                    responseData = responseReader.parser().apply(responseString);
                     future.complete(responseData);
                 } catch (RuntimeException e) {
                     // The unparseable body is the whole diagnosis, so it is normally in the message — but on a suppressed endpoint it is the one thing that
@@ -222,12 +288,11 @@ public final class RestClients {
     /// each URL in turn, deserialises the body as `pageType`, appends `results(page)` to a single shared [ImmutableList.Builder], then recurses into
     /// `nextUrl(page)` if present.
     ///
+    /// @param <PageT>            the type each page's body deserialises to
+    /// @param <T>                the type of the results each page lists
     /// @param expectedTotalCount non-binding sizing hint passed to [ImmutableList#builderWithExpectedSize] to pre-allocate the accumulator and avoid
-    /// growth-time copies. Over- or under-estimating is harmless. Compute from whatever domain knowledge the caller has — slot count from a time range, typical
-    /// catalogue size, etc.
-    /// @implNote Threading: appends to the accumulator are sequenced by [CompletableFuture#thenCompose]'s happens-before edges, so the non-concurrent
-    /// [ImmutableList.Builder] is safe even though OkHttp's dispatcher may deliver successive pages on different worker threads — at any moment only one
-    /// continuation is executing for a given chain.
+    ///                           growth-time copies. Over- or under-estimating is harmless. Compute from whatever domain knowledge the caller has — slot
+    ///                           count from a time range, typical catalogue size, etc.
     public static <PageT, T> CompletableFuture<List<T>> paginate(Function<String, Call> callFactory,
                                                                  String firstUrl,
                                                                  int expectedTotalCount,
@@ -236,21 +301,31 @@ public final class RestClients {
                                                                  Function<PageT, Optional<String>> nextUrlAccessor) {
         checkArgument(expectedTotalCount >= 0, "expectedTotalCount must be non-negative");
         var accumulator = ImmutableList.<T>builderWithExpectedSize(expectedTotalCount);
-        return paginateInto(callFactory, firstUrl, pageType, resultsAccessor, nextUrlAccessor, accumulator)
+        return forEachPage(url -> call(callFactory.apply(url), pageType),
+                           firstUrl,
+                           page -> accumulator.addAll(resultsAccessor.apply(page)),
+                           nextUrlAccessor)
                 .thenApply(_ -> accumulator.build());
     }
 
-    private static <PageT, T> CompletableFuture<Void> paginateInto(Function<String, Call> callFactory,
-                                                                   String url,
-                                                                   TypeToken<PageT> pageType,
-                                                                   Function<PageT, ? extends List<T>> resultsAccessor,
-                                                                   Function<PageT, Optional<String>> nextUrlAccessor,
-                                                                   ImmutableList.Builder<T> accumulator) {
-        return call(callFactory.apply(url), pageType).thenCompose(page -> {
-            accumulator.addAll(resultsAccessor.apply(page));
-            return nextUrlAccessor.apply(page)
-                                  .map(nextUrl -> paginateInto(callFactory, nextUrl, pageType, resultsAccessor, nextUrlAccessor, accumulator))
-                                  .orElseGet(() -> CompletableFuture.completedFuture(null));
+    /// Fetches a paged listing one page at a time, handing each page to `pageConsumer` in server order, until `nextCursorAccessor` returns empty.
+    ///
+    /// @param <C>                the type of the cursor that names a page, such as its URL or a page token
+    /// @param <PageT>            the type of a page
+    /// @param pageFetcher        fetches the page a cursor names, choosing how the call is made and logged
+    /// @param pageConsumer       called with every page, the last one included, before the next is fetched; never concurrently, each call happening-before
+    ///                           the next, so it may write non-concurrent state
+    /// @param nextCursorAccessor the cursor of the page after the given one, or empty on the last page
+    /// @return the last page
+    public static <C, PageT> CompletableFuture<PageT> forEachPage(Function<? super C, CompletableFuture<PageT>> pageFetcher,
+                                                                  C firstCursor,
+                                                                  Consumer<? super PageT> pageConsumer,
+                                                                  Function<? super PageT, Optional<C>> nextCursorAccessor) {
+        return pageFetcher.apply(firstCursor).thenCompose(page -> {
+            pageConsumer.accept(page);
+            return nextCursorAccessor.apply(page)
+                                     .map(cursor -> forEachPage(pageFetcher, cursor, pageConsumer, nextCursorAccessor))
+                                     .orElseGet(() -> CompletableFuture.completedFuture(page));
         });
     }
 
@@ -291,6 +366,34 @@ public final class RestClients {
             closeSafelyIfNotNull(logger, client.cache());
         } catch (RuntimeException e) {
             logger.warn("Failed to gracefully shut down client {} in {}", client, timeout, e);
+        }
+    }
+
+    /// Shuts `client` down without waiting for its dispatcher to finish, failing every call in flight, and every call enqueued afterwards, with an
+    /// [IOException].
+    public static void shutdownNow(OkHttpClient client) {
+        try {
+            logger.debug("Shutting down {} now", client);
+            // Shut first, so a call enqueued from a cancelled call's callback is rejected rather than run.
+            client.dispatcher().executorService().shutdown();
+            client.dispatcher().cancelAll();
+            client.connectionPool().evictAll();
+            closeSafelyIfNotNull(logger, client.cache());
+        } catch (RuntimeException e) {
+            logger.info("Failed to shut down client {}", client, e);
+        }
+    }
+
+    /// How a successful response's body becomes a call's value.
+    ///
+    /// @param <T>                     the type of the call's value
+    /// @param parser                  turns the body into the call's value
+    /// @param acceptsNoContent        whether a {@value HttpStatuses#NO_CONTENT_204} completes the call with `null` rather than failing it
+    /// @param expectedBodyDescription names what the body was expected to hold, for the failure a {@value HttpStatuses#NO_CONTENT_204} otherwise causes
+    private record ResponseReader<T>(Function<String, ? extends T> parser, boolean acceptsNoContent, Object expectedBodyDescription) {
+        private ResponseReader {
+            checkNotNull(parser);
+            checkNotNull(expectedBodyDescription);
         }
     }
 

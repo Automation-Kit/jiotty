@@ -107,10 +107,7 @@ public class AnthropicClientImpl extends BaseLifecycleComponent implements Anthr
     /// networking.
     @VisibleForTesting
     OkHttpClient createHttpClient() {
-        return newClient(builder -> builder.connectTimeout(timeout)
-                                           .callTimeout(timeout)
-                                           .readTimeout(timeout)
-                                           .writeTimeout(timeout));
+        return newClient(timeout);
     }
 
     @BindingAnnotation

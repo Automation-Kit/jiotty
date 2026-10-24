@@ -351,18 +351,6 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>com.github.caldav4j</groupId>
-                <artifactId>caldav4j</artifactId>
-                <version>1.0.5</version>
-                <exclusions>
-                    <!-- this lib packages commons-logging classes without any package remapping -->
-                    <exclusion>
-                        <groupId>org.slf4j</groupId>
-                        <artifactId>jcl-over-slf4j</artifactId>
-                    </exclusion>
-                </exclusions>
-            </dependency>
-            <dependency>
                 <groupId>com.google.inject</groupId>
                 <artifactId>guice-bom</artifactId>
                 <version>7.0.0</version>

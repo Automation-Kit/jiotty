@@ -3,6 +3,7 @@ package net.yudichev.jiotty.connector.icloud.calendar;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.app.Application;
 import net.yudichev.jiotty.common.async.ExecutorModule;
+import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.lang.CompletableFutures;
@@ -17,6 +18,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 
+import static net.yudichev.jiotty.common.inject.BindingSpec.exposedBy;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 
 final class LocalIcloudCalendarRunner {
@@ -28,6 +30,9 @@ final class LocalIcloudCalendarRunner {
                    .addModule(() -> IcloudCalendarModule.builder()
                                                         .setUsername(literally(args[0]))
                                                         .setPassword(literally(args[1]))
+                                                        .setExecutor(exposedBy(ExecutorProviderModule.builder()
+                                                                                                     .setThreadName(literally("icloud-calendar"))
+                                                                                                     .build()))
                                                         .build())
                    .addModule(() -> new BaseLifecycleComponentModule() {
                        @Override

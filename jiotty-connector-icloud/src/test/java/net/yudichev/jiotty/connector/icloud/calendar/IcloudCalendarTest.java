@@ -1,41 +1,37 @@
 package net.yudichev.jiotty.connector.icloud.calendar;
 
-import com.google.common.base.Supplier;
 import net.fortuna.ical4j.model.component.VEvent;
 import net.fortuna.ical4j.model.property.Location;
 import net.fortuna.ical4j.model.property.RecurrenceId;
 import net.fortuna.ical4j.model.property.Uid;
-import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.time.calendar.CalendarEventIds;
-import org.apache.http.impl.client.CloseableHttpClient;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.connector.icloud.calendar.CalDavFixtures.ACCOUNT_ID;
+import static net.yudichev.jiotty.connector.icloud.calendar.CalDavFixtures.CALENDAR_HREF;
+import static net.yudichev.jiotty.connector.icloud.calendar.CalDavFixtures.CALENDAR_TITLE;
+import static net.yudichev.jiotty.connector.icloud.calendar.CalDavFixtures.HOME;
 import static org.assertj.core.api.Assertions.assertThat;
 
-@ExtendWith(MockitoExtension.class)
 class IcloudCalendarTest {
-    @Mock
-    private SchedulingExecutor executor;
-    @Mock
-    private Supplier<CloseableHttpClient> httpClientFactory;
+    private static final Supplier<CompletableFuture<CalDavClient>> FAILING_CLIENT_SUPPLIER = () -> {
+        throw new AssertionError("no request expected");
+    };
 
     @Test
     void toStringRedactsTheHrefAndTheCalendarName() {
         // A CalDAV href opens with the iCloud account id, and the name is a user-authored calendar title.
-        var calendar = new IcloudCalendar("https://caldav.icloud.com/",
-                                          "/1051121623/calendars/27A6139E-FFFD-4C0F-9DCC-B914B9CB04E7/",
-                                          "Family Holidays",
-                                          executor,
-                                          httpClientFactory);
+        IcloudCalendar calendar = newCalendar(CALENDAR_HREF, CALENDAR_TITLE);
 
         assertThat(calendar).asString()
-                            .doesNotContain("1051121623")
-                            .doesNotContain("Family Holidays")
+                            .doesNotContain(ACCOUNT_ID)
+                            .doesNotContain(CALENDAR_TITLE)
                             .isEqualTo("IcloudCalendar{id='/10…', name='Fam…'}");
     }
 
@@ -74,10 +70,20 @@ class IcloudCalendarTest {
 
     @Test
     void accessorsKeepTheValuesTheRedactedRenderingHides() {
-        var calendar = new IcloudCalendar("https://caldav.icloud.com/", "/1051121623/calendars/x/", "Family Holidays", executor, httpClientFactory);
+        IcloudCalendar calendar = newCalendar(CALENDAR_HREF, CALENDAR_TITLE);
 
-        assertThat(calendar.id()).isEqualTo("/1051121623/calendars/x/");
-        assertThat(calendar.name()).isEqualTo("Family Holidays");
+        assertThat(calendar.id()).isEqualTo(CALENDAR_HREF);
+        assertThat(calendar.name()).isEqualTo(CALENDAR_TITLE);
+    }
+
+    private static IcloudCalendar newCalendar(String href, String name) {
+        return new IcloudCalendar(href,
+                                  checkNotNull(HOME.resolve(href)),
+                                  name,
+                                  FAILING_CLIENT_SUPPLIER,
+                                  new ProgrammableClock().createSingleThreadedSchedulingExecutor("test"),
+                                  () -> true,
+                                  "test-user");
     }
 
     private static VEvent newEvent() {

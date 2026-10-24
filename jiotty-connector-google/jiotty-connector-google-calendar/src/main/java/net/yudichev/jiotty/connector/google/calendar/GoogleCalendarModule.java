@@ -3,6 +3,7 @@ package net.yudichev.jiotty.connector.google.calendar;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.TypeLiteral;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
@@ -34,6 +35,7 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
     static final String SCOPE = String.join(" ", GoogleCalendarScopes.SCOPES);
     private static final String AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 
+    private final BindingSpec<SchedulingExecutor> executorSpec;
     private final BindingSpec<String> clientIdSpec;
     private final BindingSpec<String> redirectUriSpec;
     private final BindingSpec<Optional<String>> authCodeSpec;
@@ -45,6 +47,7 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
     private final boolean localLogin;
 
     private GoogleCalendarModule(SpecifiedAnnotation specifiedAnnotation,
+                                 BindingSpec<SchedulingExecutor> executorSpec,
                                  BindingSpec<String> clientIdSpec,
                                  BindingSpec<String> redirectUriSpec,
                                  BindingSpec<Optional<String>> authCodeSpec,
@@ -55,6 +58,7 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
                                  @Nullable BindingSpec<String> clientSecretSpec,
                                  boolean localLogin) {
         super(specifiedAnnotation);
+        this.executorSpec = checkNotNull(executorSpec);
         this.clientIdSpec = checkNotNull(clientIdSpec);
         this.redirectUriSpec = checkNotNull(redirectUriSpec);
         this.authCodeSpec = checkNotNull(authCodeSpec);
@@ -72,6 +76,9 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
 
     @Override
     protected void configure() {
+        executorSpec.bind(SchedulingExecutor.class)
+                    .annotatedWith(GoogleCalendarService.Dependency.class)
+                    .installedBy(this::installLifecycleComponentModule);
         // No client secret: this is a public client that authenticates via PKCE (code verifier supplied per auth-code exchange).
         var tokenManagerModuleBuilder = OAuth2TokenManagerModule.builder()
                                                                 .setClientId(clientIdSpec)
@@ -117,6 +124,7 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
     }
 
     public static final class Builder extends BaseModuleBuilder<CalendarService, Builder> {
+        private BindingSpec<SchedulingExecutor> executorSpec;
         private BindingSpec<String> clientIdSpec;
         private BindingSpec<String> redirectUriSpec;
         private BindingSpec<Optional<String>> authCodeSpec = literally(Optional.empty());
@@ -149,14 +157,20 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
             return this;
         }
 
-        /// The connect/read timeout applied to every Google Calendar API call; defaults to 30 seconds.
+        /// Keeps this service's state and orders its calendar-list syncs on the specified executor, which the service never blocks.
+        public Builder setExecutor(BindingSpec<SchedulingExecutor> executorSpec) {
+            this.executorSpec = checkNotNull(executorSpec);
+            return this;
+        }
+
+        /// The connect, read, write and whole-call timeout applied to every Google Calendar API request; defaults to 30 seconds.
         public Builder withTimeout(BindingSpec<Duration> timeoutSpec) {
             this.timeoutSpec = checkNotNull(timeoutSpec);
             return this;
         }
 
-        /// A GDPR-safe subject id (e.g. the internal user id) used to tag this instance's log lines — via its executor thread name and the embedded token
-        /// manager's name — so concurrent per-user instances stay distinguishable in a shared log. Defaults to empty (single-instance use).
+        /// A GDPR-safe subject id (e.g. the internal user id) that tags this instance's log lines — as their `[{}]` prefix and in the embedded token manager's
+        /// name — so concurrent instances with different subject ids stay distinguishable in a shared log. Defaults to empty (single-instance use).
         public Builder withLogSubjectId(BindingSpec<String> logSubjectIdSpec) {
             this.logSubjectIdSpec = checkNotNull(logSubjectIdSpec);
             return this;
@@ -184,6 +198,7 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
         @Override
         public ExposedKeyModule<CalendarService> build() {
             return new GoogleCalendarModule(specifiedAnnotation(),
+                                            executorSpec,
                                             clientIdSpec,
                                             redirectUriSpec,
                                             authCodeSpec,

@@ -3,13 +3,11 @@ package net.yudichev.jiotty.connector.tesla.fleet;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
+import net.yudichev.jiotty.common.rest.OkHttpStubs.PendingCall;
 import net.yudichev.jiotty.common.rest.RestClients;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
-import okhttp3.Call;
-import okhttp3.Callback;
 import okhttp3.OkHttpClient;
-import okhttp3.Request;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,17 +15,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
-import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
-import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
+import static net.yudichev.jiotty.common.rest.OkHttpStubs.stubDeferredCalls;
+import static net.yudichev.jiotty.common.rest.OkHttpStubs.takeOnlyPendingCall;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -35,7 +32,6 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
@@ -50,11 +46,11 @@ class TeslaFleetImplTest {
     /// An account with no vehicles on it. A populated list would put VINs in the response body, which [RestClients] logs verbatim — the same pre-existing
     /// leak the class doc notes for request URLs.
     private static final String LIST_VEHICLES_BODY = "{\"response\":[]}";
-    private final List<PendingCall> pendingCalls = new ArrayList<>();
     @Mock
     private OAuth2TokenManager tokenManager;
     @Mock
     private OkHttpClient httpClient;
+    private List<PendingCall> pendingCalls;
     private Consumer<AuthState> authStateHandler;
     private TeslaFleetImpl teslaFleet;
 
@@ -65,14 +61,7 @@ class TeslaFleetImplTest {
             authStateHandler.accept(new AuthState.Success(ACCESS_TOKEN));
             return Closeable.noop();
         });
-        lenient().when(httpClient.newCall(any())).thenAnswer(invocation -> {
-            Request request = invocation.getArgument(0);
-            Call call = mock(Call.class);
-            lenient().when(call.request()).thenReturn(request);
-            lenient().doAnswer(enqueueInvocation -> pendingCalls.add(new PendingCall(call, request, enqueueInvocation.getArgument(0))))
-                     .when(call).enqueue(any());
-            return call;
-        });
+        pendingCalls = stubDeferredCalls(httpClient);
         teslaFleet = new TeslaFleetImpl(tokenManager, "https://fleet.example.com/api/1", Optional.empty(), new ListenerBackedTaskExceptionHandlerRegistry()) {
             @Override
             OkHttpClient createHttpClient() {
@@ -183,10 +172,6 @@ class TeslaFleetImplTest {
     }
 
     private void respondWith(int status, String body) {
-        assertThat(pendingCalls).as("exactly one call should be in flight").hasSize(1);
-        PendingCall pendingCall = pendingCalls.removeFirst();
-        asUnchecked(() -> pendingCall.callback().onResponse(pendingCall.call(), response(pendingCall.request(), status, body)));
+        takeOnlyPendingCall(pendingCalls).respond(status, body);
     }
-
-    private record PendingCall(Call call, Request request, Callback callback) {}
 }

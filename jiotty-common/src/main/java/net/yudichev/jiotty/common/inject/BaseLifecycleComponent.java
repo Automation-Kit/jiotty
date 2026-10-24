@@ -1,8 +1,10 @@
 package net.yudichev.jiotty.common.inject;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkState;
@@ -94,6 +96,19 @@ public abstract class BaseLifecycleComponent implements LifecycleComponent {
             checkStarted();
             return supplier.get();
         });
+    }
+
+    /// Hands `operation` to `submitter`, which runs it later, while this component is started.
+    ///
+    /// @param <T> the type of the operation's value
+    /// @return the operation's outcome, or a future that never completes if this component stops before the operation starts, even when the operation was
+    ///         submitted before the stop
+    protected final <T> CompletableFuture<T> submitWhileStarted(Function<Supplier<CompletableFuture<T>>, CompletableFuture<T>> submitter,
+                                                                Supplier<? extends CompletableFuture<T>> operation) {
+        // The submitted operation re-checks isStarted() when it starts, which can be after this component has stopped.
+        return whenNotLifecycling(() -> isStartedPlain()
+                                        ? submitter.apply(() -> isStarted() ? operation.get() : new CompletableFuture<>())
+                                        : new CompletableFuture<>());
     }
 
     protected void doStart() {

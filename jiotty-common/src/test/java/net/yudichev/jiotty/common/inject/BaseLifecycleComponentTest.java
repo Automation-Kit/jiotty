@@ -1,16 +1,23 @@
 package net.yudichev.jiotty.common.inject;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.SequentialOperationQueue;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
+import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class BaseLifecycleComponentTest {
     private final List<String> actionsRun = new ArrayList<>();
     private final TestComponent component = new TestComponent();
+    private final ProgrammableClock clock = new ProgrammableClock();
+    private final SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("test");
+    private final SequentialOperationQueue queue = new SequentialOperationQueue(executor);
 
     @Test
     void ifNotStoppedRunsTheActionWhileStarted() {
@@ -53,8 +60,6 @@ class BaseLifecycleComponentTest {
     /// skips the work. Deciding at submission time would have admitted this task.
     @Test
     void ifNotStoppedSkipsATaskSubmittedBeforeTheStopThatRunsAfterIt() {
-        var clock = new ProgrammableClock();
-        var executor = clock.createSingleThreadedSchedulingExecutor("test");
         component.start();
 
         executor.tryExecute("task", () -> {
@@ -76,6 +81,46 @@ class BaseLifecycleComponentTest {
 
         component.stop();
 
+        assertThat(actionsRun).isEmpty();
+    }
+
+    @Test
+    void submitWhileStartedCompletesWithTheOperationsOutcome() {
+        component.start();
+
+        CompletableFuture<String> future = component.submitWhileStarted(queue::submit, () -> completedFuture("outcome"));
+        clock.tick();
+
+        assertThat(future).isCompletedWithValue("outcome");
+    }
+
+    @Test
+    void submitWhileStartedQueuedBeforeTheStopNeverCompletesAndRunsNothing() {
+        component.start();
+
+        CompletableFuture<String> future = component.submitWhileStarted(queue::submit, () -> {
+            actionsRun.add("operation");
+            return completedFuture("outcome");
+        });
+        component.stop();
+        clock.tick();
+
+        assertThat(future).isNotDone();
+        assertThat(actionsRun).isEmpty();
+    }
+
+    @Test
+    void submitWhileStartedAfterTheStopNeverCompletesAndRunsNothing() {
+        component.start();
+        component.stop();
+
+        CompletableFuture<String> future = component.submitWhileStarted(queue::submit, () -> {
+            actionsRun.add("operation");
+            return completedFuture("outcome");
+        });
+        clock.tick();
+
+        assertThat(future).isNotDone();
         assertThat(actionsRun).isEmpty();
     }
 

@@ -3,6 +3,7 @@ package net.yudichev.jiotty.connector.google.calendar;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.app.Application;
 import net.yudichev.jiotty.common.async.ExecutorModule;
+import net.yudichev.jiotty.common.async.ExecutorProviderModule;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccessModule;
@@ -71,6 +72,7 @@ final class LocalGoogleCalendarRunner {
                            .setClientId(literally(args[0]))
                            .withClientSecret(literally(args[1]))
                            .setRedirectUri(literally("unused"))
+                           .setExecutor(exposedBy(ExecutorProviderModule.builder().setThreadName(literally("google-calendar")).build()))
                            .withLocalLogin(true)
                            .withVarStore(exposedBy(
                                    VarStoreModule

@@ -120,10 +120,7 @@ public class BrevoClientImpl extends BaseLifecycleComponent implements BrevoClie
     /// networking.
     @VisibleForTesting
     OkHttpClient createHttpClient() {
-        return newClient(builder -> builder.connectTimeout(timeout)
-                                           .callTimeout(timeout)
-                                           .readTimeout(timeout)
-                                           .writeTimeout(timeout));
+        return newClient(timeout);
     }
 
     /// Brevo's `POST /v3/smtp/email` payload. [JsonInclude.Include#NON_NULL] keeps an absent recipient name out of the JSON entirely — Brevo rejects an

@@ -55,7 +55,6 @@ import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 @SuppressWarnings("WeakerAccess") // public outer surface; see java-style "internal APIs on non-public types" rule (applies even though this class is public)
 public class OctopusEnergyImpl extends BaseLifecycleComponent implements OctopusEnergy {
     static final String BASE_URL = "https://api.octopus.energy/v1";
-    static final AuthState.Success AUTH_SUCCESS = new AuthState.Success("authenticated");
     /// Octopus's `/products/` catalogue ~92 entries at time of writing (empirical from a live capture). The constant is a sizing hint for the paginate
     /// accumulator — overshooting is harmless, and the catalogue grows much more slowly than the connector's release cadence.
     private static final int EXPECTED_PRODUCT_COUNT = 265;
@@ -288,7 +287,7 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
         /// @param throwableOrNull why the call failed, or `null` when it succeeded
         private void updateAuthStateFromOutcome(@Nullable Object resultOrNull, @Nullable Throwable throwableOrNull) {
             if (throwableOrNull == null) {
-                authStateUpdater.accept(AUTH_SUCCESS);
+                authStateUpdater.accept(AuthState.Success.AUTHENTICATED);
                 return;
             }
             if (HttpResponseException.findIn(throwableOrNull)

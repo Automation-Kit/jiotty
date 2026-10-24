@@ -1,103 +1,119 @@
 package net.yudichev.jiotty.connector.icloud.calendar;
 
-import com.github.caldav4j.CalDAVConstants;
-import com.github.caldav4j.methods.CalDAV4JMethodFactory;
-import com.github.caldav4j.methods.HttpPropFindMethod;
-import com.google.common.base.Strings;
-import com.google.common.base.Supplier;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.SequentialOperationQueue;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
 import net.yudichev.jiotty.common.time.calendar.CalendarAuthorisationException;
 import net.yudichev.jiotty.common.time.calendar.CalendarService;
 import net.yudichev.jiotty.common.time.calendar.CalendarService.CalendarsResult.Calendars;
-import org.apache.http.auth.AuthScope;
-import org.apache.http.auth.UsernamePasswordCredentials;
-import org.apache.http.client.HttpClient;
-import org.apache.http.client.config.RequestConfig;
-import org.apache.http.impl.client.BasicCredentialsProvider;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
-import org.apache.jackrabbit.webdav.DavConstants;
-import org.apache.jackrabbit.webdav.DavException;
-import org.apache.jackrabbit.webdav.MultiStatus;
-import org.apache.jackrabbit.webdav.MultiStatusResponse;
-import org.apache.jackrabbit.webdav.property.DavProperty;
-import org.apache.jackrabbit.webdav.property.DavPropertyName;
-import org.apache.jackrabbit.webdav.property.DavPropertyNameSet;
-import org.apache.jackrabbit.webdav.property.DavPropertySet;
+import net.yudichev.jiotty.connector.icloud.calendar.CalDavClient.CalendarCollection;
+import okhttp3.Credentials;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.w3c.dom.Node;
 
-import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
-import java.util.Collection;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.Maps.newLinkedHashMapWithExpectedSize;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static java.util.concurrent.CompletableFuture.completedFuture;
+import static java.util.concurrent.CompletableFuture.failedFuture;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
-import static net.yudichev.jiotty.common.rest.HttpStatuses.isSuccess;
+import static net.yudichev.jiotty.common.rest.RestClients.newClient;
+import static net.yudichev.jiotty.common.rest.RestClients.shutdownNow;
 import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
 
-final class IcloudCalendarService extends BaseLifecycleComponent implements CalendarService {
+@SuppressWarnings({"FieldAccessNotGuarded", "NonFinalGuard"}) // @GuardedBy("executor") marks executor confinement, which IntelliJ's lock analysis cannot see
+public class IcloudCalendarService extends BaseLifecycleComponent implements CalendarService {
+    @VisibleForTesting
+    static final String AUTH_STATE_DELIVERY_TASK = "Delivering the iCloud Calendar authentication state";
     private static final Logger logger = LogManager.getLogger(IcloudCalendarService.class);
-
-    private static final String ICLOUD_BASE = "https://caldav.icloud.com";
-    private static final String URI_WELL_KNONWN_CALDAV = ICLOUD_BASE + "/.well-known/caldav";
-    private static final int HTTP_TIMEOUT_MS = 10_000;
+    private static final String UNAUTHORISED_DESCRIPTION = "Authorisation failed: HTTP " + UNAUTHORIZED_401;
+    private static final AuthState UNAUTHORISED = new AuthState.PermanentFailure(UNAUTHORISED_DESCRIPTION);
 
     private final Provider<SchedulingExecutor> executorProvider;
-    private final Supplier<CloseableHttpClient> httpClientFactory;
+    private final String authorisation;
+    private final Duration timeout;
+    private final String logSubjectId;
     private final ObservableValue<AuthState> apiKeyState;
+    /// The calendars the latest retrieval returned, by the collection each describes. An unchanged calendar keeps its existing [IcloudCalendar] instance
+    /// across retrievals, so the consumer's identity-based change detection only fires on real changes.
+    @GuardedBy("executor")
+    private Map<CalendarCollection, IcloudCalendar> calendarsByCollection = ImmutableMap.of();
     private SchedulingExecutor executor;
+    /// Runs the retrievals one after another, so the auth state each publishes is the outcome of the latest.
+    private SequentialOperationQueue retrievalQueue;
+    private OkHttpClient httpClient;
+    private CalDavClient calDavClient;
 
     @Inject
     public IcloudCalendarService(@Dependency Provider<SchedulingExecutor> executorProvider,
                                  @Username String username,
                                  @Password String password,
+                                 @Timeout Duration timeout,
+                                 @LogSubjectId String logSubjectId,
                                  TaskFailureReporter taskFailureReporter) {
         checkNotNull(taskFailureReporter);
+        // Callers subscribe from their own threads, also before start(), while the executor publishes.
         apiKeyState = ObservableValue.concurrent(new AuthState.TransientFailure("Initialising"),
-                                                 e -> taskFailureReporter.onTaskException("Delivering the iCloud Calendar authentication state", e));
+                                                 e -> taskFailureReporter.onTaskException(AUTH_STATE_DELIVERY_TASK, e));
         this.executorProvider = checkNotNull(executorProvider);
-        var credentialsProvider = new BasicCredentialsProvider();
-        credentialsProvider.setCredentials(AuthScope.ANY, new UsernamePasswordCredentials(checkNotNull(username), checkNotNull(password)));
-        httpClientFactory = () -> {
-            // Apply strict timeouts to avoid indefinite hangs
-            return HttpClients.custom()
-                              .setDefaultCredentialsProvider(credentialsProvider)
-                              .setDefaultRequestConfig(RequestConfig.custom()
-                                                                    .setConnectTimeout(HTTP_TIMEOUT_MS)
-                                                                    .setSocketTimeout(HTTP_TIMEOUT_MS)
-                                                                    .setConnectionRequestTimeout(HTTP_TIMEOUT_MS)
-                                                                    .build())
-                              .evictExpiredConnections()
-                              .evictIdleConnections(HTTP_TIMEOUT_MS, MILLISECONDS)
-                              .build();
-        };
+        // HTTP Basic with the account's app-specific password
+        authorisation = Credentials.basic(username, password);
+        checkArgument(timeout.isPositive(), "timeout must be positive, but was %s", timeout);
+        this.timeout = timeout;
+        this.logSubjectId = checkNotNull(logSubjectId);
     }
 
     @Override
     protected void doStart() {
         executor = executorProvider.get();
+        retrievalQueue = new SequentialOperationQueue(executor);
+        httpClient = createHttpClient();
+        // Wraps the client this start creates.
+        calDavClient = new CalDavClient(httpClient, authorisation, logSubjectId);
+    }
+
+    @Override
+    protected void doStop() {
+        // Inline on whichever thread stops this service: shutting the client is safe from any thread.
+        shutdownNow(httpClient);
+    }
+
+    /// Follows no redirect, which would carry the account's credentials to wherever it pointed and turn a {@value CalDavClient#REPORT} into a `GET`.
+    /// Overridden in tests to supply a mock client returning canned responses.
+    @VisibleForTesting
+    OkHttpClient createHttpClient() {
+        return newClient(timeout).newBuilder()
+                                 .followRedirects(false)
+                                 .followSslRedirects(false)
+                                 .build();
     }
 
     @Override
@@ -107,76 +123,65 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
 
     @Override
     public CompletableFuture<CalendarsResult> retrieveCalendars() {
-        return whenStartedAndNotLifecycling(() -> executor.submit(() -> {
-            // Prepare HTTP BASIC Auth with app-specific password
+        //noinspection Convert2MethodRef — a method reference would read retrievalQueue, null before start, ahead of the started check
+        return submitWhileStarted(retrieval -> retrievalQueue.submit(retrieval), this::retrieve);
+    }
 
-            try (CloseableHttpClient httpClient = httpClientFactory.get()) {
+    private CompletableFuture<CalendarsResult> retrieve() {
+        return executor.handleWhile(this::isStarted,
+                                    calDavClient.discoverCalendarHome(),
+                                    "Listing the iCloud calendars",
+                                    (calendarHome, failure) -> failure == null ? onCalendarHomeDiscovered(calendarHome) : onDiscoveryFailure(failure));
+    }
 
-                var methodFactory = new CalDAV4JMethodFactory();
-                String calendarHomeUrl = getCalendarSetHomeUrl(methodFactory, httpClient);
-                var davPropertyNames = new DavPropertyNameSet();
-                davPropertyNames.add(DavPropertyName.create(DavConstants.PROPERTY_RESOURCETYPE, DavConstants.NAMESPACE));
-                davPropertyNames.add(DavPropertyName.create(DavConstants.PROPERTY_DISPLAYNAME, DavConstants.NAMESPACE));
-                HttpPropFindMethod pf = methodFactory.createPropFindMethod(calendarHomeUrl, davPropertyNames, DavConstants.DEPTH_1);
-                var response = httpClient.execute(pf);
+    private CompletableFuture<CalendarsResult> onCalendarHomeDiscovered(HttpUrl calendarHome) {
+        apiKeyState.accept(AuthState.Success.AUTHENTICATED);
+        return executor.handleWhile(this::isStarted,
+                                    calDavClient.listCalendars(calendarHome),
+                                    "Collecting the iCloud calendars",
+                                    (collections, failure) -> failure == null ? completedFuture(toCalendars(collections)) : failedFuture(failure));
+    }
 
-                MultiStatusResponse[] calendarResponses = pf.getResponseBodyAsMultiStatus(response).getResponses();
-
-                var resultBuilder = ImmutableList.<Calendar>builder();
-                // Collect calendar info
-                for (MultiStatusResponse resp : calendarResponses) {
-                    String href = resp.getHref();
-                    DavPropertySet properties = resp.getProperties(OK_200);
-                    DavProperty<?> resourceTypeProp = properties.get(DavConstants.PROPERTY_RESOURCETYPE);
-                    DavProperty<?> displayNameProp = properties.get(DavConstants.PROPERTY_DISPLAYNAME);
-                    if (displayNameProp != null && isCalendar(resourceTypeProp)) {
-                        String displayName = String.valueOf(displayNameProp.getValue());
-                        resultBuilder.add(new IcloudCalendar(calendarHomeUrl, href, displayName, executor, httpClientFactory));
-                        logger.info("Retrieved calendar: {} -> {}", href, redacted(displayName));
-                    } else {
-                        logger.debug("Skipping non-calendar entry: {}", href);
-                    }
-                }
-                return new Calendars(resultBuilder.build());
-            } catch (IOException | DavException e) {
-                throw new RuntimeException("Failed to fetch calendar list", e);
+    private CalendarsResult toCalendars(List<CalendarCollection> collections) {
+        var calendars = ImmutableList.<Calendar>builderWithExpectedSize(collections.size());
+        Map<CalendarCollection, IcloudCalendar> newCalendarsByCollection = newLinkedHashMapWithExpectedSize(collections.size());
+        for (CalendarCollection collection : collections) {
+            IcloudCalendar calendar = calendarsByCollection.get(collection);
+            if (calendar == null) {
+                calendar = new IcloudCalendar(collection.href(),
+                                              collection.url(),
+                                              collection.displayName(),
+                                              this::startedCalDavClient,
+                                              executor,
+                                              this::isStarted,
+                                              logSubjectId);
             }
-        }));
-    }
-
-    private static boolean isCalendar(DavProperty<?> resourceTypeProp) {
-        return resourceTypeProp != null
-               && resourceTypeProp.getValue() instanceof Collection<?> collection
-               && collection.stream().anyMatch(node -> "calendar".equals(((Node) node).getNodeName()));
-    }
-
-    private String getCalendarSetHomeUrl(CalDAV4JMethodFactory methodFactory, HttpClient httpClient) throws IOException, DavException {
-        var davPropertyNames = new DavPropertyNameSet();
-        davPropertyNames.add(DavPropertyName.create("calendar-home-set", CalDAVConstants.NAMESPACE_CALDAV));
-        HttpPropFindMethod pf = methodFactory.createPropFindMethod(URI_WELL_KNONWN_CALDAV, davPropertyNames, 0);
-        logger.debug("Executing {}", pf);
-        var response = httpClient.execute(pf);
-        int statusCode = response.getStatusLine().getStatusCode();
-        String reasonPhrase = response.getStatusLine().getReasonPhrase();
-        if (isSuccess(statusCode)) {
-            apiKeyState.accept(new AuthState.Success(reasonPhrase));
-        } else if (statusCode == UNAUTHORIZED_401) {
-            apiKeyState.accept(new AuthState.PermanentFailure("Authorisation failed: " + reasonPhrase));
-            throw new CalendarAuthorisationException("Authorisation failed: " + reasonPhrase);
-        } else {
-            apiKeyState.accept(new AuthState.TransientFailure("HTTP " + statusCode + ": " + reasonPhrase));
-            throw new RuntimeException("Request failed: " + statusCode + " " + reasonPhrase);
+            newCalendarsByCollection.put(collection, calendar);
+            calendars.add(calendar);
+            if (logger.isDebugEnabled()) {
+                logger.debug("[{}] Retrieved calendar: {} -> {}", logSubjectId, redacted(collection.href()), redacted(collection.displayName()));
+            }
         }
-        MultiStatus responseBodyAsMultiStatus = pf.getResponseBodyAsMultiStatus(response);
-        MultiStatusResponse[] homeResponses = responseBodyAsMultiStatus.getResponses();
-        checkArgument(homeResponses.length >= 1, "Response does not have any WebDav Multi-Status responses: %s", responseBodyAsMultiStatus);
-        DavPropertySet propertiesForStatus200 = homeResponses[0].getProperties(OK_200);
-        checkArgument(!propertiesForStatus200.isEmpty(), "Multi-Status response %s has no properties for status 200", homeResponses[0]);
-        DavProperty<?> hrefProperty = propertiesForStatus200.iterator().next();
-        Object propertyValue = hrefProperty.getValue();
-        checkArgument(propertyValue instanceof Node node && !Strings.isNullOrEmpty(node.getTextContent()),
-                      "Invalid structure of first property if the Multi-Status response %s: must be a Node with a text content");
-        return ((Node) propertyValue).getTextContent();
+        calendarsByCollection = newCalendarsByCollection;
+        return new Calendars(calendars.build());
+    }
+
+    private CompletableFuture<CalendarsResult> onDiscoveryFailure(Throwable failure) {
+        Optional<HttpResponseException> httpFailure = HttpResponseException.findIn(failure);
+        if (httpFailure.isPresent()) {
+            int statusCode = httpFailure.get().statusCode();
+            if (statusCode == UNAUTHORIZED_401) {
+                apiKeyState.accept(UNAUTHORISED);
+                return failedFuture(new CalendarAuthorisationException(UNAUTHORISED_DESCRIPTION, httpFailure.get()));
+            }
+            apiKeyState.accept(new AuthState.TransientFailure("HTTP " + statusCode));
+        }
+        return failedFuture(new RuntimeException("Failed to fetch calendar list", failure));
+    }
+
+    /// @return a future already completed with the client while this service is started, and one that never completes once it has stopped
+    private CompletableFuture<CalDavClient> startedCalDavClient() {
+        return whenNotLifecycling(() -> isStartedPlain() ? completedFuture(calDavClient) : new CompletableFuture<>());
     }
 
     @BindingAnnotation
@@ -189,6 +194,12 @@ final class IcloudCalendarService extends BaseLifecycleComponent implements Cale
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface Password {
+    }
+
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    @interface Timeout {
     }
 
     @BindingAnnotation

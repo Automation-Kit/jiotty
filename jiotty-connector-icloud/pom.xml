@@ -20,14 +20,8 @@
         </dependency>
 
         <dependency>
-            <groupId>com.github.caldav4j</groupId>
-            <artifactId>caldav4j</artifactId>
-        </dependency>
-        <!-- caldav4j -> httpclient requires commons-logging; this bridge routes it to Log4j2 -->
-        <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-jcl</artifactId>
-            <scope>runtime</scope>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp-jvm</artifactId>
         </dependency>
         <dependency>
             <groupId>com.google.guava</groupId>
@@ -88,5 +82,25 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <configuration>
+                    <ignoredNonTestScopedDependencies>
+                        <!-- The main code uses okio through okhttp, which brings it in; the tests read request bodies with okio directly -->
+                        <dependency>com.squareup.okio:okio-jvm:*</dependency>
+                    </ignoredNonTestScopedDependencies>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
