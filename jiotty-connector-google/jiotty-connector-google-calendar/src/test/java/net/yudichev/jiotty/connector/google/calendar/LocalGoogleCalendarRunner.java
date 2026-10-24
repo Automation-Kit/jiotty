@@ -7,7 +7,6 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponentModule;
 import net.yudichev.jiotty.common.keystore.KeyStoreAccessModule;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.TimeModule;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
@@ -32,6 +31,7 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static net.yudichev.jiotty.common.inject.BindingSpec.exposedBy;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.toFutureOfList;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 /// Manual runner that exercises the real Google Calendar API end to end: a real [Application] wiring the real [GoogleCalendarModule] with local login enabled.
@@ -42,15 +42,16 @@ import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 /// Obtaining the Desktop client (one-off, in the Google Cloud Console, on the project that owns the Calendar integration):
 ///
 /// 1. APIs & Services → Library → enable **Google Calendar API**.
-/// 2. APIs & Services → OAuth consent screen → set the app name and support email; under Data Access add the scope `.../auth/calendar.readonly`; under
-/// Audience add your own Google account as a **Test user** (this sensitive scope needs Google verification for public use, but a test user can consent now).
+/// 2. APIs & Services → OAuth consent screen → set the app name and support email; under Data Access add the scopes
+/// {@value GoogleCalendarScopes#CALENDAR_LIST_READONLY} and {@value GoogleCalendarScopes#EVENTS_READONLY}; under Audience add your own Google account as a
+/// **Test user** (the sensitive events scope needs Google verification for public use, but a test user can consent now).
 /// 3. APIs & Services → Credentials → **Create credentials → OAuth client ID** → Application type **Desktop app** → Create.
 /// 4. Copy the **Client ID** (`NNNNNNNNN-xxxx.apps.googleusercontent.com`) and the **client secret** shown alongside it.
 ///
 /// Running:
 ///
 /// 1. Launch this class with the Desktop client id and client secret as the two program arguments.
-/// 2. Open the authorization URL it logs in a browser, sign in, and approve the calendar access.
+/// 2. Open the authorisation URL it logs in a browser, sign in, and tick both calendar permissions.
 /// 3. The loopback redirect completes the token exchange; the runner then lists your calendars and each one's next-day events, then exits.
 final class LocalGoogleCalendarRunner {
     private static final Logger logger = LogManager.getLogger(LocalGoogleCalendarRunner.class);
@@ -151,7 +152,7 @@ final class LocalGoogleCalendarRunner {
                                                              logger.info("*** CALENDAR: {}, events: {}", calendar, events.size());
                                                              events.forEach(event -> logger.info("****** EVENT: {}", event));
                                                          }))
-                                .collect(CompletableFutures.toFutureOfList())
+                                .collect(toFutureOfList())
                                 .whenComplete((_, throwable) -> {
                                     logger.log(throwable == null ? Level.INFO : Level.ERROR, "Completed", throwable);
                                     var exitThread = new Thread(() -> System.exit(0));

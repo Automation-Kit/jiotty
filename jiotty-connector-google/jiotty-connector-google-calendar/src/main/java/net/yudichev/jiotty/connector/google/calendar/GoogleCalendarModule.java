@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.google.calendar;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.TypeLiteral;
 import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
@@ -13,7 +14,6 @@ import net.yudichev.jiotty.security.OAuth2TokenManagerModule;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
-import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -30,6 +30,8 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
     static final String REVOCATION_URL = "https://oauth2.googleapis.com/revoke";
     /// Part of the key every token is stored under, so renaming it loses the stored tokens.
     static final String BASE_API_NAME = "GoogleCalendar";
+    /// The space-separated OAuth2 scope string, which keys the stored token as well, so reordering [GoogleCalendarScopes#SCOPES] loses the stored tokens.
+    static final String SCOPE = String.join(" ", GoogleCalendarScopes.SCOPES);
     private static final String AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 
     private final BindingSpec<String> clientIdSpec;
@@ -77,7 +79,7 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
                                                                 .withLogSubjectId(logSubjectIdSpec)
                                                                 .setTokenUrl(literally(TOKEN_URL))
                                                                 .withRevocationUrl(literally(REVOCATION_URL))
-                                                                .setScope(literally(GoogleCalendarScopes.CALENDAR_READONLY))
+                                                                .setScope(literally(SCOPE))
                                                                 .withVarStore(varStoreSpec)
                                                                 // a supplied auth code is a login in flight: the service hands it to the token manager on start
                                                                 .withLoginPending(authCodeSpec.map(new TypeToken<>() {},
@@ -88,7 +90,7 @@ public final class GoogleCalendarModule extends BaseExposedKeyModule<CalendarSer
             // Enthusiast/manual mode: obtain the token via a local browser login (loopback redirect). access_type=offline + prompt=consent make Google return
             // a refresh token. Google requires a client secret on the token exchange for the "Desktop app" client this uses, supplied via withClientSecret.
             tokenManagerModuleBuilder.withLoginUrl(literally(AUTHORIZATION_URL))
-                                     .withLoginExtraParams(literally(Map.of("access_type", "offline", "prompt", "consent")));
+                                     .withLoginExtraParams(literally(ImmutableMap.of("access_type", "offline", "prompt", "consent")));
         }
         if (clientSecretSpec != null) {
             tokenManagerModuleBuilder.withClientSecret(clientSecretSpec);

@@ -17,6 +17,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 final class FakeOAuth2TokenManager implements OAuth2TokenManager {
     private final CopyOnWriteArrayList<Consumer<? super AuthState>> handlers = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<String> invalidations = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<String> invalidatedAccessTokens = new CopyOnWriteArrayList<>();
     private int revocationCount;
     private volatile AuthState state;
 
@@ -59,6 +60,7 @@ final class FakeOAuth2TokenManager implements OAuth2TokenManager {
     @Override
     public void invalidate(String rejectedAccessToken, String reason) {
         invalidations.add(reason);
+        invalidatedAccessTokens.add(rejectedAccessToken);
         // Mirror the real manager: an invalidation drops the credential and escalates to a permanent failure.
         setState(new AuthState.PermanentFailure(reason));
     }
@@ -72,6 +74,10 @@ final class FakeOAuth2TokenManager implements OAuth2TokenManager {
 
     List<String> invalidations() {
         return invalidations;
+    }
+
+    List<String> invalidatedAccessTokens() {
+        return invalidatedAccessTokens;
     }
 
     int revocationCount() {

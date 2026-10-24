@@ -115,6 +115,11 @@ class OAuth2TokenManagerImplTest {
     }
 
     @Test
+    void storedTokenKey_isTheKeyTheManagerStoresItsTokenUnder() {
+        assertThat(OAuth2TokenManager.storedTokenKey(API_NAME, CLIENT_ID, SCOPE)).isEqualTo(VAR_STORE_KEY);
+    }
+
+    @Test
     void authCodeExchange_sendsCorrectFormParamsAndDeliversToken() {
         respondWithToken("test-access-token", "test-refresh-token", 3600);
         startTokenManager();

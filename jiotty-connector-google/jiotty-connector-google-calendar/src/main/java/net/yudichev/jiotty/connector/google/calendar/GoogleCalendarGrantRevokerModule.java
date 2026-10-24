@@ -27,7 +27,7 @@ public final class GoogleCalendarGrantRevokerModule extends BaseExposedKeyModule
     protected void configure() {
         ExposedKeyModule<StoredGrantRevoker> revokerModule = StoredGrantRevokerModule.builder()
                                                                                      .setApiName(literally(GoogleCalendarModule.BASE_API_NAME))
-                                                                                     .setScope(literally(GoogleCalendarScopes.CALENDAR_READONLY))
+                                                                                     .setScope(literally(GoogleCalendarModule.SCOPE))
                                                                                      .withRevocationUrl(literally(GoogleCalendarModule.REVOCATION_URL))
                                                                                      .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                                                      .build();

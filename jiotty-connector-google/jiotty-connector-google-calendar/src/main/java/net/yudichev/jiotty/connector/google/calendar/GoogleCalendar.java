@@ -21,6 +21,7 @@ import java.time.temporal.Temporal;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.security.LogRedaction.redact;
@@ -37,14 +38,21 @@ final class GoogleCalendar implements Calendar, StringFormattable {
     /// Redacted form of [#id], computed once for the same reason: a Google calendar id is the account's email address.
     private final String redactedId;
     private final SchedulingExecutor executor;
+    /// Invoked on [#executor] with the reason when Google rejects the credential an events request carried.
+    private final Consumer<String> credentialRejectionHandler;
 
-    public GoogleCalendar(com.google.api.services.calendar.Calendar calendarApi, String id, String name, SchedulingExecutor executor) {
+    public GoogleCalendar(com.google.api.services.calendar.Calendar calendarApi,
+                          String id,
+                          String name,
+                          SchedulingExecutor executor,
+                          Consumer<String> credentialRejectionHandler) {
         this.calendarApi = checkNotNull(calendarApi);
         this.id = checkNotNull(id);
         this.name = checkNotNull(name);
         redactedName = redact(name);
         redactedId = redact(id);
         this.executor = checkNotNull(executor);
+        this.credentialRejectionHandler = checkNotNull(credentialRejectionHandler);
     }
 
     @Override
@@ -70,7 +78,8 @@ final class GoogleCalendar implements Calendar, StringFormattable {
                                                                           .setTimeMax(new DateTime(to.toEpochMilli()))
                                                                           .setSingleEvents(true)
                                                                           .setOrderBy("startTime")
-                                                                          .setPageToken(pageToken));
+                                                                          .setPageToken(pageToken),
+                                                               credentialRejectionHandler);
                 List<Event> items = events.getItems();
                 if (items != null) {
                     for (Event event : items) {

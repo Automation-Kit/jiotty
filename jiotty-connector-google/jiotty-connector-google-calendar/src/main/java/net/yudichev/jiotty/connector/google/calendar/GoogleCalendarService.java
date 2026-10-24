@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.connector.google.calendar;
 
-import com.google.api.client.googleapis.json.GoogleJsonError;
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
 import com.google.api.client.http.HttpRequestInitializer;
 import com.google.api.client.http.HttpTransport;
@@ -11,6 +10,7 @@ import com.google.api.services.calendar.model.CalendarList;
 import com.google.api.services.calendar.model.CalendarListEntry;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
@@ -50,9 +50,20 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.GONE_410;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
+import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarRequests.createResponseFailure;
+import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarRequests.createTransportFailure;
+import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarRequests.errorReason;
+import static net.yudichev.jiotty.connector.google.calendar.GoogleCalendarRequests.reportCredentialRejection;
 
 @SuppressWarnings({"FieldAccessNotGuarded", "NonFinalGuard"}) // @GuardedBy("executor") marks executor confinement, which IntelliJ's lock analysis cannot see
 class GoogleCalendarService extends BaseLifecycleComponent implements CalendarService {
+    /// What [#syncCalendarList] does, completing its failure messages.
+    @VisibleForTesting
+    static final String CALENDAR_LIST_SYNC = "sync the Google calendar list";
+    @VisibleForTesting
+    static final String RATE_LIMIT_EXCEEDED_REASON = "rateLimitExceeded";
+    @VisibleForTesting
+    static final String USER_RATE_LIMIT_EXCEEDED_REASON = "userRateLimitExceeded";
     private static final Logger logger = LogManager.getLogger(GoogleCalendarService.class);
     private static final String APPLICATION_NAME = "jiotty";
     /// Re-emitted in place of the token manager's [AuthState.Success] so the raw access token is never exposed to subscribers.
@@ -60,7 +71,8 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     /// Calendar API 403 `reason` values that denote a transient rate/quota limit (retry with backoff) rather than a permanently-rejected credential — see
     /// [Handle API errors](https://developers.google.com/workspace/calendar/api/guides/errors). `dailyLimitExceeded` is the general Google quota reason,
     /// included defensively; a credential/permission problem is reported as a `401` or a different `403` reason, none of which appear here.
-    private static final Set<String> TRANSIENT_403_REASONS = Set.of("rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded", "quotaExceeded");
+    private static final Set<String> TRANSIENT_403_REASONS =
+            ImmutableSet.of(RATE_LIMIT_EXCEEDED_REASON, USER_RATE_LIMIT_EXCEEDED_REASON, "dailyLimitExceeded", "quotaExceeded");
 
     private final ExecutorFactory executorFactory;
     private final OAuth2TokenManager tokenManager;
@@ -70,6 +82,8 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     private final int timeoutMillis;
     private final String logSubjectId;
     private final ObservableValue<AuthState> authState;
+    /// Invoked when Google rejects the credential a request carried, by [#syncCalendarList] and by every [GoogleCalendar] this service creates.
+    private final Consumer<String> credentialRejectionHandler = this::invalidateRejectedCredential;
     /// The current calendar set, kept up to date by incremental `calendarList` sync (see [#syncCalendarList]). An unchanged calendar keeps its existing
     /// [GoogleCalendar] instance across refreshes, so the consumer's identity-based change detection only fires on real changes.
     @GuardedBy("executor")
@@ -174,7 +188,7 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
     /// single full resync is performed. Runs on [#executor], with [#accessToken] non-null.
     private void syncCalendarList() {
         // accessToken is confined to this executor and the blocking calls below never yield to the token-state callback that writes it, so it stays fixed for
-        // the whole sync — the invalidate() below therefore refers to exactly the token these requests carried.
+        // the whole sync and invalidateRejectedCredential invalidates exactly the token these requests carried.
         boolean retriedAfterExpiry = false;
         while (true) {
             if (calendarListSyncToken == null) {
@@ -195,7 +209,8 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                             if (Boolean.TRUE.equals(entry.getDeleted())) {
                                 calendarsById.remove(entry.getId());
                             } else {
-                                calendarsById.put(entry.getId(), new GoogleCalendar(calendarApi, entry.getId(), calendarName(entry), executor));
+                                String id = entry.getId();
+                                calendarsById.put(id, new GoogleCalendar(calendarApi, id, calendarName(entry), executor, credentialRejectionHandler));
                             }
                         }
                     }
@@ -214,40 +229,19 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
                     calendarListSyncToken = null;
                     retriedAfterExpiry = true;
                 } else {
-                    if (isPermanentAuthError(e)) {
+                    Optional<String> reason = errorReason(e);
+                    if (isPermanentAuthError(e.getStatusCode(), reason.orElse(null))) {
                         // The credential is no longer accepted by the API — revoked access, a deleted client project, or the API not being enabled — even
                         // though the token itself may still refresh. Invalidate it (escalating to a permanent auth failure) rather than retrying this call
                         // indefinitely against a credential that will never work.
-                        tokenManager.invalidate(accessToken, "Google Calendar API rejected the credential (HTTP " + e.getStatusCode() + ')');
+                        throw reportCredentialRejection(e, reason, CALENDAR_LIST_SYNC, credentialRejectionHandler);
                     }
-                    throw new RuntimeException("Failed to sync Google calendar list", e);
+                    throw createResponseFailure(e, reason, CALENDAR_LIST_SYNC);
                 }
             } catch (IOException e) {
-                throw new RuntimeException("Failed to sync Google calendar list", e);
+                throw createTransportFailure(e, CALENDAR_LIST_SYNC);
             }
         }
-    }
-
-    /// Whether a Calendar API error means the credential is permanently rejected and the user must re-authenticate: a `401`, or a `403` that is not a transient
-    /// rate/quota limit. A deleted client project, revoked access, or the API not being enabled all surface as a non-rate-limit `403`, whereas a rate-limit
-    /// `403` is transient and must not trigger re-authentication.
-    private static boolean isPermanentAuthError(GoogleJsonResponseException e) {
-        int statusCode = e.getStatusCode();
-        if (statusCode == UNAUTHORIZED_401) {
-            return true;
-        }
-        if (statusCode != FORBIDDEN_403) {
-            return false;
-        }
-        // Treat a 403 without a recognised reason as permanent: better to prompt re-auth than to retry a genuinely-broken credential forever.
-        return errorReason(e).map(reason -> !TRANSIENT_403_REASONS.contains(reason)).orElse(true);
-    }
-
-    private static Optional<String> errorReason(GoogleJsonResponseException e) {
-        return Optional.ofNullable(e.getDetails())
-                       .map(GoogleJsonError::getErrors)
-                       .filter(errors -> !errors.isEmpty())
-                       .map(errors -> errors.getFirst().getReason());
     }
 
     private static String calendarName(CalendarListEntry entry) {
@@ -257,6 +251,29 @@ class GoogleCalendarService extends BaseLifecycleComponent implements CalendarSe
         }
         String summary = entry.getSummary();
         return summary != null ? summary : entry.getId();
+    }
+
+    /// Whether a Calendar API error response means the credential is permanently rejected and the user must re-authenticate: an unauthorised response, or a
+    /// forbidden one that is not a transient rate/quota limit. A deleted client project, revoked access, or the API not being enabled all surface as a
+    /// forbidden response without a rate-limit reason, whereas a rate limit is transient and must not trigger re-authentication.
+    ///
+    /// @param statusCode the response's HTTP status
+    /// @param reason     the error reason the response lists, or `null` when it lists none
+    private static boolean isPermanentAuthError(int statusCode, @Nullable String reason) {
+        if (statusCode == UNAUTHORIZED_401) {
+            return true;
+        }
+        if (statusCode != FORBIDDEN_403) {
+            return false;
+        }
+        // Treat a 403 without a recognised reason as permanent: better to prompt re-auth than to retry a genuinely-broken credential forever.
+        return reason == null || !TRANSIENT_403_REASONS.contains(reason);
+    }
+
+    /// Invalidates in [#tokenManager] the access token a rejected request carried, recording `rejection` as the cause. Runs on [#executor], as every
+    /// Calendar API request does, so [#accessToken] is that request's token.
+    private void invalidateRejectedCredential(String rejection) {
+        tokenManager.invalidate(accessToken, rejection);
     }
 
     @BindingAnnotation

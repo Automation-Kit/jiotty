@@ -8,6 +8,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 public interface OAuth2TokenManager {
+    /// The var-store key a manager for this API, client and scope keeps its token under.
+    static String storedTokenKey(String apiName, String clientId, String scope) {
+        return OAuth2TokenManagerImpl.varStoreKey(apiName, clientId, scope);
+    }
+
     /// The client secret, or [Optional#empty()] for a public client that authenticates via PKCE instead.
     Optional<String> clientSecret();
 
