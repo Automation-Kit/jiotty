@@ -19,6 +19,7 @@ import net.yudichev.jiotty.common.misc.LoggingUpstreamHealthHandler;
 import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import net.yudichev.jiotty.connector.octopusenergy.priceforecast.PriceForecastSourcesModule;
 import net.yudichev.jiotty.persistence.varstore.VarStore;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -37,15 +38,18 @@ public final class PriceForecastServiceRegistryModule extends BaseExposedKeyModu
     private final BindingSpec<UpstreamHealthHandler> statusHandlerSpec;
     private final BindingSpec<MeterRegistry> meterRegistrySpec;
     private final BindingSpec<Optional<VarStore>> varStoreSpec;
+    private final @Nullable BindingSpec<String> userAgentSpec;
 
     private PriceForecastServiceRegistryModule(SpecifiedAnnotation specifiedAnnotation,
                                                BindingSpec<UpstreamHealthHandler> statusHandlerSpec,
                                                BindingSpec<MeterRegistry> meterRegistrySpec,
-                                               BindingSpec<Optional<VarStore>> varStoreSpec) {
+                                               BindingSpec<Optional<VarStore>> varStoreSpec,
+                                               @Nullable BindingSpec<String> userAgentSpec) {
         super(specifiedAnnotation);
         this.statusHandlerSpec = checkNotNull(statusHandlerSpec);
         this.meterRegistrySpec = checkNotNull(meterRegistrySpec);
         this.varStoreSpec = checkNotNull(varStoreSpec);
+        this.userAgentSpec = userAgentSpec;
     }
 
     public static Builder builder() {
@@ -58,7 +62,11 @@ public final class PriceForecastServiceRegistryModule extends BaseExposedKeyModu
                                                               .setThreadName(literally("PriceForecast"))
                                                               .withAnnotation(forAnnotation(PriceForecast.class))
                                                               .build());
-        installLifecycleComponentModule(PriceForecastSourcesModule.builder().build());
+        var sourcesModuleBuilder = PriceForecastSourcesModule.builder();
+        if (userAgentSpec != null) {
+            sourcesModuleBuilder.withUserAgent(userAgentSpec);
+        }
+        installLifecycleComponentModule(sourcesModuleBuilder.build());
         // Retry the whole failover sweep on any failure: with several heterogeneous sources there is no failure class worth giving up on early, and
         // exhausting this window is the "every source kept failing" signal reported to the health handler. The window ends well before the next refresh
         // is due, so one refresh's retries always conclude before the next refresh starts.
@@ -98,6 +106,7 @@ public final class PriceForecastServiceRegistryModule extends BaseExposedKeyModu
         private BindingSpec<UpstreamHealthHandler> statusHandlerSpec = literally(new LoggingUpstreamHealthHandler("Price forecast retrieval"));
         private BindingSpec<MeterRegistry> meterRegistrySpec = literally(new NoopMeterRegistry());
         private BindingSpec<Optional<VarStore>> varStoreSpec = literally(Optional.empty());
+        private @Nullable BindingSpec<String> userAgentSpec;
 
         public Builder withStatusHandler(BindingSpec<UpstreamHealthHandler> statusHandlerSpec) {
             this.statusHandlerSpec = checkNotNull(statusHandlerSpec);
@@ -117,9 +126,15 @@ public final class PriceForecastServiceRegistryModule extends BaseExposedKeyModu
             return this;
         }
 
+        /// Sets the User-Agent the forecast requests carry, naming the application to the services' operators. Unset, OkHttp's default goes out.
+        public Builder withUserAgent(BindingSpec<String> userAgentSpec) {
+            this.userAgentSpec = checkNotNull(userAgentSpec);
+            return this;
+        }
+
         @Override
         public ExposedKeyModule<PriceForecastServiceRegistry> build() {
-            return new PriceForecastServiceRegistryModule(specifiedAnnotation(), statusHandlerSpec, meterRegistrySpec, varStoreSpec);
+            return new PriceForecastServiceRegistryModule(specifiedAnnotation(), statusHandlerSpec, meterRegistrySpec, varStoreSpec, userAgentSpec);
         }
     }
 }

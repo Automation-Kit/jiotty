@@ -9,11 +9,13 @@ import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -23,9 +25,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.net.HttpHeaders.USER_AGENT;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
@@ -44,6 +48,7 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 @ExtendWith(MockitoExtension.class)
 class PriceForecastSourcesProviderTest {
+    private static final String TEST_USER_AGENT = "Example/1.0 (+https://example.com)";
 
     private final List<Request> requests = new ArrayList<>();
 
@@ -53,9 +58,33 @@ class PriceForecastSourcesProviderTest {
     @Test
     void sourcesAreInFailoverOrderWithStableNames() {
         // the names are the metric `source` tag vocabulary rendered on the resources dashboard, so a rename silently orphans the panel
-        assertThat(PriceForecastSourcesProvider.createSources(_ -> call))
+        assertThat(PriceForecastSourcesProvider.createSources(_ -> call, null))
                 .extracting(PriceForecastSource::name)
                 .containsExactly("agilepredict", "x2r", "agileforecast");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"agilepredict", "x2r", "agileforecast"})
+    void configuredUserAgent_sentBySource(String sourceName) {
+        PriceForecastSource source = cannedSource(sourceName, TEST_USER_AGENT, new byte[0], SERVICE_UNAVAILABLE_503);
+
+        assertThat(source.getPrices("C", 13)).failsWithin(Duration.ZERO);
+        assertThat(requests).singleElement().satisfies(request -> assertThat(request.header(USER_AGENT)).isEqualTo(TEST_USER_AGENT));
+    }
+
+    @Test
+    void noUserAgent_leavesTheHeaderToTheClient() {
+        PriceForecastSource source = cannedSource("agilepredict", new byte[0], SERVICE_UNAVAILABLE_503);
+
+        assertThat(source.getPrices("C", 13)).failsWithin(Duration.ZERO);
+        assertThat(requests).singleElement().satisfies(request -> assertThat(request.header(USER_AGENT)).isNull());
+    }
+
+    // OkHttp refuses a header value outside printable ASCII on every request, so the constructor refuses it once.
+    @ParameterizedTest
+    @ValueSource(strings = {" ", "Example é", "Example\n1.0"})
+    void unsendableUserAgent_rejected(String userAgent) {
+        assertThatThrownBy(() -> new PriceForecastSourcesProvider(Optional.of(userAgent))).isInstanceOf(IllegalArgumentException.class);
     }
 
     @ParameterizedTest
@@ -131,8 +160,12 @@ class PriceForecastSourcesProviderTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /// The named source wired to a [Call] mock answering every request with the given canned response.
     private PriceForecastSource cannedSource(String sourceName, byte[] responseBody, int responseCode) {
+        return cannedSource(sourceName, null, responseBody, responseCode);
+    }
+
+    /// The named source, sending `userAgent` when given, wired to a [Call] mock answering every request with the given canned response.
+    private PriceForecastSource cannedSource(String sourceName, @Nullable String userAgent, byte[] responseBody, int responseCode) {
         doAnswer(invocation -> {
             Callback callback = invocation.getArgument(0);
             asUnchecked(() -> callback.onResponse(call, new Response.Builder()
@@ -148,7 +181,7 @@ class PriceForecastSourcesProviderTest {
                                                requests.add(request);
                                                when(call.request()).thenReturn(request);
                                                return call;
-                                           })
+                                           }, userAgent)
                                            .stream()
                                            .filter(source -> source.name().equals(sourceName))
                                            .findFirst()
