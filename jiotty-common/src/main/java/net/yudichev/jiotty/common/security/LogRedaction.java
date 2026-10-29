@@ -8,6 +8,8 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
 
+import static net.yudichev.jiotty.common.geo.CoordinatePrecision.ONE_DECIMAL_PLACE;
+
 /// Helpers for reducing secrets and PII to a short, non-reversible form before they reach a logger, MDC field, listener callback description, or exception
 /// message.
 ///
@@ -119,12 +121,8 @@ public final class LogRedaction {
     }
 
     private static void appendCoarsePair(Appendable appendable, double lat, double lon) {
-        Append.to(appendable, coarsen(lat));
+        Append.to(appendable, ONE_DECIMAL_PLACE.round(lat));
         Append.to(appendable, ',');
-        Append.to(appendable, coarsen(lon));
-    }
-
-    private static double coarsen(double coordinate) {
-        return Math.round(coordinate * 10.0) / 10.0;
+        Append.to(appendable, ONE_DECIMAL_PLACE.round(lon));
     }
 }

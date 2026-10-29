@@ -2,19 +2,24 @@ package net.yudichev.jiotty.connector.world.weather;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.geo.LatLon;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
+import net.yudichev.jiotty.common.lang.Append;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import net.yudichev.jiotty.common.misc.UpstreamHealthReporting;
+import net.yudichev.jiotty.common.rest.RestClients;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -32,18 +37,27 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.common.geo.CoordinatePrecision.TWO_DECIMAL_PLACES;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.misc.UpstreamHealthReporting.reportingHealth;
-import static net.yudichev.jiotty.common.rest.RestClients.call;
+import static net.yudichev.jiotty.common.rest.RestClients.callSuppressingResponseBody;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
 import static net.yudichev.jiotty.common.security.LogRedaction.redacted;
-import static okhttp3.HttpUrl.parse;
 
 class WeatherServiceImpl extends BaseLifecycleComponent implements WeatherService {
+    @VisibleForTesting
+    static final String KEY_PARAMETER = "key";
+    @VisibleForTesting
+    static final String LOCATION_PARAMETER = "q";
+    @VisibleForTesting
+    static final String DAYS_PARAMETER = "days";
     private static final Logger logger = LogManager.getLogger(WeatherServiceImpl.class);
-
     private static final String API_BASE = "https://api.weatherapi.com/v1";
+    /// [#retryableOperationExecutor] retries every call with backoff, so a [RestClients] retry loop of its own would multiply the attempts.
+    private static final int REST_CLIENT_RETRIES = 0;
+    private static final TypeToken<WeatherResponse> WEATHER_RESPONSE_TYPE = TypeToken.of(WeatherResponse.class);
+    private static final TypeToken<ForecastResponse> FORECAST_RESPONSE_TYPE = TypeToken.of(ForecastResponse.class);
 
     private final String apiKey;
     private final UpstreamHealthHandler healthHandler;
@@ -81,12 +95,12 @@ class WeatherServiceImpl extends BaseLifecycleComponent implements WeatherServic
 
     @Override
     public CompletableFuture<Weather> getCurrentWeather(LatLon worldCoordinates) {
-        var request = buildGet("/current.json", worldCoordinates, null);
+        Request request = buildGet(Endpoint.CURRENT, worldCoordinates, null);
         long reqId = requestIdGenerator.incrementAndGet();
         if (logger.isDebugEnabled()) {
             logger.debug("[{}] getCurrentWeather for {}", reqId, redacted(worldCoordinates));
         }
-        return callApi("get current weather", request, WeatherResponse.class)
+        return callApi("get current weather", request, Endpoint.CURRENT, WEATHER_RESPONSE_TYPE)
                 .thenApply(WeatherResponse::current)
                 .whenComplete((result, throwable) -> logger.debug("[{}] Response: {}", reqId, result, throwable));
     }
@@ -104,12 +118,12 @@ class WeatherServiceImpl extends BaseLifecycleComponent implements WeatherServic
                       "Requested instant %s is too far in the future (%s days). Max days supported %s", until, daysToInclude, MAX_FORECAST_DAYS);
 
         int finalDaysToInclude = daysToInclude;
-        var request = buildGet("/forecast.json", worldCoordinates, b -> b.addQueryParameter("days", String.valueOf(finalDaysToInclude)));
+        Request request = buildGet(Endpoint.FORECAST, worldCoordinates, b -> b.addQueryParameter(DAYS_PARAMETER, String.valueOf(finalDaysToInclude)));
         long reqId = requestIdGenerator.incrementAndGet();
         if (logger.isDebugEnabled()) {
             logger.debug("[{}] getForecastWeather for {} until {} ({} days)", reqId, redacted(worldCoordinates), until, finalDaysToInclude);
         }
-        return callApi("get weather forecast", request, ForecastResponse.class)
+        return callApi("get weather forecast", request, Endpoint.FORECAST, FORECAST_RESPONSE_TYPE)
                 .<List<ForecastHour>>thenApply(resp -> {
                     ImmutableList<ForecastDay> days = resp.forecast().days();
                     var resultBuilder = ImmutableList.<ForecastHour>builderWithExpectedSize(days.size() * 24);
@@ -128,23 +142,43 @@ class WeatherServiceImpl extends BaseLifecycleComponent implements WeatherServic
                 .whenComplete((result, ex) -> logger.debug("[{}] Response: {}", reqId, result, ex));
     }
 
-    private Request buildGet(String path, LatLon coords, Consumer<HttpUrl.Builder> extraParams) {
-        var urlBuilder = checkNotNull(parse(API_BASE + path)).newBuilder()
-                                                             .addQueryParameter("key", apiKey)
-                                                             .addQueryParameter("q", coords.lat() + "," + coords.lon());
+    /// @param extraParams adds the endpoint's own query parameters, or `null` when it takes none beyond the key and the location
+    private Request buildGet(Endpoint endpoint, LatLon coords, @Nullable Consumer<HttpUrl.Builder> extraParams) {
+        checkArgument(Double.isFinite(coords.lat()) && Double.isFinite(coords.lon()), "coordinates must be finite, but were: %s", coords);
+        HttpUrl.Builder urlBuilder = endpoint.url.newBuilder()
+                                                 .addQueryParameter(KEY_PARAMETER, apiKey)
+                                                 .addQueryParameter(LOCATION_PARAMETER,
+                                                                    TWO_DECIMAL_PLACES.round(coords.lat()) + "," + TWO_DECIMAL_PLACES.round(coords.lon()));
         if (extraParams != null) {
             extraParams.accept(urlBuilder);
         }
-        var url = urlBuilder.build();
+        HttpUrl url = urlBuilder.build();
         return new Request.Builder().url(url).get().build();
     }
 
     /// Runs every call to the weather API through [UpstreamHealthReporting#reportingHealth], so one sustained outage is reported once, however many callers
     /// the shared service serves.
-    private <T> CompletableFuture<T> callApi(String operationName, Request request, Class<? extends T> responseType) {
+    ///
+    /// @param <T> the type the call's future completes with
+    private <T> CompletableFuture<T> callApi(String operationName, Request request, Endpoint endpoint, TypeToken<? extends T> responseType) {
         return whenStartedAndNotLifecycling(
                 () -> reportingHealth(retryableOperationExecutor, healthHandler, operationName, "weather API call failed",
-                                      () -> call(client.newCall(request), responseType)));
+                                      () -> callSuppressingResponseBody(client.newCall(request), responseType, REST_CLIENT_RETRIES, endpoint.loggableUrl)));
+    }
+
+    private enum Endpoint {
+        CURRENT("/current.json"),
+        FORECAST("/forecast.json");
+
+        private final HttpUrl url;
+        /// Stands in for a request's URL in log lines and failure messages, which reach operator alerts: the query carries the API key and the location.
+        private final StringFormattable loggableUrl;
+
+        Endpoint(String path) {
+            String urlString = API_BASE + checkNotNull(path);
+            url = HttpUrl.get(urlString);
+            loggableUrl = appendable -> Append.to(appendable, urlString);
+        }
     }
 
     @BindingAnnotation
