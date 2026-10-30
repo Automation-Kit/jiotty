@@ -10,7 +10,6 @@ import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
-import okio.Buffer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,9 +28,8 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static com.google.common.net.HttpHeaders.AUTHORIZATION;
-import static java.util.Objects.requireNonNull;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.common.rest.OkHttpStubs.bodyOf;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.stubCalls;
 import static net.yudichev.jiotty.connector.icloud.calendar.CalDavClient.DEPTH_HEADER;
 import static net.yudichev.jiotty.connector.icloud.calendar.CalDavClient.DISPLAY_NAME;
@@ -107,7 +105,8 @@ class CalDavClientTest {
                                                                      <d:href>%3$s</d:href>
                                                                      <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>
                                                                        <d:status>HTTP/1.1 200 OK</d:status></d:propstat>
-                                                                     <d:propstat><d:prop><d:displayname/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>
+                                                                     <d:propstat><d:prop><d:displayname/></d:prop>
+                                                                       <d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>
                                                                    </d:response>
                                                                    <d:response>
                                                                      <d:href>%s</d:href>
@@ -197,7 +196,9 @@ class CalDavClientTest {
                                                                      <d:href>%1$s</d:href>
                                                                      <d:propstat>
                                                                        <d:prop>
-                                                                         <d:resourcetype><d:collection/><c:calendar><x:extra>text</x:extra></c:calendar></d:resourcetype>
+                                                                         <d:resourcetype>
+                                                                           <d:collection/><c:calendar><x:extra>text</x:extra></c:calendar>
+                                                                         </d:resourcetype>
                                                                          <d:displayname><!-- the user's title -->%2$s</d:displayname>
                                                                        </d:prop>
                                                                        <d:status>HTTP/1.1 200 OK</d:status>
@@ -216,7 +217,8 @@ class CalDavClientTest {
                                                                    <d:response>
                                                                      <d:href>%3$suntyped/</d:href>
                                                                      <d:propstat>
-                                                                       <d:prop><d:displayname>Untyped</d:displayname></d:prop><d:status>HTTP/1.1 200 OK</d:status>
+                                                                       <d:prop><d:displayname>Untyped</d:displayname></d:prop>
+                                                                       <d:status>HTTP/1.1 200 OK</d:status>
                                                                      </d:propstat>
                                                                    </d:response>
                                                                  </d:multistatus>""".formatted(CALENDAR_HREF, CALENDAR_TITLE, HOME.encodedPath())));
@@ -348,7 +350,8 @@ class CalDavClientTest {
                                                                  <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
                                                                    <d:response>
                                                                      <d:href>%sx/gone.ics</d:href>
-                                                                     <d:propstat><d:prop><c:calendar-data/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>
+                                                                     <d:propstat><d:prop><c:calendar-data/></d:prop>
+                                                                       <d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>
                                                                    </d:response>
                                                                  </d:multistatus>""".formatted(HOME.encodedPath())));
 
@@ -400,12 +403,5 @@ class CalDavClientTest {
 
     private void answerWith(Function<Request, Response> responder) {
         requests = stubCalls(httpClient, responder);
-    }
-
-    private static String bodyOf(Request request) {
-        try (var buffer = new Buffer()) {
-            asUnchecked(() -> requireNonNull(request.body()).writeTo(buffer));
-            return buffer.readUtf8();
-        }
     }
 }

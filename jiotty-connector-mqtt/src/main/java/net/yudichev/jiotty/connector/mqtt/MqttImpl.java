@@ -44,7 +44,6 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -195,9 +194,11 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     }
 
     @Override
-    public Closeable subscribe(String topicFilter, int qos, BiConsumer<String, String> dataCallback) {
+    public Closeable subscribeToMessages(String topicFilter, int qos, Consumer<Message> messageCallback) {
+        checkNotNull(topicFilter);
+        checkNotNull(messageCallback);
         checkStarted();
-        BiConsumer<String, MqttMessage> callback = guardedCallback(new MessageToStringDataCallback(dataCallback));
+        Consumer<Message> callback = guardedCallback(messageCallback);
         var subscription = new Subscription(qos, callback);
         executor.execute("mqttSubscribe", () -> {
             deliverImage(topicFilter, callback);
@@ -314,8 +315,8 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
 
     /// Wraps a per-subscriber callback so a throwing subscriber is contained: its failure is reported, and the filter's remaining subscribers receive the
     /// message.
-    private <T, U> BiConsumer<T, U> guardedCallback(BiConsumer<T, U> delegate) {
-        return (t, u) -> Runnables.runGuarded("handling mqtt message", () -> delegate.accept(t, u), taskFailureReporter::onTaskException);
+    private Consumer<Message> guardedCallback(Consumer<Message> delegate) {
+        return message -> Runnables.runGuarded("handling mqtt message", () -> delegate.accept(message), taskFailureReporter::onTaskException);
     }
 
     /// Subscribes the broker to `filter` with a single fan-out listener that dispatches each message to every current subscriber of the filter, at the
@@ -323,52 +324,45 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
     /// broker holds exactly one listener per filter (Paho keys listeners by filter, overwriting on re-subscribe) and the same qos on both paths.
     private void ensureBrokerSubscription(String filter) {
         int qos = subscriptionsByFilter.get(filter).stream().mapToInt(Subscription::qos).max().orElseThrow();
-        doSubscribe(filter, qos, (topic, message) -> {
+        doSubscribe(filter, qos, message -> {
             Set<Subscription> subscriptions = subscriptionsByFilter.get(filter);
             if (subscriptions != null && !subscriptions.isEmpty()) {
-                runForAll(subscriptions, sub -> sub.accept(topic, message));
+                runForAll(subscriptions, sub -> sub.accept(message));
             }
         });
     }
 
-    private void doSubscribe(String topicFilter, int qos, BiConsumer<String, MqttMessage> callback) {
+    private void doSubscribe(String topicFilter, int qos, Consumer<Message> callback) {
         asUnchecked(() -> client.subscribe(topicFilter, qos, (topic, message) -> {
             logger.trace("IN topic: {}, msg: {}", topic, message);
             executor.execute("mqttMessageArrived", () -> {
                 // Cache every received message so a later subscriber to the same filter gets the last value via deliverImage. This is the live dispatch
                 // path for every subscription (initial and restored on reconnect), so it sees retained messages the broker redelivers on subscribe.
                 lastReceivedMessageByTopic.put(topic, message);
-                callback.accept(topic, message);
+                callback.accept(toMessage(topic, message, message.isRetained()));
             });
         }));
     }
 
     /// Delivers the last known message of every topic matching `topicFilter` to a newly-subscribing `callback`, which is already a [#guardedCallback] — so
     /// each topic's delivery is contained on its own.
-    private void deliverImage(String topicFilter, BiConsumer<String, MqttMessage> callback) {
+    private void deliverImage(String topicFilter, Consumer<Message> callback) {
         lastReceivedMessageByTopic.forEach((topic, message) -> {
             if (MqttTopic.isMatched(topicFilter, topic)) {
                 logger.debug("Delivering last known message {} -> {}", topic, message);
-                callback.accept(topic, message);
+                callback.accept(toMessage(topic, message, true));
             }
         });
+    }
+
+    private static Message toMessage(String topic, MqttMessage message, boolean replayed) {
+        return new Message(topic, new String(message.getPayload(), UTF_8), replayed);
     }
 
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
     @interface Dependency {
-    }
-
-    private record MessageToStringDataCallback(BiConsumer<String, String> delegate) implements BiConsumer<String, MqttMessage> {
-        private MessageToStringDataCallback(BiConsumer<String, String> delegate) {
-            this.delegate = checkNotNull(delegate);
-        }
-
-        @Override
-        public void accept(String topic, MqttMessage message) {
-            delegate.accept(topic, new String(message.getPayload(), UTF_8));
-        }
     }
 
 
@@ -446,9 +440,13 @@ class MqttImpl extends BaseLifecycleComponent implements Mqtt {
 
     private record QueuedSend(String topic, byte[] payload, boolean retained, CompletableFuture<Void> acknowledgement) {}
 
-    private record Subscription(int qos, BiConsumer<String, MqttMessage> dataCallback) {
-        public void accept(String topic, MqttMessage message) {
-            dataCallback.accept(topic, message);
+    private record Subscription(int qos, Consumer<Message> messageCallback) {
+        Subscription {
+            checkNotNull(messageCallback);
+        }
+
+        public void accept(Message message) {
+            messageCallback.accept(message);
         }
     }
 }

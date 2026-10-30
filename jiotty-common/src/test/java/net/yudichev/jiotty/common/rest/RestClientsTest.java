@@ -55,6 +55,8 @@ import static org.mockito.Mockito.mock;
 class RestClientsTest {
 
     private static final String BASE = "http://example.test";
+    private static final String VIN = "5YJ3E1EA1JF000001";
+    private static final String VIN_URL = BASE + "/vehicles/" + VIN + "/config";
     private static final StringFormattable REDACTED_URL = appendable -> Append.to(appendable, "redacted");
     /// Stands for the personal data an upstream quotes back in an error body, pseudonymous because production logs the failures it handles.
     private static final String PERSONAL_MARKER = "user-7f3a9c";
@@ -341,27 +343,25 @@ class RestClientsTest {
     /// The VIN-shaped path segment is what the PII log guard looks for, so the guard also fails this test if a log line renders the real URL.
     @Test
     void callSuppressingResponseBody_withLoggableUrl_keepsTheRealUrlOutOfTheFailureAcrossRetries() {
-        String url = BASE + "/vehicles/5YJ3E1EA1JF000001/config";
-        urlToFailure.put(url, new IOException("transport boom"));
+        urlToFailure.put(VIN_URL, new IOException("transport boom"));
 
-        CompletableFuture<Page> future = RestClients.callSuppressingResponseBody(callFactory.apply(url),
+        CompletableFuture<Page> future = RestClients.callSuppressingResponseBody(callFactory.apply(VIN_URL),
                                                                                  TypeToken.of(Page.class),
                                                                                  1,
                                                                                  appendable -> Append.to(appendable, BASE + "/vehicles/5YJ***/config"));
 
         assertThatThrownBy(future::join).cause()
                                         .hasMessage("call failed: GET " + BASE + "/vehicles/5YJ***/config")
-                                        .hasMessageNotContaining("5YJ3E1EA1JF000001");
-        assertThat(urlHitCount).containsEntry(url, 2);
+                                        .hasMessageNotContaining(VIN);
+        assertThat(urlHitCount).containsEntry(VIN_URL, 2);
     }
 
     @Test
     void callSuppressingResponseBody_withLoggableUrl_nonSuccessResponse_keepsTheStatusAndWithholdsTheBody() {
-        String url = BASE + "/vehicles/5YJ3E1EA1JF000001/config";
-        urlToBody.put(url, "{\"error\":\"vehicle 5YJ3E1EA1JF000001 not found\"}");
-        urlToHttpStatus.put(url, NOT_FOUND_404);
+        urlToBody.put(VIN_URL, "{\"error\":\"vehicle " + VIN + " not found\"}");
+        urlToHttpStatus.put(VIN_URL, NOT_FOUND_404);
 
-        CompletableFuture<Page> future = RestClients.callSuppressingResponseBody(callFactory.apply(url),
+        CompletableFuture<Page> future = RestClients.callSuppressingResponseBody(callFactory.apply(VIN_URL),
                                                                                  TypeToken.of(Page.class),
                                                                                  0,
                                                                                  REDACTED_URL);
@@ -370,7 +370,33 @@ class RestClientsTest {
                 .cause()
                 .isInstanceOfSatisfying(HttpResponseException.class, http -> {
                     assertThat(http.statusCode()).isEqualTo(NOT_FOUND_404);
-                    assertThat(http).hasMessageNotContaining("5YJ3E1EA1JF000001");
+                    assertThat(http).hasMessageNotContaining(VIN);
+                });
+    }
+
+    /// The VIN-shaped path segment is what the PII log guard looks for, so the guard also fails this test if a log line renders the real URL.
+    @Test
+    void callWithLoggableUrl_keepsTheRealUrlOutOfTheFailure() {
+        urlToFailure.put(VIN_URL, new IOException("transport boom"));
+
+        CompletableFuture<Page> future = RestClients.call(callFactory.apply(VIN_URL), TypeToken.of(Page.class), 1, REDACTED_URL);
+
+        assertThatThrownBy(future::join).cause().hasMessage("call failed: GET redacted");
+        assertThat(urlHitCount).containsEntry(VIN_URL, 2);
+    }
+
+    @Test
+    void callWithLoggableUrl_nonSuccessResponse_keepsTheStatusAndTheBody() {
+        urlToBody.put(VIN_URL, "{\"error\":\"vehicle unavailable\"}");
+        urlToHttpStatus.put(VIN_URL, NOT_FOUND_404);
+
+        CompletableFuture<Page> future = RestClients.call(callFactory.apply(VIN_URL), TypeToken.of(Page.class), 0, REDACTED_URL);
+
+        assertThatThrownBy(future::join)
+                .cause()
+                .isInstanceOfSatisfying(HttpResponseException.class, http -> {
+                    assertThat(http.statusCode()).isEqualTo(NOT_FOUND_404);
+                    assertThat(http.body()).isEqualTo("{\"error\":\"vehicle unavailable\"}");
                 });
     }
 

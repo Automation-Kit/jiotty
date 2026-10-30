@@ -9,46 +9,37 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /// Basic in-memory [Mqtt] implementation for tests.
 public final class InMemoryMqtt implements Mqtt {
     private final Map<String, String> dataByTopic = new HashMap<>();
-    private final Map<Pattern, Listeners<TopicAndData>> listenersByFilter = new HashMap<>();
+    private final Map<Pattern, Listeners<Message>> listenersByFilter = new HashMap<>();
     private final Object lock = new Object();
     private final Listeners<ConnectionStatus> connectionStatusListeners = new Listeners<>();
     private ConnectionStatus connectionStatus = new Connected(false);
 
     @Override
-    public Closeable subscribe(String topicFilter, int qos, BiConsumer<String, String> dataCallback) {
-        List<TopicAndData> image = null;
+    public Closeable subscribeToMessages(String topicFilter, int qos, Consumer<Message> messageCallback) {
+        List<Message> image = new ArrayList<>();
         Closeable listenerRegistration;
         var pattern = Pattern.compile(topicFilter.replace("#", ".*"));
         synchronized (lock) {
-            listenerRegistration = listenersByFilter.computeIfAbsent(pattern, _ -> new Listeners<>())
-                                                    .addListener(topicAndData -> topicAndData.notify(dataCallback));
-            if (qos > 0) {
-                // send image
-                image = new ArrayList<>();
-                for (Map.Entry<String, String> entry : dataByTopic.entrySet()) {
-                    String topic = entry.getKey();
-                    String data = entry.getValue();
-                    if (pattern.matcher(topic).matches()) {
-                        image.add(new TopicAndData(topic, data));
-                    }
+            listenerRegistration = listenersByFilter.computeIfAbsent(pattern, _ -> new Listeners<>()).addListener(messageCallback);
+            // send image
+            dataByTopic.forEach((topic, data) -> {
+                if (pattern.matcher(topic).matches()) {
+                    image.add(new Message(topic, data, true));
                 }
-            }
+            });
         }
-        if (image != null) {
-            image.forEach(t -> t.notify(dataCallback));
-        }
+        image.forEach(messageCallback);
         return Closeable.idempotent(() -> {
             synchronized (lock) {
                 listenerRegistration.close();
-                Listeners<TopicAndData> topicAndDataListeners = listenersByFilter.get(pattern);
-                if (topicAndDataListeners.isEmpty()) {
+                Listeners<Message> messageListeners = listenersByFilter.get(pattern);
+                if (messageListeners.isEmpty()) {
                     listenersByFilter.remove(pattern);
                 }
             }
@@ -57,17 +48,17 @@ public final class InMemoryMqtt implements Mqtt {
 
     @Override
     public CompletableFuture<Void> publish(String topic, String message) {
-        List<Listeners<TopicAndData>> listeners = new ArrayList<>();
+        List<Listeners<Message>> listeners = new ArrayList<>();
         synchronized (lock) {
             dataByTopic.put(topic, message);
-            listenersByFilter.forEach((pattern, topicAndDataListeners) -> {
+            listenersByFilter.forEach((pattern, messageListeners) -> {
                 if (pattern.matcher(topic).matches()) {
-                    listeners.add(topicAndDataListeners);
+                    listeners.add(messageListeners);
                 }
             });
         }
-        var topicAndData = new TopicAndData(topic, message);
-        listeners.forEach((topicAndDataListeners) -> topicAndDataListeners.notify(topicAndData));
+        var publishedMessage = new Message(topic, message, false);
+        listeners.forEach((messageListeners) -> messageListeners.notify(publishedMessage));
         return CompletableFuture.completedFuture(null);
     }
 
@@ -102,12 +93,6 @@ public final class InMemoryMqtt implements Mqtt {
         synchronized (lock) {
             this.connectionStatus = connectionStatus;
             connectionStatusListeners.notify(connectionStatus);
-        }
-    }
-
-    private record TopicAndData(String topic, String data) {
-        public void notify(BiConsumer<String, String> dataCallback) {
-            dataCallback.accept(topic, data);
         }
     }
 }

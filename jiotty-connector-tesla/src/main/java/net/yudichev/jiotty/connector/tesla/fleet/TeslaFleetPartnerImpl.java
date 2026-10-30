@@ -5,10 +5,8 @@ import com.google.common.reflect.TypeToken;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
-import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 import okhttp3.OkHttpClient;
-import okhttp3.Request;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
@@ -30,8 +28,17 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
 import static net.yudichev.jiotty.common.rest.RestClients.callSuppressingResponseBody;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.logResult;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.newAuthorisedRequest;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.startLoggedRequest;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.withVinsRedacted;
 
 public class TeslaFleetPartnerImpl extends BaseLifecycleComponent implements TeslaFleetPartner {
+    @VisibleForTesting
+    static final String PARTNER_ACCOUNTS_PATH = "/partner_accounts";
+    @VisibleForTesting
+    static final String PARTNER_PUBLIC_KEY_PATH = PARTNER_ACCOUNTS_PATH + "/public_key";
+
     private static final Logger logger = LogManager.getLogger(TeslaFleetPartnerImpl.class);
 
     private static final TypeToken<ResponseWrapper<TelemetryDeleteConfigResponse>> DELETE_CONFIG_RESPONSE_TYPE = new TypeToken<>() {};
@@ -57,8 +64,8 @@ public class TeslaFleetPartnerImpl extends BaseLifecycleComponent implements Tes
         this.scope = checkNotNull(scope);
         this.baseUrl = checkNotNull(baseUrl);
         this.sslCustomisation = sslCustomisation.orElse(null);
-        registerPartnerDomainUrl = baseUrl + "/partner_accounts";
-        partnerPublicKeyUrl = baseUrl + "/partner_accounts/public_key";
+        registerPartnerDomainUrl = baseUrl + PARTNER_ACCOUNTS_PATH;
+        partnerPublicKeyUrl = baseUrl + PARTNER_PUBLIC_KEY_PATH;
     }
 
     @Override
@@ -78,7 +85,7 @@ public class TeslaFleetPartnerImpl extends BaseLifecycleComponent implements Tes
                                                                    requestIdGenerator,
                                                                    registerPartnerDomainUrl,
                                                                    partnerToken,
-                                                                   "{\"domain\": \"" + domain + "\"}",
+                                                                   Optional.of("{\"domain\": \"" + domain + "\"}"),
                                                                    new TypeToken<ResponseWrapper<PartnerAccount>>() {})
                                                       .thenApply(TeslaHttp.unwrapOrFail())));
     }
@@ -88,15 +95,10 @@ public class TeslaFleetPartnerImpl extends BaseLifecycleComponent implements Tes
         return whenStartedAndNotLifecycling(() -> acquirePartnerToken()
                 .thenCompose(partnerToken -> {
                     String url = partnerPublicKeyUrl + "?domain=" + URLEncoder.encode(domain, UTF_8);
-                    var request = new Request.Builder()
-                            .url(url)
-                            .header("Authorization", "Bearer " + partnerToken)
-                            .get()
-                            .build();
-                    int requestId = requestIdGenerator.incrementAndGet();
-                    logger.debug("[{}] executing GET {}", requestId, url);
+                    var request = newAuthorisedRequest(url, partnerToken).get().build();
+                    int requestId = startLoggedRequest(logger, requestIdGenerator, "GET", url);
                     return call(httpClient.newCall(request), new TypeToken<ResponseWrapper<PartnerPublicKey>>() {}, 0)
-                            .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
+                            .whenComplete(logResult(logger, requestId))
                             .thenApply(TeslaHttp.unwrapOrFail());
                 }));
     }
@@ -106,16 +108,10 @@ public class TeslaFleetPartnerImpl extends BaseLifecycleComponent implements Tes
         return whenStartedAndNotLifecycling(() -> acquirePartnerToken()
                 .thenCompose(partnerToken -> {
                     String url = TeslaHttp.telemetryConfigUrl(baseUrl, vin);
-                    var request = new Request.Builder()
-                            .url(url)
-                            .header("Authorization", "Bearer " + partnerToken)
-                            .delete()
-                            .build();
-                    StringFormattable loggableUrl = TeslaHttp.withVinsRedacted(url);
-                    int requestId = requestIdGenerator.incrementAndGet();
-                    logger.debug("[{}] executing DELETE {}", requestId, loggableUrl);
-                    return callSuppressingResponseBody(httpClient.newCall(request), DELETE_CONFIG_RESPONSE_TYPE, 0, loggableUrl)
-                            .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
+                    var request = newAuthorisedRequest(url, partnerToken).delete().build();
+                    int requestId = startLoggedRequest(logger, requestIdGenerator, "DELETE", url);
+                    return callSuppressingResponseBody(httpClient.newCall(request), DELETE_CONFIG_RESPONSE_TYPE, 0, withVinsRedacted(url))
+                            .whenComplete(logResult(logger, requestId))
                             .thenApply(TeslaHttp.unwrapOrFail());
                 }));
     }

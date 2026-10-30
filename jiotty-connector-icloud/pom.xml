@@ -88,19 +88,4 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-                <configuration>
-                    <ignoredNonTestScopedDependencies>
-                        <!-- The main code uses okio through okhttp, which brings it in; the tests read request bodies with okio directly -->
-                        <dependency>com.squareup.okio:okio-jvm:*</dependency>
-                    </ignoredNonTestScopedDependencies>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>

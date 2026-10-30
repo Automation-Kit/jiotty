@@ -10,6 +10,7 @@ import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import okio.Buffer;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -77,6 +78,14 @@ public final class OkHttpStubs {
     public static PendingCall takeOnlyPendingCall(List<PendingCall> pendingCalls) {
         assertThat(pendingCalls).as("exactly one call should be in flight").hasSize(1);
         return pendingCalls.removeFirst();
+    }
+
+    /// The body `request` carries, decoded as UTF-8.
+    public static String bodyOf(Request request) {
+        try (var buffer = new Buffer()) {
+            asUnchecked(() -> checkNotNull(request.body()).writeTo(buffer));
+            return buffer.readUtf8();
+        }
     }
 
     /// A JSON response to `request` with the given status and body.

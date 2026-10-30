@@ -93,6 +93,15 @@ public final class RestClients {
         return call(theCall, responseType, retryCount, attemptParsingUnsuccessfulResponse, ResponseBodyLogging.FULL);
     }
 
+    /// [#call(Call, TypeToken, int)] for an endpoint whose URL carries personal data, such as a vehicle identifier in its path, while its responses carry none;
+    /// an unsuccessful response's body still travels in [HttpResponseException].
+    ///
+    /// @param <T>         the type of the call's value
+    /// @param loggableUrl stands in for the URL in every log line and failure message
+    public static <T> CompletableFuture<T> call(Call theCall, TypeToken<? extends T> responseType, int retryCount, StringFormattable loggableUrl) {
+        return call(theCall, responseType, retryCount, false, ResponseBodyLogging.FULL, checkNotNull(loggableUrl));
+    }
+
     /// [#call(Call, Class, int)] for an endpoint whose responses can carry personal data: the body is kept out of the log line, the parse-failure message and
     /// [HttpResponseException], while the status and the body's length still travel.
     ///
@@ -181,7 +190,7 @@ public final class RestClients {
                 String url = loggableUrl == null ? call.request().url().toString() : loggableUrl.toString(128);
                 logger.debug("[{}] Call failed: {} {}, retries left: {}", requestId, call.request().method(), url, retryCount, e);
                 if (retryCount == 0) {
-                    future.completeExceptionally(new RuntimeException("call failed: " + call.request().method() + ' ' + url, e));
+                    future.completeExceptionally(createCallFailure(call, url, e));
                 } else {
                     // attemptParsingUnsuccessfulResponse, responseBodyLogging and loggableUrl are carried into the retry. Dropping one here would silently
                     // restore body or URL logging (or unsuccessful-response parsing) for every attempt after the first, which is precisely when a flaky
@@ -282,6 +291,13 @@ public final class RestClients {
             }
         });
         return future;
+    }
+
+    /// Creates the exception a call that got no response fails with: its message names the request method and `loggableUrl`, and its cause is `cause`.
+    ///
+    /// @param loggableUrl what the message shows for the request URL, which must carry no personal data
+    public static RuntimeException createCallFailure(Call call, String loggableUrl, IOException cause) {
+        return new RuntimeException("call failed: " + call.request().method() + ' ' + checkNotNull(loggableUrl), checkNotNull(cause));
     }
 
     /// Generic page-following fetch for REST endpoints that return `{ "results": [...], "next": "<url>" }`-shaped pages. Issues a GET via `callFactory` for

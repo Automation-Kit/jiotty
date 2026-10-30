@@ -38,7 +38,17 @@ class MqttTeslaTelemetryTest {
     @Test
     void metric_validField_deliveredAsSuccess() {
         mqtt.publish(metricTopic(TBatteryLevel.NAME), "67");
-        assertThat(metricResults).singleElement().isEqualTo(new TelemetryResult.Success<>(new TBatteryLevelValue(67)));
+        assertThat(metricResults).singleElement().isEqualTo(new TelemetryResult.Success<>(new TBatteryLevelValue(67), false));
+    }
+
+    @Test
+    void metric_heldBeforeSubscribing_deliveredAsReplayed() {
+        mqtt.publish(metricTopic(TBatteryLevel.NAME), "67");
+        List<TelemetryResult<TelemetryField>> laterSubscriberResults = new ArrayList<>();
+
+        telemetry.subscribeToMetrics(laterSubscriberResults::add);
+
+        assertThat(laterSubscriberResults).singleElement().isEqualTo(new TelemetryResult.Success<>(new TBatteryLevelValue(67), true));
     }
 
     /// The car's position is the most sensitive thing this connector carries, so its payload gets a case of its own — the PII log guard sees a leak only in a
@@ -47,7 +57,7 @@ class MqttTeslaTelemetryTest {
     void metric_location_deliveredAsSuccess() {
         mqtt.publish(metricTopic(TLocation.NAME), "{\"latitude\":51.501234,\"longitude\":-0.142567}");
 
-        assertThat(metricResults).singleElement().isEqualTo(new TelemetryResult.Success<>(new TLocationValue(new LatLon(51.501234, -0.142567))));
+        assertThat(metricResults).singleElement().isEqualTo(new TelemetryResult.Success<>(new TLocationValue(new LatLon(51.501234, -0.142567)), false));
     }
 
     @Test
@@ -78,12 +88,20 @@ class MqttTeslaTelemetryTest {
 
     @Test
     void connectivity_validEvent_deliveredAsSuccess() {
-        TelemetryConnectivityEvent event = TelemetryConnectivityEvent.builder()
-                                                                     .setCreatedAt(Instant.parse("2020-01-01T00:00:00Z"))
-                                                                     .setStatus(CONNECTED)
-                                                                     .build();
+        TelemetryConnectivityEvent event = createConnectedEvent();
         mqtt.publish(connectivityTopic(), Json.stringify(event));
-        assertThat(connectivityResults).singleElement().isEqualTo(new TelemetryResult.Success<>(event));
+        assertThat(connectivityResults).singleElement().isEqualTo(new TelemetryResult.Success<>(event, false));
+    }
+
+    @Test
+    void connectivity_heldBeforeSubscribing_deliveredAsReplayed() {
+        TelemetryConnectivityEvent event = createConnectedEvent();
+        mqtt.publish(connectivityTopic(), Json.stringify(event));
+        List<TelemetryResult<TelemetryConnectivityEvent>> laterSubscriberResults = new ArrayList<>();
+
+        telemetry.subscribeToConnectivity(laterSubscriberResults::add);
+
+        assertThat(laterSubscriberResults).singleElement().isEqualTo(new TelemetryResult.Success<>(event, true));
     }
 
     @Test
@@ -114,6 +132,10 @@ class MqttTeslaTelemetryTest {
 
     private static String metricTopic(String fieldName) {
         return TOPIC_BASE + '/' + VIN + "/v/" + fieldName;
+    }
+
+    private static TelemetryConnectivityEvent createConnectedEvent() {
+        return TelemetryConnectivityEvent.builder().setCreatedAt(Instant.parse("2020-01-01T00:00:00Z")).setStatus(CONNECTED).build();
     }
 
     private static String connectivityTopic() {

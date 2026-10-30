@@ -101,14 +101,16 @@ final class MqttTeslaTelemetryManualRunner {
             subs = Closeable.forCloseables(
                     teslaTelemetry.subscribeToConnectivity(result -> {
                         switch (result) {
-                            case TelemetryResult.Success<TelemetryConnectivityEvent>(var event) -> log.info("CONNECTIVITY: {}", event);
+                            case TelemetryResult.Success<TelemetryConnectivityEvent>(var event, var replayed) ->
+                                    log.info("CONNECTIVITY{}: {}", replayed ? " (replayed)" : "", event);
                             case TelemetryResult.Error<TelemetryConnectivityEvent>(var message, var cause) ->
                                     log.warn("CONNECTIVITY ERROR: {}", message, cause);
                         }
                     }),
                     teslaTelemetry.subscribeToMetrics(result -> {
                         switch (result) {
-                            case TelemetryResult.Success<TelemetryField>(var field) -> log.info("METRICS: {}={}", field.getClass().getSimpleName(), field);
+                            case TelemetryResult.Success<TelemetryField>(var field, var replayed) ->
+                                    log.info("METRICS{}: {}={}", replayed ? " (replayed)" : "", field.getClass().getSimpleName(), field);
                             case TelemetryResult.Error<TelemetryField>(var message, var cause) -> log.warn("METRICS ERROR: {}", message, cause);
                         }
                     }));

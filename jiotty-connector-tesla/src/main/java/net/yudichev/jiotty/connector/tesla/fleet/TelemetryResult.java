@@ -12,8 +12,10 @@ import static com.google.common.base.Preconditions.checkNotNull;
 public sealed interface TelemetryResult<T> permits TelemetryResult.Success, TelemetryResult.Error {
     /// A message decoded successfully.
     ///
-    /// @param value the decoded payload
-    record Success<T>(T value) implements TelemetryResult<T> {
+    /// @param <T>      the decoded payload type
+    /// @param value    the decoded payload
+    /// @param replayed `true` for a copy of a message the vehicle sent before the subscription took effect
+    record Success<T>(T value, boolean replayed) implements TelemetryResult<T> {
         public Success {
             checkNotNull(value);
         }

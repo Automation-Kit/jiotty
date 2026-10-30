@@ -52,7 +52,9 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
         if (logger.isDebugEnabled()) {
             logger.debug("subscribing to {}", redactedTopic(metricsTopicFilter));
         }
-        return mqtt.subscribe(metricsTopicFilter, 1, (topic, data) -> {
+        return mqtt.subscribeToMessages(metricsTopicFilter, 1, message -> {
+            String topic = message.topic();
+            String data = message.data();
             if (logger.isDebugEnabled()) {
                 // The payload carries the metric's value, and a Location metric's value is where the car is; its size still shows a metric arrived
                 // and how big it was.
@@ -75,24 +77,24 @@ public final class MqttTeslaTelemetry implements TeslaTelemetry {
                 logger.debug("Unsupported field: {}", fieldName);
                 return;
             }
-            listener.accept(new TelemetryResult.Success<>(field));
+            listener.accept(new TelemetryResult.Success<>(field, message.replayed()));
         });
     }
 
     @Override
     public Closeable subscribeToConnectivity(Consumer<? super TelemetryResult<TelemetryConnectivityEvent>> listener) {
-        return mqtt.subscribe(connectivityTopicFilter, 1, (topic, data) -> {
+        return mqtt.subscribeToMessages(connectivityTopicFilter, 1, message -> {
             if (logger.isDebugEnabled()) {
-                logger.debug("received connectivity event: topic={}, data={}", redactedTopic(topic), data);
+                logger.debug("received connectivity event: topic={}, data={}", redactedTopic(message.topic()), message.data());
             }
             TelemetryConnectivityEvent event;
             try {
-                event = Json.parse(data, TelemetryConnectivityEvent.class);
+                event = Json.parse(message.data(), TelemetryConnectivityEvent.class);
             } catch (RuntimeException e) {
                 listener.accept(new TelemetryResult.Error<>("Failed to decode connectivity event for " + redactedVin, e));
                 return;
             }
-            listener.accept(new TelemetryResult.Success<>(event));
+            listener.accept(new TelemetryResult.Success<>(event, message.replayed()));
         });
     }
 

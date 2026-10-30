@@ -13,6 +13,7 @@ public final class HttpStatuses {
     public static final int FORBIDDEN_403 = 403;
     public static final int NOT_FOUND_404 = 404;
     public static final int METHOD_NOT_ALLOWED_405 = 405;
+    public static final int REQUEST_TIMEOUT_408 = 408;
     public static final int CONFLICT_409 = 409;
     public static final int GONE_410 = 410;
     public static final int PAYLOAD_TOO_LARGE_413 = 413;

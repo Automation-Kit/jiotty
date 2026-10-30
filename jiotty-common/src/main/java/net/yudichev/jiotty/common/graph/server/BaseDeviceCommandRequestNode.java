@@ -61,6 +61,7 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
                 // After the request is cleared, so a hook that throws cannot leave it pending and have the next wave send the command again.
                 boolean completed = completeRequest();
                 onSentCommandConfirmed();
+                onRequestSucceeded();
                 return completed;
             } else {
                 if (retryDue) {
@@ -76,7 +77,13 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
                         doExecuteRequest(retryCount);
                     } else if (retryCount > maxRetriesBeforeFatalFailure) {
                         logger.debug("Request fatally failed: {}", request);
-                        boolean shouldKeepRetrying = onCommandFailedFatally(lastFailure, () -> runner.executor().execute(() -> {
+                        DeviceRequest<R> requestToRetry = request;
+                        boolean shouldKeepRetrying = onCommandFailedFatally(lastFailure, () -> runner.executor().execute("retryTrigger", () -> {
+                            // identity: a request completed, forgotten or replaced since the trigger was armed is not this trigger's to retry
+                            if (request != requestToRetry) {
+                                logger.debug("Ignoring the retry trigger for {}, no longer pending", requestToRetry);
+                                return;
+                            }
                             logger.debug("Retry trigger for {} fired", request);
                             retryCount = -1; // mark
                             retryDue = true;
@@ -88,14 +95,16 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
                         } else {
                             var failure = requireNonNullElse(lastFailure,
                                                              "Retry count exceeded: device state did not confirm that the command was successful");
-                            request = request.asFailed(failure);
+                            DeviceRequest<R> failedRequest = request.asFailed(failure);
                             if (panicOnFatalFailure) {
+                                request = failedRequest;
                                 runner.panic(request + " retried " + (retryCount - 1) + " times, last failure: " + failure);
                             } else {
-                                logger.debug("Retry {}/{} of {} failed fatally, but configured not to panic",
-                                             retryCount,
-                                             maxRetriesBeforeFatalFailure,
-                                             request);
+                                logger.info("Giving up on {} after {} retries", failedRequest, retryCount - 1);
+                                // After the request is cleared, so a hook that throws cannot leave it pending, where createRequestIfNotAlreadyInProgress
+                                // would ignore every later request with the same payload.
+                                completeRequest();
+                                onRequestFailedFinally(failedRequest, failure);
                             }
                         }
                     } else {
@@ -111,7 +120,9 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
         } else if (deviceStateValidForRequestToBeSent()) {
             if (deviceStateIndicatesRequestSuccessful(request.payload())) {
                 logger.info("Device already in the requested state: {}", request);
-                return completeRequest();
+                boolean completed = completeRequest();
+                onRequestSucceeded();
+                return completed;
             }
             logger.info("Executing request {}", request);
             request = request.asSent();
@@ -166,9 +177,21 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
     }
 
     /// @param retryTrigger invoke this to request the retry, must be used in combination with returning `true` from this method
-    /// @return `true` to reset the retry counter and keep retrying, otherwise panic (unless configured not to via `panicOnFailure=false`)
+    /// @return `true` to reset the retry counter and keep retrying; `false` to give the request up, panicking when `panicOnFatalFailure` is set and calling
+    ///         [#onRequestFailedFinally] otherwise
     protected boolean onCommandFailedFatally(String lastFailure, Runnable retryTrigger) {
         return false;
+    }
+
+    /// Called once a request is given up without a panic, after it has been cleared, so a request made here or later starts afresh.
+    ///
+    /// @param failedRequest the request given up, marked failed with `failure`
+    /// @param failure       the last failure reported for the request, or a description of the unconfirmed effect when none was reported
+    protected void onRequestFailedFinally(DeviceRequest<R> failedRequest, String failure) {
+    }
+
+    /// Called whenever a request completes because the device reached the requested state, whether a command was sent or the device was there already.
+    protected void onRequestSucceeded() {
     }
 
     /// Called when a command this node **sent** has been confirmed by the device's own state — never when the device was already in the requested state, no

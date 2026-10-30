@@ -12,6 +12,7 @@ import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.net.SslCustomisation;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.security.AuthState;
+import net.yudichev.jiotty.connector.tesla.fleet.TeslaVehicle.CommandResult;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -46,8 +47,14 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
 import static net.yudichev.jiotty.common.net.RejectedCredential.indicatesRejectedCredential;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.REQUEST_TIMEOUT_408;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
+import static net.yudichev.jiotty.common.rest.RestClients.createCallFailure;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.logResult;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.newAuthorisedRequest;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.startLoggedRequest;
+import static net.yudichev.jiotty.connector.tesla.fleet.TeslaHttp.withVinsRedacted;
 
 
 public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet {
@@ -117,17 +124,13 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
     @Override
     public CompletableFuture<List<TeslaVehicleData>> listVehicles() {
         return withValidTokenOrFail(accessToken -> {
-            var request = new Request.Builder()
-                    .url(listVehiclesUrl)
-                    .header("Authorization", "Bearer " + accessToken)
-                    .get()
-                    .build();
+            var request = newAuthorisedRequest(listVehiclesUrl, accessToken).get().build();
 
-            int requestId = startLoggedRequest("GET", listVehiclesUrl);
+            int requestId = startLoggedRequest(logger, requestIdGenerator, "GET", listVehiclesUrl);
             // https://developer.tesla.com/docs/fleet-api/endpoints/vehicle-endpoints#list
             // Ignoring pagination
             return call(httpClient.newCall(request), LIST_VEHICLES_RESPONSE_TYPE, 0)
-                    .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
+                    .whenComplete(logResult(logger, requestId))
                     .thenApply(listResponseWrapper -> listResponseWrapper.response()
                                                                          .orElseThrow(() -> new IllegalStateException(
                                                                                  "No 'response' attribute in response")));
@@ -171,21 +174,18 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
 
     private <T> CompletableFuture<Optional<T>> executeGetForData(String url, TypeToken<ResponseWrapper<T>> responseType) {
         return withValidTokenOrFail(accessToken -> {
-            var request = new Request.Builder().url(url)
-                                               .header("Authorization", "Bearer " + accessToken)
-                                               .get()
-                                               .build();
-            int requestId = startLoggedRequest("GET", url);
+            var request = newAuthorisedRequest(url, accessToken).get().build();
+            int requestId = startLoggedRequest(logger, requestIdGenerator, "GET", url);
             return callAndAllow408(requestId, httpClient.newCall(request), responseType)
-                    .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
+                    .whenComplete(logResult(logger, requestId))
                     .thenApply(wrapperOptional -> wrapperOptional.map(TeslaHttp.unwrapOrFail()));
         });
     }
 
     private <T> CompletableFuture<T> executeGet(String url, TypeToken<ResponseWrapper<T>> responseType) {
         return withValidTokenOrFail(accessToken -> {
-            var request = new Request.Builder().url(url).header("Authorization", "Bearer " + accessToken).get().build();
-            return call(httpClient.newCall(request), responseType, 0).thenApply(TeslaHttp.unwrapOrFail());
+            var request = newAuthorisedRequest(url, accessToken).get().build();
+            return TeslaHttp.callRedactingVins(httpClient.newCall(request), responseType).thenApply(TeslaHttp.unwrapOrFail());
         });
     }
 
@@ -193,11 +193,12 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
         CompletableFuture<Optional<T>> future = new CompletableFuture<>();
         theCall.enqueue(new Callback() {
 
-            private static final int RESPONSE_CODE_OFFLINE = 408;
+            private static final int RESPONSE_CODE_OFFLINE = REQUEST_TIMEOUT_408;
 
             @Override
             public void onFailure(Call call, IOException e) {
-                future.completeExceptionally(new RuntimeException("call failed: " + call.request(), e));
+                String url = call.request().url().toString();
+                future.completeExceptionally(createCallFailure(call, withVinsRedacted(url).toString(url.length()), e));
             }
 
             @Override
@@ -230,44 +231,37 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
         return future;
     }
 
-    private CompletableFuture<Optional<String>> postCommand(String url, @Nullable String jsonBody) {
+    /// @param jsonBody the command's JSON payload, or `null` to post an empty body
+    private CompletableFuture<CommandResult> postCommand(String url, @Nullable String jsonBody) {
         return executePost(url, jsonBody, CMD_RESPONSE_TYPE)
                 .thenApply(responseWrapper ->
                                    responseWrapper.responseOrError().map(
-                                           response -> {
-                                               if (response.result()) {
-                                                   return Optional.empty();
-                                               } else {
-                                                   throw new RuntimeException(response.reason().orElse("unknown reason"));
-                                               }
-                                           },
-                                           Optional::of));
+                                           response -> response.result() ? CommandResult.accepted()
+                                                                         : new CommandResult.Refused(response.reason().orElse("unknown reason")),
+                                           CommandResult.Unavailable::new));
     }
 
+    /// @param <T>      the type of the envelope's response
+    /// @param jsonBody the request's JSON payload, or `null` to post an empty body
     private <T> CompletableFuture<ResponseWrapper<T>> executePost(String url,
                                                                   @Nullable String jsonBody,
                                                                   TypeToken<ResponseWrapper<T>> responseType) {
-        return withValidTokenOrFail(accessToken -> TeslaHttp.executePost(httpClient, requestIdGenerator, url, accessToken, jsonBody, responseType));
+        return withValidTokenOrFail(accessToken -> TeslaHttp.executePost(httpClient,
+                                                                         requestIdGenerator,
+                                                                         url,
+                                                                         accessToken,
+                                                                         Optional.ofNullable(jsonBody),
+                                                                         responseType));
     }
 
     private <T> CompletableFuture<T> executeDelete(String url, TypeToken<ResponseWrapper<T>> responseType) {
         return withValidTokenOrFail(accessToken -> {
-            Request request = new Request.Builder().url(url)
-                                                   .header("Authorization", "Bearer " + accessToken)
-                                                   .delete()
-                                                   .build();
-            int requestId = startLoggedRequest("DELETE", url);
-            return call(httpClient.newCall(request), responseType, 0, true)
-                    .whenComplete((resp, throwable) -> logger.debug("[{}] result {}", requestId, resp, throwable))
-                    .thenApply(TeslaHttp.unwrapOrFail());
+            Request request = newAuthorisedRequest(url, accessToken).delete().build();
+            int requestId = startLoggedRequest(logger, requestIdGenerator, "DELETE", url);
+            return TeslaHttp.callParsingErrorEnvelope(httpClient.newCall(request), responseType)
+                            .whenComplete(logResult(logger, requestId))
+                            .thenApply(TeslaHttp.unwrapOrFail());
         });
-    }
-
-    /// @return the id the request's later log lines carry
-    private int startLoggedRequest(String method, String url) {
-        int requestId = requestIdGenerator.incrementAndGet();
-        logger.debug("[{}] executing {} {}", requestId, method, url);
-        return requestId;
     }
 
     @BindingAnnotation
@@ -335,32 +329,33 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
         @Override
         public CompletableFuture<Void> wakeUp() {
             return executePost(wakeUpUrl, null, new TypeToken<ResponseWrapper<WakeUpResult>>() {})
-                    .thenApply(ignored -> null);
+                    .thenApply(TeslaHttp.unwrapOrFail())
+                    .thenApply(_ -> null);
         }
 
         @Override
-        public CompletableFuture<Optional<String>> setChargeLimit(int limitPercent) {
+        public CompletableFuture<CommandResult> setChargeLimit(int limitPercent) {
             String json = "{\"percent\":" + limitPercent + "}";
             return postCommand(setChargeLimitUrl, json);
         }
 
         @Override
-        public CompletableFuture<Optional<String>> startCharge() {
+        public CompletableFuture<CommandResult> startCharge() {
             return postCommand(chargeStartUrl, null);
         }
 
         @Override
-        public CompletableFuture<Optional<String>> stopCharge() {
+        public CompletableFuture<CommandResult> stopCharge() {
             return postCommand(chargeStopUrl, null);
         }
 
         @Override
-        public CompletableFuture<Optional<String>> startAutoConditioning() {
+        public CompletableFuture<CommandResult> startAutoConditioning() {
             return postCommand(autoConditioningStartUrl, null);
         }
 
         @Override
-        public CompletableFuture<Optional<String>> stopAutoConditioning() {
+        public CompletableFuture<CommandResult> stopAutoConditioning() {
             return postCommand(autoConditioningStopUrl, null);
         }
 

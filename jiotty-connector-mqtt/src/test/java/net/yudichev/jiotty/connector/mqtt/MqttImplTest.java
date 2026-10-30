@@ -2,16 +2,20 @@ package net.yudichev.jiotty.connector.mqtt;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
+import net.yudichev.jiotty.connector.mqtt.Mqtt.Message;
 import org.eclipse.paho.client.mqttv3.IMqttActionListener;
 import org.eclipse.paho.client.mqttv3.IMqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.IMqttMessageListener;
 import org.eclipse.paho.client.mqttv3.IMqttToken;
 import org.eclipse.paho.client.mqttv3.MqttCallbackExtended;
 import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
@@ -23,6 +27,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.IntStream;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff.DEFAULT_MAX_ELAPSED_TIME_MILLIS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.eclipse.paho.client.mqttv3.MqttConnectOptions.MAX_INFLIGHT_DEFAULT;
@@ -35,8 +40,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/// Unit tests for [MqttImpl]'s re-subscription retries after a reconnect and its window of unacknowledged sends, driven by a [ProgrammableClock] against a
-/// client double. [MqttImplIntegrationTest] covers the broker-facing behaviour.
+/// Unit tests for [MqttImpl]'s re-subscription retries after a reconnect, its window of unacknowledged sends and how it marks replayed messages, driven by a
+/// [ProgrammableClock] against a client double. [MqttImplIntegrationTest] covers the broker-facing behaviour.
 @ExtendWith(MockitoExtension.class)
 class MqttImplTest {
     /// Covers the re-subscription backoff's limit plus its longest randomised retry interval.
@@ -186,6 +191,42 @@ class MqttImplTest {
         assertThat(sends.getFirst()).failsWithin(Duration.ZERO);
         assertThat(acknowledgements).hasSize(MAX_INFLIGHT_DEFAULT + 1);
         assertThat(sends.getLast()).isNotDone();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void aBrokerMessageIsReplayedExactlyWhenRetained(boolean retained, @Captor ArgumentCaptor<IMqttMessageListener> messageListenerCaptor) throws Exception {
+        List<Message> receivedMessages = new ArrayList<>();
+        IMqttMessageListener brokerListener = subscribeRecording("home/door", receivedMessages, messageListenerCaptor);
+
+        var brokerMessage = new MqttMessage("open".getBytes(UTF_8));
+        brokerMessage.setRetained(retained);
+        brokerListener.messageArrived("home/door", brokerMessage);
+        clock.tick();
+
+        assertThat(receivedMessages).containsExactly(new Message("home/door", "open", retained));
+    }
+
+    @Test
+    void theLastMessageGivenToALaterSubscriberIsReplayed(@Captor ArgumentCaptor<IMqttMessageListener> messageListenerCaptor) throws Exception {
+        IMqttMessageListener brokerListener = subscribeRecording("home/door", new ArrayList<>(), messageListenerCaptor);
+        brokerListener.messageArrived("home/door", new MqttMessage("open".getBytes(UTF_8)));
+        clock.tick();
+
+        List<Message> laterSubscriberMessages = new ArrayList<>();
+        mqtt.subscribeToMessages("home/door", 1, laterSubscriberMessages::add);
+        clock.tick();
+
+        assertThat(laterSubscriberMessages).containsExactly(new Message("home/door", "open", true));
+    }
+
+    private IMqttMessageListener subscribeRecording(String topicFilter,
+                                                    List<Message> receivedMessages,
+                                                    ArgumentCaptor<IMqttMessageListener> messageListenerCaptor) throws MqttException {
+        mqtt.subscribeToMessages(topicFilter, 1, receivedMessages::add);
+        clock.tick();
+        verify(client).subscribe(eq(topicFilter), anyInt(), messageListenerCaptor.capture());
+        return messageListenerCaptor.getValue();
     }
 
     private List<IMqttActionListener> recordPublishes() throws MqttException {

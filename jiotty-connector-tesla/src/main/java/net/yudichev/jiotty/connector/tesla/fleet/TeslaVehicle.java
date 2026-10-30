@@ -4,18 +4,20 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 public interface TeslaVehicle {
     CompletableFuture<Void> wakeUp();
 
-    CompletableFuture<Optional<String>> setChargeLimit(int limitPercent);
+    CompletableFuture<CommandResult> setChargeLimit(int limitPercent);
 
-    CompletableFuture<Optional<String>> startCharge();
+    CompletableFuture<CommandResult> startCharge();
 
-    CompletableFuture<Optional<String>> stopCharge();
+    CompletableFuture<CommandResult> stopCharge();
 
-    CompletableFuture<Optional<String>> startAutoConditioning();
+    CompletableFuture<CommandResult> startAutoConditioning();
 
-    CompletableFuture<Optional<String>> stopAutoConditioning();
+    CompletableFuture<CommandResult> stopAutoConditioning();
 
     CompletableFuture<TelemetryGetConfigResponse> telemetryGetConfig();
 
@@ -29,6 +31,44 @@ public interface TeslaVehicle {
     CompletableFuture<Optional<VehicleData>> getData(Set<Endpoint> endpoints);
 
     String vin();
+
+    /// Tesla's answer to a vehicle command.
+    sealed interface CommandResult permits CommandResult.Accepted, CommandResult.Refused, CommandResult.Unavailable {
+        static CommandResult accepted() {
+            return Accepted.INSTANCE;
+        }
+
+        final class Accepted implements CommandResult {
+            static final Accepted INSTANCE = new Accepted();
+
+            private Accepted() {
+            }
+
+            @Override
+            public String toString() {
+                return "accepted";
+            }
+        }
+
+        /// A command the vehicle declined.
+        ///
+        /// @param reason Tesla's reason as it sends it, which can prefix its code, as in `car could not execute command: disconnected`; `unknown reason`
+        ///               when Tesla gives none
+        record Refused(String reason) implements CommandResult {
+            public Refused {
+                checkNotNull(reason);
+            }
+        }
+
+        /// A command that did not reach the vehicle.
+        ///
+        /// @param error Tesla's description of why, such as `vehicle unavailable: vehicle is offline or asleep`
+        record Unavailable(String error) implements CommandResult {
+            public Unavailable {
+                checkNotNull(error);
+            }
+        }
+    }
 
     enum Endpoint {
         CHARGE_STATE("charge_state"),
