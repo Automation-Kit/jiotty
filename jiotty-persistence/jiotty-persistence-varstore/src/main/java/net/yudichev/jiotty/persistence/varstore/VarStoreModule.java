@@ -67,10 +67,10 @@ public final class VarStoreModule extends BaseExposedKeyModule<VarStore> {
                           "withKeyStoreAccess is required when withEncryptionKeyAlias is set");
             // Annotated so the nested module's exposed key differs from the optional binding's own key, which would otherwise point at itself.
             ExposedKeyModule<EnvelopeEncryption> encryptionModule = EnvelopeEncryptionModule.builder()
-                                                                                           .setMasterKeyAlias(encryptionKeyAliasSpec)
-                                                                                           .setKeyStoreAccess(keyStoreAccessSpec)
-                                                                                           .withAnnotation(forAnnotation(Dependency.class))
-                                                                                           .build();
+                                                                                            .setMasterKeyAlias(encryptionKeyAliasSpec)
+                                                                                            .setKeyStoreAccess(keyStoreAccessSpec)
+                                                                                            .withAnnotation(forAnnotation(Dependency.class))
+                                                                                            .build();
             installLifecycleComponentModule(encryptionModule);
             encryptionOptionalBinder.setBinding().to(encryptionModule.getExposedKey());
         }

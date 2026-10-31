@@ -23,9 +23,9 @@ class EnvelopeEncryptionModuleTest {
     @Test
     void exposesEnvelopeEncryption() {
         var injector = Guice.createInjector(EnvelopeEncryptionModule.builder()
-                                                                   .setMasterKeyAlias(literally("master-key-alias"))
-                                                                   .setKeyStoreAccess(literally(keyStoreAccess))
-                                                                   .build());
+                                                                    .setMasterKeyAlias(literally("master-key-alias"))
+                                                                    .setKeyStoreAccess(literally(keyStoreAccess))
+                                                                    .build());
 
         assertThat(injector.getBinding(EnvelopeEncryption.class)).isNotNull();
         assertThat(injector.findBindingsByType(new TypeLiteral<LifecycleComponent>() {}))
@@ -37,10 +37,10 @@ class EnvelopeEncryptionModuleTest {
     @Test
     void annotatedInstallationsCoexist() {
         var injector = Guice.createInjector(EnvelopeEncryptionModule.builder()
-                                                                   .setMasterKeyAlias(literally("alias-one"))
-                                                                   .setKeyStoreAccess(literally(keyStoreAccess))
-                                                                   .withAnnotation(forAnnotation(Names.named("one")))
-                                                                   .build(),
+                                                                    .setMasterKeyAlias(literally("alias-one"))
+                                                                    .setKeyStoreAccess(literally(keyStoreAccess))
+                                                                    .withAnnotation(forAnnotation(Names.named("one")))
+                                                                    .build(),
                                             EnvelopeEncryptionModule.builder()
                                                                     .setMasterKeyAlias(literally("alias-two"))
                                                                     .setKeyStoreAccess(literally(keyStoreAccess))
