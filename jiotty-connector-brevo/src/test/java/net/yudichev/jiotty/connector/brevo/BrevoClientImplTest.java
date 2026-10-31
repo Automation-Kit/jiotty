@@ -12,6 +12,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -21,9 +23,14 @@ import java.util.List;
 
 import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_REQUEST_400;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.CREATED_201;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.SERVICE_UNAVAILABLE_503;
+import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.stubCalls;
+import static net.yudichev.jiotty.connector.brevo.BrevoClient.AccessCheckResult.ACCEPTED;
+import static net.yudichev.jiotty.connector.brevo.BrevoClient.AccessCheckResult.KEY_REJECTED;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @ExtendWith(MockitoExtension.class)
@@ -32,6 +39,10 @@ class BrevoClientImplTest {
     private static final String API_KEY = "test-api-key";
     private static final String SUCCESS_BODY = """
                                                {"messageId": "<202608281200.1234567890@smtp-relay.mailin.fr>"}""";
+    private static final String AGGREGATED_REPORT_BODY = """
+                                                         {"range":"2026-10-31|2026-10-31","requests":3,"delivered":3,"hardBounces":0,"softBounces":0,\
+                                                         "clicks":0,"uniqueClicks":0,"opens":1,"uniqueOpens":1,"spamReports":0,"blocked":0,"invalid":0,\
+                                                         "unsubscribed":0}""";
 
     private final RecordingUpstreamHealthHandler healthHandler = new RecordingUpstreamHealthHandler();
     private final RecordingRetryableOperationExecutor retryExecutor = new RecordingRetryableOperationExecutor();
@@ -68,9 +79,66 @@ class BrevoClientImplTest {
 
         assertThat(issuedRequests).singleElement().satisfies(issued -> {
             assertThat(issued.method()).isEqualTo("POST");
-            assertThat(issued.url().toString()).isEqualTo(BASE_URL + "/v3/smtp/email");
-            assertThat(issued.header("api-key")).isEqualTo(API_KEY);
+            assertThat(issued.url().toString()).isEqualTo(BASE_URL + BrevoClientImpl.SEND_EMAIL_PATH);
+            assertThat(issued.header(BrevoClientImpl.API_KEY_HEADER)).isEqualTo(API_KEY);
         });
+    }
+
+    @Test
+    void checkAccess_buildsAGetOfOneDaysStatisticsWithTheApiKeyHeader() {
+        createClient(healthHandler).checkAccess();
+
+        assertThat(issuedRequests).singleElement().satisfies(issued -> {
+            assertThat(issued.method()).isEqualTo("GET");
+            assertThat(issued.url().toString()).isEqualTo(BASE_URL + BrevoClientImpl.AGGREGATED_REPORT_PATH);
+            assertThat(issued.header(BrevoClientImpl.API_KEY_HEADER)).isEqualTo(API_KEY);
+            assertThat(issued.body()).isNull();
+        });
+        assertThat(retryExecutor.operationNames()).containsExactly(BrevoClientImpl.CHECK_ACCESS_OPERATION);
+    }
+
+    /// An accepted key is upstream health, so it clears an outage a failed send reported.
+    @Test
+    void checkAccess_acceptsTheKeyAndReportsHealthOnSuccess() {
+        stubbedStatus = OK_200;
+        stubbedBody = AGGREGATED_REPORT_BODY;
+
+        assertThat(createClient(healthHandler).checkAccess()).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(ACCEPTED);
+        assertThat(healthHandler.successCount()).isEqualTo(1);
+    }
+
+    /// The status decides the outcome, so a body of a shape the report never had is an accepted key, not a failure to retry.
+    @Test
+    void checkAccess_acceptsTheKeyWhateverTheBody() {
+        stubbedStatus = OK_200;
+        stubbedBody = "<html>maintenance</html>";
+
+        assertThat(createClient(healthHandler).checkAccess()).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(ACCEPTED);
+        assertThat(healthHandler.failures()).isEmpty();
+    }
+
+    /// A deactivated or IP-blocked key answers 401, and a key without the transactional email permission answers 403.
+    @ParameterizedTest
+    @ValueSource(ints = {UNAUTHORIZED_401, FORBIDDEN_403})
+    void checkAccess_reportsARejectedKey(int status) {
+        stubbedStatus = status;
+        stubbedBody = """
+                      {"code":"unauthorized","message":"Key not found"}""";
+
+        assertThat(createClient(healthHandler).checkAccess()).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(KEY_REJECTED);
+        assertThat(healthHandler.failures()).isEmpty();
+    }
+
+    @Test
+    void checkAccess_serverError_failsAndReportsUpstreamFailure() {
+        stubbedStatus = SERVICE_UNAVAILABLE_503;
+
+        assertThat(createClient(healthHandler).checkAccess())
+                .failsWithin(Duration.ofSeconds(5))
+                .withThrowableThat()
+                .havingCause()
+                .isInstanceOfSatisfying(HttpResponseException.class, cause -> assertThat(cause.statusCode()).isEqualTo(SERVICE_UNAVAILABLE_503));
+        assertThat(healthHandler.failures()).hasSize(1);
     }
 
     /// Brevo's payload nests the sender and wraps recipients in an array; getting either shape wrong is accepted by nothing and rejected by Brevo.
@@ -139,7 +207,7 @@ class BrevoClientImplTest {
     void routesEveryCallThroughTheRetryExecutor() {
         createClient(healthHandler).sendEmail(email());
 
-        assertThat(retryExecutor.operationNames()).containsExactly("brevo.smtp.email");
+        assertThat(retryExecutor.operationNames()).containsExactly(BrevoClientImpl.SEND_EMAIL_OPERATION);
     }
 
     @Test
