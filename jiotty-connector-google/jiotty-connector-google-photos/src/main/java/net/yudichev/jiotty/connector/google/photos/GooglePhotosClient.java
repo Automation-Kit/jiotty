@@ -17,8 +17,8 @@ public interface GooglePhotosClient {
         return uploadMediaData(file, ForkJoinPool.commonPool());
     }
 
+    // it's quite useful in this case
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-        // it's quite useful in this case
     CompletableFuture<List<MediaItemOrError>> createMediaItems(Optional<String> albumId,
                                                                List<NewMediaItem> newMediaItems,
                                                                Executor executor);
@@ -75,7 +75,7 @@ public interface GooglePhotosClient {
     CompletableFuture<List<GooglePhotosAlbum>> listAlbums(IntConsumer loadedAlbumCountProgressCallback, Executor executor);
 
     default CompletableFuture<List<GooglePhotosAlbum>> listAlbums(Executor executor) {
-        return listAlbums(value -> {}, executor);
+        return listAlbums(ignored -> {}, executor);
     }
 
     default CompletableFuture<List<GooglePhotosAlbum>> listAlbums() {

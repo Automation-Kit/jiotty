@@ -151,8 +151,8 @@ public class PrivateKeyReader {
  *
  * @author zhang
  */
+// Amazon sources not matching our style
 @SuppressWarnings("ALL")
-        // Amazon sources not matching our style
 class DerParser {
 
     // Constructed Flag
@@ -263,8 +263,8 @@ class DerParser {
  *
  * @author zhang
  */
+// Amazon sources not matching our style
 @SuppressWarnings("ALL")
-        // Amazaon sources not matching our style
 class Asn1Object {
 
     private final int type;

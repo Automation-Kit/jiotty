@@ -52,15 +52,15 @@ public final class MoreThrowables {
 
     @FunctionalInterface
     public interface CheckedExceptionThrowingRunnable {
+        // by design
         @SuppressWarnings("ProhibitedExceptionDeclared")
-            // by design
         void run() throws Exception;
     }
 
     @FunctionalInterface
     public interface CheckedExceptionThrowingSupplier<T> {
+        // by design
         @SuppressWarnings("ProhibitedExceptionDeclared")
-            // by design
         T get() throws Exception;
     }
 }
