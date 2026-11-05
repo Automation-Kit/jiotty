@@ -66,7 +66,7 @@ public abstract class BaseDeviceCommandRequestNode<R> extends BaseServerNode imp
             } else {
                 if (retryDue) {
                     // a retry the device cannot accept yet stays due, so the state change that makes it sendable re-waves this node; consuming it here would
-                    // strand the request, because the schedule that raised it has already fired and nothing else ever raises it again
+                    // strand the request, because the schedule that raised it has already fired and no other code path raises it again
                     if (retryCount >= 0 && retryCount < maxRetriesBeforeFatalFailure && !deviceStateValidForRequestToBeSent()) {
                         logger.debug("Awaiting valid device state before retrying the request");
                         return false;

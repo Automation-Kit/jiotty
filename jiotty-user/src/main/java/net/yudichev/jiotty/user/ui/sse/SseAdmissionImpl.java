@@ -52,7 +52,7 @@ public final class SseAdmissionImpl implements SseAdmission {
         atCapacityCounter = meterRegistry.counter(REJECTED_COUNTER, TAG_GUARD, GUARD, TAG_OUTCOME, OUTCOME_AT_CAPACITY);
         channelFullCounter = meterRegistry.counter(REJECTED_COUNTER, TAG_GUARD, GUARD, TAG_OUTCOME, OUTCOME_USER_AT_CAPACITY);
         droppedCounter = meterRegistry.counter(DROPPED_COUNTER);
-        // Both take the supplier form: the value-and-function form holds its subject weakly, and a boxed limit that nothing else retains is collectable —
+        // Both take the supplier form: the value-and-function form holds its subject weakly, and a boxed limit with no other strong reference is collectable —
         // the gauge then reports NaN and the ratio alert stops evaluating.
         Gauge.builder(ACTIVE_CLIENTS_GAUGE, activeStreams::get).register(meterRegistry);
         Gauge.builder(ACTIVE_CLIENTS_LIMIT_GAUGE, () -> maxStreams).register(meterRegistry);

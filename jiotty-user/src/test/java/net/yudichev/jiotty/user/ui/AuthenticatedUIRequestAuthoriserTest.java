@@ -252,7 +252,7 @@ class AuthenticatedUIRequestAuthoriserTest {
         assertThat(control.tryAdmit(laterRequest)).as("the slot returns even though the error was left to propagate").isEqualTo(ADMITTED);
     }
 
-    /// The request has gone async before its token state is asked for, so a failure to ask is answered here: nothing else would ever answer it.
+    /// The request has gone async before its token state is asked for, so a failure to ask is answered here: no other code path would ever answer it.
     @Test
     void answersARequestWhoseTokenStateCannotBeAskedFor(@Mock HttpServletRequest laterRequest) throws Exception {
         PreAuthAdmissionControl control = admissionControlWith(1000.0, 1);

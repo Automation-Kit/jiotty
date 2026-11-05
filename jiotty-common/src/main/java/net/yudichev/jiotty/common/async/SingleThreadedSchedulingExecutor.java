@@ -190,7 +190,7 @@ public final class SingleThreadedSchedulingExecutor extends BaseIdempotentClosea
         var handle = new ScheduledHandle();
         scheduleHandles.add(handle);
         try {
-            // The fired task releases its own handle, which nothing else would once the schedule has run.
+            // The fired task releases its own handle: once the schedule has run, no other code path removes it from scheduleHandles.
             handle.setFuture(executor.schedule(guard("scheduled task", () -> {
                 scheduleHandles.remove(handle);
                 command.run();

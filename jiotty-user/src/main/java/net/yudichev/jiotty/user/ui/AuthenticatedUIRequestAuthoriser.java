@@ -154,7 +154,7 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
                 }
             }));
         } catch (RuntimeException e) {
-            // Thrown before any token state could arrive: the request has gone async, so nothing else would ever answer it.
+            // Thrown before any token state could arrive: the request has gone async, so no other code path would ever answer it.
             failAuthorisation(exchange, e);
             permit.release();
         }

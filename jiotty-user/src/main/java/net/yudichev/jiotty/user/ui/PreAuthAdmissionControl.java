@@ -59,7 +59,7 @@ final class PreAuthAdmissionControl {
         rateLimitedCounter = createRejectedCounter(meterRegistry, GuardMetrics.OUTCOME_RATE_LIMITED);
         verifySaturatedCounter = createRejectedCounter(meterRegistry, GuardMetrics.OUTCOME_VERIFY_SATURATED);
         // Occupancy alongside its limit, so saturation reads as a ratio at any level. Both take the supplier form: the value-and-function form holds its
-        // subject weakly, and a boxed limit that nothing else retains is collectable — the gauge then reports NaN and the ratio alert stops evaluating.
+        // subject weakly, and a boxed limit with no other strong reference is collectable — the gauge then reports NaN and the ratio alert stops evaluating.
         Gauge.builder(INFLIGHT_GAUGE, () -> maxInFlightVerifications - inFlightVerifications.availablePermits()).register(meterRegistry);
         Gauge.builder(INFLIGHT_LIMIT_GAUGE, () -> maxInFlightVerifications).register(meterRegistry);
     }
