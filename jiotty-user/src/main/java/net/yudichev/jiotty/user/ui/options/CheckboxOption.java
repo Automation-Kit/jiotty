@@ -28,6 +28,6 @@ public abstract class CheckboxOption extends BaseOption<Boolean> {
 
     @Override
     public OptionDto toDtoUnsafe() {
-        return new StandardOptionDtos.Checkbox("checkbox", meta().key(), meta().label(), meta().tabName(), getFormOrder(), isSet());
+        return new StandardOptionDtos.Checkbox("checkbox", meta().key(), meta().label(), meta().tabName(), getFormOrder(), meta().tags(), isSet());
     }
 }

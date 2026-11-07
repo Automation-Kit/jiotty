@@ -38,6 +38,7 @@ public abstract class TimeOption extends BaseOption<LocalTime> {
                                            meta().label(),
                                            meta().tabName(),
                                            getFormOrder(),
+                                           meta().tags(),
                                            getValue().map(LocalTime::toString).orElse(null));
     }
 }

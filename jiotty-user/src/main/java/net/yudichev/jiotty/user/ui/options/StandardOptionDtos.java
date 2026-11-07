@@ -8,20 +8,28 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static net.yudichev.jiotty.common.security.LogRedaction.appendRedacted;
 
 /// These DTOs are rendered for logging via [Object#toString()] / [StringFormattable#formatTo(Appendable)] with only their PII-bearing values redacted: the
 /// values a user typed or picked that can carry personal data — [Text]/[TextArea]/[Time] `value`, the [Location] coordinate, the [Select] `options` and
 /// `value` (a select's choices can be populated from user data), and the [MultiSelect] calendar/driver ids and names. Only the structural fields every
-/// option carries (`type`, `key`, `label`, `tabName`, `order`), the app-defined [Duration] hint fields (`placeholder`, `help`, `valueHuman`) and the
+/// option carries (`type`, `key`, `label`, `tabName`, `order`, `tags`), the app-defined [Duration] hint fields (`placeholder`, `help`, `valueHuman`) and the
 /// [MultiSelect] `allOptionsComplete` flag are fixed, non-identifying values logged verbatim. The real values are always carried by the record components
 /// themselves.
 public final class StandardOptionDtos {
     private StandardOptionDtos() {
     }
 
-    private static void appendCommon(Appendable appendable, String recordName, String type, String key, String label, String tabName, int order) {
+    private static void appendCommon(Appendable appendable,
+                                     String recordName,
+                                     String type,
+                                     String key,
+                                     String label,
+                                     String tabName,
+                                     int order,
+                                     Set<String> tags) {
         Append.to(appendable, recordName);
         Append.to(appendable, "[type=");
         Append.to(appendable, type);
@@ -33,72 +41,11 @@ public final class StandardOptionDtos {
         Append.to(appendable, tabName);
         Append.to(appendable, ", order=");
         Append.to(appendable, order);
+        Append.to(appendable, ", tags=");
+        Append.to(appendable, tags);
     }
 
-    public record Text(String type, String key, String label, String tabName, int order, String value) implements OptionDto, StringFormattable {
-        @Override
-        public String toString() {
-            return toString(96);
-        }
-
-        @Override
-        public void formatTo(Appendable appendable) {
-            appendCommon(appendable, "Text", type, key, label, tabName, order);
-            Append.to(appendable, ", value=");
-            appendRedacted(appendable, value);
-            Append.to(appendable, ']');
-        }
-    }
-
-    public record TextArea(String type, String key, String label, String tabName, int order, int rows, String value)
-            implements OptionDto, StringFormattable {
-        @Override
-        public String toString() {
-            return toString(96);
-        }
-
-        @Override
-        public void formatTo(Appendable appendable) {
-            appendCommon(appendable, "TextArea", type, key, label, tabName, order);
-            Append.to(appendable, ", rows=");
-            Append.to(appendable, rows);
-            Append.to(appendable, ", value=");
-            appendRedacted(appendable, value);
-            Append.to(appendable, ']');
-        }
-    }
-
-    public record Checkbox(String type, String key, String label, String tabName, int order, boolean checked) implements OptionDto, StringFormattable {
-        @Override
-        public String toString() {
-            return toString(96);
-        }
-
-        @Override
-        public void formatTo(Appendable appendable) {
-            appendCommon(appendable, "Checkbox", type, key, label, tabName, order);
-            Append.to(appendable, ", checked=");
-            Append.to(appendable, checked);
-            Append.to(appendable, ']');
-        }
-    }
-
-    public record Time(String type, String key, String label, String tabName, int order, String value) implements OptionDto, StringFormattable {
-        @Override
-        public String toString() {
-            return toString(96);
-        }
-
-        @Override
-        public void formatTo(Appendable appendable) {
-            appendCommon(appendable, "Time", type, key, label, tabName, order);
-            Append.to(appendable, ", value=");
-            appendRedacted(appendable, value);
-            Append.to(appendable, ']');
-        }
-    }
-
-    public record Duration(String type, String key, String label, String tabName, int order, String placeholder, String help, String valueHuman)
+    public record Text(String type, String key, String label, String tabName, int order, Set<String> tags, String value)
             implements OptionDto, StringFormattable {
         @Override
         public String toString() {
@@ -107,7 +54,81 @@ public final class StandardOptionDtos {
 
         @Override
         public void formatTo(Appendable appendable) {
-            appendCommon(appendable, "Duration", type, key, label, tabName, order);
+            appendCommon(appendable, "Text", type, key, label, tabName, order, tags);
+            Append.to(appendable, ", value=");
+            appendRedacted(appendable, value);
+            Append.to(appendable, ']');
+        }
+    }
+
+    public record TextArea(String type, String key, String label, String tabName, int order, Set<String> tags, int rows, String value)
+            implements OptionDto, StringFormattable {
+        @Override
+        public String toString() {
+            return toString(128);
+        }
+
+        @Override
+        public void formatTo(Appendable appendable) {
+            appendCommon(appendable, "TextArea", type, key, label, tabName, order, tags);
+            Append.to(appendable, ", rows=");
+            Append.to(appendable, rows);
+            Append.to(appendable, ", value=");
+            appendRedacted(appendable, value);
+            Append.to(appendable, ']');
+        }
+    }
+
+    public record Checkbox(String type, String key, String label, String tabName, int order, Set<String> tags, boolean checked)
+            implements OptionDto, StringFormattable {
+        @Override
+        public String toString() {
+            return toString(128);
+        }
+
+        @Override
+        public void formatTo(Appendable appendable) {
+            appendCommon(appendable, "Checkbox", type, key, label, tabName, order, tags);
+            Append.to(appendable, ", checked=");
+            Append.to(appendable, checked);
+            Append.to(appendable, ']');
+        }
+    }
+
+    public record Time(String type, String key, String label, String tabName, int order, Set<String> tags, String value)
+            implements OptionDto, StringFormattable {
+        @Override
+        public String toString() {
+            return toString(128);
+        }
+
+        @Override
+        public void formatTo(Appendable appendable) {
+            appendCommon(appendable, "Time", type, key, label, tabName, order, tags);
+            Append.to(appendable, ", value=");
+            appendRedacted(appendable, value);
+            Append.to(appendable, ']');
+        }
+    }
+
+    public record Duration(String type,
+                           String key,
+                           String label,
+                           String tabName,
+                           int order,
+                           Set<String> tags,
+                           String placeholder,
+                           String help,
+                           String valueHuman)
+            implements OptionDto, StringFormattable {
+        @Override
+        public String toString() {
+            return toString(160);
+        }
+
+        @Override
+        public void formatTo(Appendable appendable) {
+            appendCommon(appendable, "Duration", type, key, label, tabName, order, tags);
             Append.to(appendable, ", placeholder=");
             Append.to(appendable, placeholder);
             Append.to(appendable, ", help=");
@@ -118,16 +139,16 @@ public final class StandardOptionDtos {
         }
     }
 
-    public record Select(String type, String key, String label, String tabName, int order, List<String> options, String value)
+    public record Select(String type, String key, String label, String tabName, int order, Set<String> tags, List<String> options, String value)
             implements OptionDto, StringFormattable {
         @Override
         public String toString() {
-            return toString(128);
+            return toString(160);
         }
 
         @Override
         public void formatTo(Appendable appendable) {
-            appendCommon(appendable, "Select", type, key, label, tabName, order);
+            appendCommon(appendable, "Select", type, key, label, tabName, order, tags);
             Append.to(appendable, ", options=");
             Append.to(appendable, options, LogRedaction::appendRedacted);
             Append.to(appendable, ", value=");
@@ -141,6 +162,7 @@ public final class StandardOptionDtos {
                               String label,
                               String tabName,
                               int order,
+                              Set<String> tags,
                               Map<String, String> allOptions,
                               boolean allOptionsComplete,
                               List<String> selectedIds)
@@ -152,7 +174,7 @@ public final class StandardOptionDtos {
 
         @Override
         public void formatTo(Appendable appendable) {
-            appendCommon(appendable, "MultiSelect", type, key, label, tabName, order);
+            appendCommon(appendable, "MultiSelect", type, key, label, tabName, order, tags);
             Append.to(appendable, ", allOptions=");
             Append.to(appendable, allOptions, LogRedaction::appendRedacted, LogRedaction::appendRedacted);
             Append.to(appendable, ", allOptionsComplete=");
@@ -163,16 +185,16 @@ public final class StandardOptionDtos {
         }
     }
 
-    public record Location(String type, String key, String label, String tabName, int order, @Nullable LatLon value)
+    public record Location(String type, String key, String label, String tabName, int order, Set<String> tags, @Nullable LatLon value)
             implements OptionDto, StringFormattable {
         @Override
         public String toString() {
-            return toString(96);
+            return toString(128);
         }
 
         @Override
         public void formatTo(Appendable appendable) {
-            appendCommon(appendable, "Location", type, key, label, tabName, order);
+            appendCommon(appendable, "Location", type, key, label, tabName, order, tags);
             Append.to(appendable, ", value=");
             appendRedacted(appendable, value);
             Append.to(appendable, ']');

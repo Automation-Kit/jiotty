@@ -42,6 +42,7 @@ public abstract class LocationOption extends BaseOption<LatLon> {
                                                meta().label(),
                                                meta().tabName(),
                                                getFormOrder(),
+                                               meta().tags(),
                                                value());
     }
 

@@ -43,6 +43,7 @@ public abstract class MultiSelectOption extends BaseOption<Set<String>> {
                                                   meta().label(),
                                                   meta().tabName(),
                                                   getFormOrder(),
+                                                  meta().tags(),
                                                   allOptions,
                                                   allOptionsComplete,
                                                   getValue().map(List::copyOf).orElseGet(List::of));

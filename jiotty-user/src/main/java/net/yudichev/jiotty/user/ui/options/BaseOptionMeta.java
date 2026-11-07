@@ -5,6 +5,7 @@ import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
 
 import java.util.Optional;
+import java.util.Set;
 
 import static net.yudichev.jiotty.user.ui.options.Option.DEFAULT_FORM_ORDER;
 
@@ -30,4 +31,7 @@ public interface BaseOptionMeta<T> {
     default boolean sensitive() {
         return false;
     }
+
+    /// Codes naming the groups this option belongs to; empty when it belongs to no group.
+    Set<String> tags();
 }
