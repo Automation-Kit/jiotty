@@ -3,6 +3,7 @@ package net.yudichev.jiotty.connector.firebase;
 import com.google.common.collect.ImmutableList;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.user.persistence.UserIdentity;
+import net.yudichev.jiotty.user.persistence.UserIdentityRecord;
 
 import java.time.Instant;
 import java.util.List;
@@ -19,13 +20,34 @@ import static com.google.common.base.Preconditions.checkNotNull;
 public interface FirebaseAuthConnector {
     /// The [UserIdentity#provider()] value for identities sourced from Firebase.
     String IDENTITY_PROVIDER = "firebase";
+    /// The Firebase provider id, and so the [UserIdentity#provider()] value, of a linked Google sign-in.
+    String GOOGLE_PROVIDER_ID = "google.com";
+    /// The Firebase provider id, and so the [UserIdentity#provider()] value, of a linked Apple sign-in.
+    String APPLE_PROVIDER_ID = "apple.com";
+
+    /// @return the Firebase uid among a user's `identities`, or empty when none of them is a Firebase identity
+    static Optional<String> firebaseUidOf(List<UserIdentityRecord> identities) {
+        for (UserIdentityRecord identityRecord : identities) {
+            UserIdentity identity = identityRecord.identity();
+            if (IDENTITY_PROVIDER.equals(identity.provider())) {
+                return Optional.of(identity.providerUserId());
+            }
+        }
+        return Optional.empty();
+    }
 
     CompletableFuture<Either<VerifiedUserToken, VerificationFailure>> verifyUserToken(String idToken);
 
-    /// Permanently deletes the Firebase user record. Completes normally if the user is already absent.
+    /// Permanently deletes the Firebase user record. Completes normally if the user is already absent, and never completes on a connector that is not
+    /// started.
     ///
     /// The returned [CompletableFuture] fails only for unexpected technical problems such as network failures or backend unavailability.
     CompletableFuture<Void> deleteUser(String firebaseUid);
+
+    /// Revokes every refresh token of the Firebase user, which ends each of the user's sessions at its next ID token renewal and makes every ID token
+    /// issued in an earlier second than the revocation fail verification; one issued in the revocation's own second still verifies. Completes normally if
+    /// the user is absent, who has no sessions to revoke, and never completes on a connector that is not started.
+    CompletableFuture<Void> revokeSessions(String firebaseUid);
 
     sealed interface VerificationFailure permits InvalidToken, DisabledUser {}
 
@@ -67,6 +89,9 @@ public interface FirebaseAuthConnector {
     }
 
     record InvalidToken(String technicalDescription) implements VerificationFailure {
+        /// The [#technicalDescription()] of a token refused because its user's sessions were revoked.
+        public static final String REVOKED_DESCRIPTION = "Firebase token has been revoked";
+
         public InvalidToken {
             checkNotNull(technicalDescription, "technicalDescription");
             checkArgument(!technicalDescription.isBlank(), "technicalDescription must not be blank");

@@ -2,6 +2,7 @@ package net.yudichev.jiotty.connector.firebase;
 
 import com.google.api.core.ApiFuture;
 import com.google.auth.oauth2.GoogleCredentials;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import com.google.firebase.auth.AuthErrorCode;
@@ -31,6 +32,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -39,6 +41,7 @@ import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessageFormattable;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 
 public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent implements FirebaseAuthConnector {
@@ -46,7 +49,8 @@ public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent impl
     /// Firebase Auth provider ID used for email/password sign-in.
     ///
     /// The Admin SDK does not expose a constant for this value.
-    private static final String PASSWORD_PROVIDER_ID = "password";
+    @VisibleForTesting
+    static final String PASSWORD_PROVIDER_ID = "password";
     /// Firebase Auth provider ID used for phone sign-in.
     ///
     /// The Admin SDK does not expose a constant for this value.
@@ -111,18 +115,47 @@ public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent impl
 
     @Override
     public CompletableFuture<Void> deleteUser(String firebaseUid) {
+        return runOnUser(firebaseUid, "delete", "Failed deleting Firebase user ", () -> firebaseAuth.deleteUserAsync(firebaseUid));
+    }
+
+    @Override
+    public CompletableFuture<Void> revokeSessions(String firebaseUid) {
+        return runOnUser(firebaseUid,
+                         "session revocation",
+                         "Failed revoking the sessions of Firebase user ",
+                         () -> firebaseAuth.revokeRefreshTokensAsync(firebaseUid));
+    }
+
+    /// Runs `operation` on the Firebase user `firebaseUid`, completing normally when Firebase reports the user absent. On a connector that is not started
+    /// the returned future never completes.
+    ///
+    /// @param operationName names the operation in the debug line logged when the user is absent
+    /// @param failurePrefix the start of the failure's message, which the uid completes
+    private CompletableFuture<Void> runOnUser(String firebaseUid, String operationName, String failurePrefix, Supplier<ApiFuture<Void>> operation) {
         checkNotNull(firebaseUid, "firebaseUid");
         checkArgument(!firebaseUid.isBlank(), "firebaseUid must not be blank");
-        return whenStartedAndNotLifecycling(() -> toCompletableFuture(firebaseAuth.deleteUserAsync(firebaseUid))
-                .exceptionally(throwable -> {
-                    Throwable cause = unwrap(throwable);
-                    if (cause instanceof FirebaseAuthException firebaseAuthException
-                        && firebaseAuthException.getAuthErrorCode() == AuthErrorCode.USER_NOT_FOUND) {
-                        logger.debug("Firebase user {} already absent on delete", firebaseUid);
-                        return null;
-                    }
-                    throw new RuntimeException("Failed deleting Firebase user " + firebaseUid, cause);
-                }));
+        return whenNotLifecycling(() -> isStartedPlain()
+                                        ? toCompletableFuture(operation.get()).exceptionally(throwable -> ignoreAbsentUser(throwable,
+                                                                                                                           firebaseUid,
+                                                                                                                           operationName,
+                                                                                                                           failurePrefix))
+                                        : new CompletableFuture<>());
+    }
+
+    /// Completes an operation on `firebaseUid` normally when its `throwable` is Firebase reporting the user absent.
+    ///
+    /// @return `null`, the result of the operation completing normally
+    /// @throws RuntimeException naming `firebaseUid` after `failurePrefix`, caused by `throwable`, for any other failure
+    private static @Nullable Void ignoreAbsentUser(Throwable throwable, String firebaseUid, String operationName, String failurePrefix) {
+        Throwable cause = unwrap(throwable);
+        if (cause instanceof FirebaseAuthException firebaseAuthException && firebaseAuthException.getAuthErrorCode() == AuthErrorCode.USER_NOT_FOUND) {
+            // Guarded because rendering the exception allocates.
+            if (logger.isDebugEnabled()) {
+                logger.debug("Firebase user {} already absent on {}: {}", firebaseUid, operationName, humanReadableMessageFormattable(cause));
+            }
+            return null;
+        }
+        throw new RuntimeException(failurePrefix + firebaseUid, cause);
     }
 
     private CompletableFuture<Either<FirebaseToken, VerificationFailure>> verifyDecodedToken(String idToken) {
@@ -150,7 +183,7 @@ public final class FirebaseAuthConnectorImpl extends BaseLifecycleComponent impl
         Instant expiresAt = Instant.ofEpochSecond(tokenInstantClaim(decodedToken, "exp"));
         Instant tokensValidAfter = Instant.ofEpochMilli(userRecord.getTokensValidAfterTimestamp());
         if (issuedAt.isBefore(tokensValidAfter)) {
-            return Either.right(new InvalidToken("Firebase token has been revoked"));
+            return Either.right(new InvalidToken(InvalidToken.REVOKED_DESCRIPTION));
         }
         return Either.left(new VerifiedUserToken(decodedToken.getUid(),
                                                  // the user record's flag is current as of this lookup; the token's email_verified claim lags until the

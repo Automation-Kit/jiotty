@@ -30,6 +30,8 @@ import static net.yudichev.jiotty.connector.firebase.FirebaseAuthConnector.Disab
 import static net.yudichev.jiotty.connector.firebase.FirebaseAuthConnector.InvalidToken;
 import static net.yudichev.jiotty.connector.firebase.FirebaseAuthConnector.VerifiedUserToken;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -77,7 +79,7 @@ class FirebaseAuthConnectorImplTest {
             assertThat(token.firebaseProfile().email()).contains("user@example.com");
             assertThat(token.firebaseProfile().displayName()).contains("Alex");
             assertThat(token.firebaseProfile().emailVerified()).isTrue();
-            assertThat(token.linkedIdentities()).containsExactly(new UserIdentity("google.com", "google-user-1"));
+            assertThat(token.linkedIdentities()).containsExactly(new UserIdentity(FirebaseAuthConnector.GOOGLE_PROVIDER_ID, "google-user-1"));
             assertThat(token.authTime()).isEqualTo(AUTH_TIME);
             assertThat(token.issuedAt()).isEqualTo(ISSUED_AT);
             assertThat(token.expiresAt()).isEqualTo(EXPIRES_AT);
@@ -132,16 +134,17 @@ class FirebaseAuthConnectorImplTest {
         when(userRecord.getEmail()).thenReturn("user@example.com");
         when(userRecord.getDisplayName()).thenReturn("Alex");
         when(userRecord.getProviderData()).thenReturn(new UserInfo[]{firstGoogleIdentity, secondGoogleIdentity});
-        when(firstGoogleIdentity.getProviderId()).thenReturn("google.com");
+        when(firstGoogleIdentity.getProviderId()).thenReturn(FirebaseAuthConnector.GOOGLE_PROVIDER_ID);
         when(firstGoogleIdentity.getUid()).thenReturn("google-user-1");
-        when(secondGoogleIdentity.getProviderId()).thenReturn("google.com");
+        when(secondGoogleIdentity.getProviderId()).thenReturn(FirebaseAuthConnector.GOOGLE_PROVIDER_ID);
         when(secondGoogleIdentity.getUid()).thenReturn("google-user-2");
 
         assertThat(connector.verifyUserToken(TOKEN)).failsWithin(Duration.ZERO)
                                                     .withThrowableThat()
                                                     .havingRootCause()
                                                     .isInstanceOf(IllegalStateException.class)
-                                                    .withMessage("Unexpected firebase user record data: duplicate provider identities for provider google.com");
+                                                    .withMessage("Unexpected firebase user record data: duplicate provider identities for provider "
+                                                                 + FirebaseAuthConnector.GOOGLE_PROVIDER_ID);
     }
 
     @Test
@@ -173,6 +176,52 @@ class FirebaseAuthConnectorImplTest {
     }
 
     @Test
+    void revokeSessionsDelegatesToFirebase() {
+        when(firebaseAuth.revokeRefreshTokensAsync(FIREBASE_UID)).thenReturn(ApiFutures.immediateFuture(null));
+
+        assertThat(connector.revokeSessions(FIREBASE_UID)).succeedsWithin(Duration.ZERO);
+        verify(firebaseAuth).revokeRefreshTokensAsync(FIREBASE_UID);
+    }
+
+    @Test
+    void revokeSessionsCompletesNormallyWhenUserAbsent() {
+        when(firebaseAuth.revokeRefreshTokensAsync(FIREBASE_UID)).thenReturn(
+                ApiFutures.immediateFailedFuture(firebaseAuthException(AuthErrorCode.USER_NOT_FOUND, "no such user")));
+
+        assertThat(connector.revokeSessions(FIREBASE_UID)).succeedsWithin(Duration.ZERO);
+    }
+
+    @Test
+    void revokeSessionsFailsForTransientFirebaseFailure() {
+        when(firebaseAuth.revokeRefreshTokensAsync(FIREBASE_UID)).thenReturn(
+                ApiFutures.immediateFailedFuture(firebaseAuthException(AuthErrorCode.CERTIFICATE_FETCH_FAILED, "firebase unavailable")));
+
+        assertThat(connector.revokeSessions(FIREBASE_UID)).failsWithin(Duration.ZERO)
+                                                          .withThrowableThat()
+                                                          .havingCause()
+                                                          .isInstanceOf(RuntimeException.class)
+                                                          .withMessage("Failed revoking the sessions of Firebase user " + FIREBASE_UID);
+    }
+
+    /// On a stopped connector the call returns a future that never completes and calls no Firebase API.
+    @Test
+    void revokeSessionsOnAStoppedConnectorNeverCompletes() {
+        connector.stop();
+
+        assertThat(connector.revokeSessions(FIREBASE_UID)).isNotDone();
+        verify(firebaseAuth, never()).revokeRefreshTokensAsync(any());
+    }
+
+    /// On a stopped connector the call returns a future that never completes and calls no Firebase API.
+    @Test
+    void deleteUserOnAStoppedConnectorNeverCompletes() {
+        connector.stop();
+
+        assertThat(connector.deleteUser(FIREBASE_UID)).isNotDone();
+        verify(firebaseAuth, never()).deleteUserAsync(any());
+    }
+
+    @Test
     void stopDeletesInjectedFirebaseApp() {
         connector.stop();
 
@@ -195,9 +244,9 @@ class FirebaseAuthConnectorImplTest {
         when(userRecord.getDisplayName()).thenReturn("Alex");
         when(userRecord.isEmailVerified()).thenReturn(true);
         when(userRecord.getProviderData()).thenReturn(new UserInfo[]{googleIdentity, passwordIdentity});
-        when(googleIdentity.getProviderId()).thenReturn("google.com");
+        when(googleIdentity.getProviderId()).thenReturn(FirebaseAuthConnector.GOOGLE_PROVIDER_ID);
         when(googleIdentity.getUid()).thenReturn("google-user-1");
-        when(passwordIdentity.getProviderId()).thenReturn("password");
+        when(passwordIdentity.getProviderId()).thenReturn(FirebaseAuthConnectorImpl.PASSWORD_PROVIDER_ID);
         when(passwordIdentity.getUid()).thenReturn("password-user-ignored");
     }
 

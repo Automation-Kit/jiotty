@@ -6,8 +6,10 @@ import net.yudichev.jiotty.connector.firebase.FirebaseAuthConnector;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -21,6 +23,9 @@ public final class FakeFirebaseAuthConnector implements FirebaseAuthConnector {
     private final Map<String, ResponseFactory> responseFactoriesByToken = new HashMap<>();
     private final List<String> requestedTokens = new ArrayList<>();
     private final List<String> deletedUsers = new ArrayList<>();
+    /// The users [#revokeSessions] was called for, whose every verification completes with [InvalidToken], the result Firebase gives for a token issued
+    /// before the revocation.
+    private final Set<String> revokedUsers = new HashSet<>();
 
     public void setVerifiedUserToken(String token, VerifiedUserToken verifiedUserToken) {
         synchronized (lock) {
@@ -69,24 +74,46 @@ public final class FakeFirebaseAuthConnector implements FirebaseAuthConnector {
             requestedTokens.add(token);
             ResponseFactory responseFactory = responseFactoriesByToken.get(token);
             checkState(responseFactory != null, "No fake FirebaseAuthConnector response configured for token %s", token);
-            return responseFactory.create();
+            return responseFactory.create().thenApply(this::refuseIfRevoked);
         }
     }
 
     @Override
     public CompletableFuture<Void> deleteUser(String firebaseUid) {
         synchronized (lock) {
-            checkNotNull(firebaseUid, "firebaseUid");
-            checkArgument(!firebaseUid.isBlank(), "firebaseUid must not be blank");
-            deletedUsers.add(firebaseUid);
+            deletedUsers.add(checkFirebaseUid(firebaseUid));
             return completedFuture(null);
         }
     }
 
+    @Override
+    public CompletableFuture<Void> revokeSessions(String firebaseUid) {
+        synchronized (lock) {
+            revokedUsers.add(checkFirebaseUid(firebaseUid));
+            return completedFuture(null);
+        }
+    }
+
+    private Either<VerifiedUserToken, VerificationFailure> refuseIfRevoked(Either<VerifiedUserToken, VerificationFailure> verification) {
+        boolean revoked;
+        synchronized (lock) {
+            revoked = verification.map(verifiedUserToken -> revokedUsers.contains(verifiedUserToken.firebaseUid()), _ -> false);
+        }
+        return revoked ? Either.right(new InvalidToken(InvalidToken.REVOKED_DESCRIPTION)) : verification;
+    }
+
+    private static String checkFirebaseUid(String firebaseUid) {
+        return checkNotBlank(firebaseUid, "firebaseUid");
+    }
+
     private static String checkToken(String token) {
-        checkNotNull(token, "token");
-        checkArgument(!token.isBlank(), "token must not be blank");
-        return token;
+        return checkNotBlank(token, "token");
+    }
+
+    private static String checkNotBlank(String value, String name) {
+        checkNotNull(value, name);
+        checkArgument(!value.isBlank(), "%s must not be blank", name);
+        return value;
     }
 
     private interface ResponseFactory {
