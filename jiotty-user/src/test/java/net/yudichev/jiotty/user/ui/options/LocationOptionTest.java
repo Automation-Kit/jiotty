@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class LocationOptionTest {
     private static final String OPTION_KEY = "test.location";
+    private static final String TAG = "test-group";
 
     private ProgrammableClock clock;
     private TestLocationOption option;
@@ -29,6 +30,7 @@ class LocationOptionTest {
                                                             .setTabName("Misc")
                                                             .setKey(OPTION_KEY)
                                                             .setLabel("Home Location")
+                                                            .addTags(TAG)
                                                             .build());
     }
 
@@ -114,6 +116,7 @@ class LocationOptionTest {
         assertThat(location.key()).isEqualTo(OPTION_KEY);
         assertThat(location.label()).isEqualTo("Home Location");
         assertThat(location.tabName()).isEqualTo("Misc");
+        assertThat(location.tags()).containsExactly(TAG);
         assertThat(location.value()).isEqualTo(new LatLon(51.5, -0.12));
     }
 

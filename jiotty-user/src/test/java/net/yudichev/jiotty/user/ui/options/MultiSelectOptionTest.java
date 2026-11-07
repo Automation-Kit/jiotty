@@ -21,6 +21,7 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class MultiSelectOptionTest {
     private static final String OPTION_KEY = "test.multiselect";
+    private static final String TAG = "test-group";
     private static final ImmutableMap<String, String> ALL_OPTIONS = ImmutableMap.of(
             "a", "Alpha",
             "b", "Bravo",
@@ -29,6 +30,7 @@ class MultiSelectOptionTest {
                                                                   .setTabName("Misc")
                                                                   .setKey(OPTION_KEY)
                                                                   .setLabel("Things")
+                                                                  .addTags(TAG)
                                                                   .build();
 
     private ProgrammableClock clock;
@@ -82,6 +84,7 @@ class MultiSelectOptionTest {
             assertThat(multi.key()).isEqualTo(OPTION_KEY);
             assertThat(multi.label()).isEqualTo("Things");
             assertThat(multi.tabName()).isEqualTo("Misc");
+            assertThat(multi.tags()).containsExactly(TAG);
             assertThat(multi.allOptions()).isEqualTo(ALL_OPTIONS);
             assertThat(multi.allOptionsComplete()).isTrue();
             assertThat(multi.selectedIds()).containsExactlyInAnyOrder("a", "c");

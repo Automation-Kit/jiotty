@@ -23,6 +23,13 @@ public abstract class SelectOption extends BaseOption<String> {
 
     @Override
     public OptionDto toDtoUnsafe() {
-        return new StandardOptionDtos.Select("select", meta().key(), meta().label(), meta().tabName(), getFormOrder(), options, getValue().orElse(null));
+        return new StandardOptionDtos.Select("select",
+                                             meta().key(),
+                                             meta().label(),
+                                             meta().tabName(),
+                                             getFormOrder(),
+                                             meta().tags(),
+                                             options,
+                                             getValue().orElse(null));
     }
 }

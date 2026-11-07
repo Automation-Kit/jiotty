@@ -55,6 +55,7 @@ public abstract class DurationOption extends BaseOption<Duration> {
                                                meta().label(),
                                                meta().tabName(),
                                                getFormOrder(),
+                                               meta().tags(),
                                                placeholder,
                                                title,
                                                getValue().map(FriendlyDurationFormat::formatHuman).orElse(null)

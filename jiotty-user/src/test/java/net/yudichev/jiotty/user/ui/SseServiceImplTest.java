@@ -323,6 +323,24 @@ class SseServiceImplTest {
         assertThat(options.getFirst().get("key")).isEqualTo("my.key");
         assertThat(options.getFirst().get("label")).isEqualTo("My Label");
         assertThat(options.getFirst().get("type")).isEqualTo("text");
+        assertThat(options.getFirst().get("tags")).isEqualTo(List.of());
+    }
+
+    @Test
+    void optionsUpdateCarriesTheTagsOfEachOption() {
+        optionRegistry.register(new TestTextOption(clock.createSingleThreadedSchedulingExecutor("opt-tagged"),
+                                                   OptionMeta.<String>builder()
+                                                             .setTabName("MyTab")
+                                                             .setKey("tagged.key")
+                                                             .setLabel("Tagged")
+                                                             .addTags("plan", "home")
+                                                             .build()));
+        clock.advanceTimeAndTick(THROTTLING_PERIOD);
+
+        SseCapture capture = connectSseClient();
+        Map<String, Object> optionsUpdate = dataOf(capture.output(), SseServiceImpl.OPTIONS_UPDATE_EVENT, new TypeToken<>() {});
+
+        assertThat(objectsOf(optionsUpdate, "tabs")).singleElement().satisfies(tab -> assertTagsOfSingleOption(tab, List.of("plan", "home")));
     }
 
     @Test
@@ -753,6 +771,10 @@ class SseServiceImplTest {
     /// A history of one empty group, named `group` so a test can tell the frames rendering it apart.
     private static HistoryDisplayableDto createHistory(String group) {
         return new HistoryDisplayableDto(ImmutableMap.of(group, ImmutableList.of()));
+    }
+
+    private static void assertTagsOfSingleOption(Map<String, Object> tab, List<String> expectedTags) {
+        assertThat(objectsOf(tab, "options")).singleElement().satisfies(option -> assertThat(option).containsEntry("tags", expectedTags));
     }
 
     /// Returns `node`'s `field`, a JSON array of objects.

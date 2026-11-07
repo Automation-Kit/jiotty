@@ -17,6 +17,6 @@ public abstract class TextOption extends BaseOption<String> {
 
     @Override
     public OptionDto toDtoUnsafe() {
-        return new StandardOptionDtos.Text("text", meta().key(), meta().label(), meta().tabName(), getFormOrder(), getValue().orElse(null));
+        return new StandardOptionDtos.Text("text", meta().key(), meta().label(), meta().tabName(), getFormOrder(), meta().tags(), getValue().orElse(null));
     }
 }

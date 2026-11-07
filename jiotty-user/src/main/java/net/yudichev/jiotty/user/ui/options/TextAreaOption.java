@@ -32,6 +32,13 @@ public abstract class TextAreaOption extends BaseOption<String> {
 
     @Override
     public OptionDto toDtoUnsafe() {
-        return new StandardOptionDtos.TextArea("textarea", meta().key(), meta().label(), meta().tabName(), getFormOrder(), rowCount, getValue().orElse(""));
+        return new StandardOptionDtos.TextArea("textarea",
+                                               meta().key(),
+                                               meta().label(),
+                                               meta().tabName(),
+                                               getFormOrder(),
+                                               meta().tags(),
+                                               rowCount,
+                                               getValue().orElse(""));
     }
 }

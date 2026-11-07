@@ -16,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TimeOptionTest {
     private static final String OPTION_KEY = "test.time";
+    private static final String TAG = "test-group";
 
     private ProgrammableClock clock;
     private TestTimeOption option;
@@ -28,6 +29,7 @@ class TimeOptionTest {
                                                         .setTabName("Misc")
                                                         .setKey(OPTION_KEY)
                                                         .setLabel("Wake time")
+                                                        .addTags(TAG)
                                                         .build());
     }
 
@@ -77,6 +79,7 @@ class TimeOptionTest {
 
         assertThat(dto).isInstanceOfSatisfying(StandardOptionDtos.Time.class, time -> {
             assertThat(time.key()).isEqualTo(OPTION_KEY);
+            assertThat(time.tags()).containsExactly(TAG);
             assertThat(time.value()).isEqualTo("07:30");
         });
     }
