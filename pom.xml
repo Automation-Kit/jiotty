@@ -8,7 +8,7 @@
     <groupId>net.yudichev.jiotty</groupId>
     <artifactId>jiotty</artifactId>
     <packaging>pom</packaging>
-    <version>3.8.0-SNAPSHOT</version>
+    <version>3.8.0</version>
 
     <description>Java components for low level home automation coding</description>
     <url>https://github.com/Automation-Kit/jiotty</url>
@@ -223,6 +223,25 @@
                         <executions>
                             <execution>
                                 <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <!-- Maven Central requires a javadoc jar for every published jar. Doclint is off: the Markdown doc comments (///) are not
+                             written to its standards, and the published javadoc does not need them to be. -->
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.12.0</version>
+                        <configuration>
+                            <doclint>none</doclint>
+                            <quiet>true</quiet>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadoc</id>
                                 <goals>
                                     <goal>jar</goal>
                                 </goals>
