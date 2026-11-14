@@ -7,6 +7,7 @@ import com.google.common.base.Throwables;
 import net.yudichev.jiotty.common.async.ExecutorFactoryImpl;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.TimeProvider;
 import net.yudichev.jiotty.security.OAuth2TokenManager;
@@ -20,6 +21,7 @@ import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
@@ -33,9 +35,16 @@ import static com.github.tomakehurst.wiremock.client.WireMock.putRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.verify;
+import static com.google.common.net.HttpHeaders.AUTHORIZATION;
+import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
+import static net.yudichev.jiotty.common.rest.BearerTokens.BEARER_PREFIX;
+import static net.yudichev.jiotty.common.rest.ContentTypes.CONTENT_TYPE_JSON;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR_500;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
+import static net.yudichev.jiotty.connector.miele.MieleDishwasherImpl.ACTIONS_ENDPOINT;
+import static net.yudichev.jiotty.connector.miele.MieleDishwasherImpl.PROGRAMS_ENDPOINT;
+import static net.yudichev.jiotty.connector.miele.MieleDishwasherImpl.devicePath;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
@@ -47,6 +56,9 @@ class MieleDishwasherImplTest {
 
     private static final String DEVICE_ID = "test-device-id";
     private static final String ACCESS_TOKEN = "mock-access-token";
+    private static final String REFRESHED_TOKEN = "refreshed-token";
+    private static final String PROGRAMS_PATH = devicePath(DEVICE_ID, PROGRAMS_ENDPOINT);
+    private static final String ACTIONS_PATH = devicePath(DEVICE_ID, ACTIONS_ENDPOINT);
 
     private MieleDishwasherImpl mieleDishwasher;
     private String baseUrl;
@@ -128,10 +140,10 @@ class MieleDishwasherImplTest {
 
         mieleDishwasher.start();
 
-        stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
-                        .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
+        stubFor(get(urlPathEqualTo(PROGRAMS_PATH))
+                        .withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + ACCESS_TOKEN))
                         .willReturn(aResponse().withStatus(OK_200)
-                                               .withHeader("Content-Type", "application/json")
+                                               .withHeader(CONTENT_TYPE, CONTENT_TYPE_JSON)
                                                .withBody("[]")));
         assertThat(mieleDishwasher.getPrograms().join()).isEmpty();
     }
@@ -140,15 +152,15 @@ class MieleDishwasherImplTest {
     void refreshedToken_isUsedForSubsequentRequests() {
         // The manager publishes a fresh token whenever it refreshes one, and every later request carries it.
         mieleDishwasher.stop();
-        authStatesOnSubscribe = List.of(new AuthState.Success("first-token"), new AuthState.Success("refreshed-token"));
+        authStatesOnSubscribe = List.of(new AuthState.Success(ACCESS_TOKEN), new AuthState.Success(REFRESHED_TOKEN));
         mieleDishwasher = createDishwasher();
 
         mieleDishwasher.start();
 
-        stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
-                        .withHeader("Authorization", equalTo("Bearer refreshed-token"))
+        stubFor(get(urlPathEqualTo(PROGRAMS_PATH))
+                        .withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + REFRESHED_TOKEN))
                         .willReturn(aResponse().withStatus(OK_200)
-                                               .withHeader("Content-Type", "application/json")
+                                               .withHeader(CONTENT_TYPE, CONTENT_TYPE_JSON)
                                                .withBody("[]")));
         assertThat(mieleDishwasher.getPrograms().join()).isEmpty();
     }
@@ -165,11 +177,11 @@ class MieleDishwasherImplTest {
 
     @Test
     void getPrograms_successfulResponse_returnsPrograms() {
-        stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
-                        .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
+        stubFor(get(urlPathEqualTo(PROGRAMS_PATH))
+                        .withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + ACCESS_TOKEN))
                         .willReturn(aResponse()
                                             .withStatus(OK_200)
-                                            .withHeader("Content-Type", "application/json")
+                                            .withHeader(CONTENT_TYPE, CONTENT_TYPE_JSON)
                                             .withBody("""
                                                       [
                                                           {"programId": 1, "program": "Program 1"},
@@ -186,12 +198,12 @@ class MieleDishwasherImplTest {
 
     @Test
     void getPrograms_timeout_throwsException() {
-        stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
-                        .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
+        stubFor(get(urlPathEqualTo(PROGRAMS_PATH))
+                        .withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + ACCESS_TOKEN))
                         .willReturn(aResponse()
                                             .withFixedDelay(1500) // Delay longer than client timeout
                                             .withStatus(OK_200)
-                                            .withHeader("Content-Type", "application/json")
+                                            .withHeader(CONTENT_TYPE, CONTENT_TYPE_JSON)
                                             .withBody("[]")));
 
         assertThatThrownBy(() -> mieleDishwasher.getPrograms().join())
@@ -205,8 +217,8 @@ class MieleDishwasherImplTest {
 
     @Test
     void getPrograms_serverError_throwsException() {
-        stubFor(get(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
-                        .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
+        stubFor(get(urlPathEqualTo(PROGRAMS_PATH))
+                        .withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + ACCESS_TOKEN))
                         .willReturn(aResponse()
                                             .withStatus(INTERNAL_SERVER_ERROR_500)
                                             .withBody("Internal Server Error")));
@@ -217,8 +229,8 @@ class MieleDishwasherImplTest {
 
     @Test
     void startProgram_successful() {
-        stubFor(put(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
-                        .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
+        stubFor(put(urlPathEqualTo(PROGRAMS_PATH))
+                        .withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + ACCESS_TOKEN))
                         .withRequestBody(equalToJson("""
                                                      {"programId": 123}
                                                      """))
@@ -227,19 +239,77 @@ class MieleDishwasherImplTest {
 
         mieleDishwasher.startProgram(123).join();
 
-        verify(putRequestedFor(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
+        verify(putRequestedFor(urlPathEqualTo(PROGRAMS_PATH))
                        .withRequestBody(equalToJson("""
                                                     {"programId": 123}
                                                     """)));
     }
 
     @Test
+    void getActions_successfulResponse_returnsActions() {
+        stubActions(true, false);
+
+        assertThat(mieleDishwasher.getActions().join()).isEqualTo(MieleActions.builder().setPowerOnAvailable(true).setPowerOffAvailable(false).build());
+    }
+
+    @Test
+    void powerOn_whenAvailable_sendsPowerOn() {
+        stubActions(true, false);
+        stubFor(put(urlPathEqualTo(ACTIONS_PATH)).willReturn(aResponse().withStatus(NO_CONTENT_204)));
+
+        mieleDishwasher.powerOn().join();
+
+        verify(putRequestedFor(urlPathEqualTo(ACTIONS_PATH)).withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + ACCESS_TOKEN))
+                                                            .withRequestBody(equalToJson("""
+                                                                                         {"powerOn": true}
+                                                                                         """)));
+    }
+
+    @Test
+    void powerOn_whenUnavailable_sendsNothing() {
+        stubActions(false, true);
+
+        mieleDishwasher.powerOn().join();
+
+        verify(0, putRequestedFor(urlPathEqualTo(ACTIONS_PATH)));
+    }
+
+    @Test
+    void powerOff_whenAvailable_sendsPowerOff() {
+        stubActions(false, true);
+        stubFor(put(urlPathEqualTo(ACTIONS_PATH)).willReturn(aResponse().withStatus(NO_CONTENT_204)));
+
+        mieleDishwasher.powerOff().join();
+
+        verify(putRequestedFor(urlPathEqualTo(ACTIONS_PATH)).withRequestBody(equalToJson("""
+                                                                                         {"powerOff": true}
+                                                                                         """)));
+    }
+
+    @Test
+    void powerOff_whenUnavailable_sendsNothing() {
+        stubActions(true, false);
+
+        mieleDishwasher.powerOff().join();
+
+        verify(0, putRequestedFor(urlPathEqualTo(ACTIONS_PATH)));
+    }
+
+    @Test
     void startProgram_connectionFailure_retriesAndFails() {
-        stubFor(put(urlPathEqualTo("/devices/" + DEVICE_ID + "/programs"))
-                        .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN))
+        stubFor(put(urlPathEqualTo(PROGRAMS_PATH))
+                        .withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + ACCESS_TOKEN))
                         .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
 
         assertThatThrownBy(() -> mieleDishwasher.startProgram(123).join())
                 .hasRootCauseInstanceOf(IOException.class);
+    }
+
+    private static void stubActions(boolean powerOnAvailable, boolean powerOffAvailable) {
+        stubFor(get(urlPathEqualTo(ACTIONS_PATH))
+                        .withHeader(AUTHORIZATION, equalTo(BEARER_PREFIX + ACCESS_TOKEN))
+                        .willReturn(aResponse().withStatus(OK_200)
+                                               .withHeader(CONTENT_TYPE, CONTENT_TYPE_JSON)
+                                               .withBody(Json.stringify(Map.of("powerOn", powerOnAvailable, "powerOff", powerOffAvailable)))));
     }
 }

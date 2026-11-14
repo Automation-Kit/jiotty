@@ -1,20 +1,21 @@
 package net.yudichev.jiotty.connector.miele;
 
-import com.google.common.reflect.TypeToken;
 import net.yudichev.jiotty.common.lang.Json;
 import org.assertj.core.api.ThrowingConsumer;
 import org.junit.jupiter.api.Test;
 
-import java.io.IOException;
 import java.time.Duration;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static net.yudichev.jiotty.connector.miele.MieleTestResources.NOT_CONNECTED_DEVICE;
+import static net.yudichev.jiotty.connector.miele.MieleTestResources.RUNNING_DEVICE;
+import static net.yudichev.jiotty.connector.miele.MieleTestResources.parse;
+import static net.yudichev.jiotty.connector.miele.MieleTestResources.read;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class MieleDeviceTest {
     @Test
-    void deserialises1() throws IOException {
-        testDeserialisation("/miele-device-1.json", state -> {
+    void deserialises1() {
+        testDeserialisation(RUNNING_DEVICE, state -> {
             assertThat(state.program()).isEqualTo(StateValue.builder()
                                                             .setId(7)
                                                             .setName("Auto")
@@ -32,8 +33,8 @@ class MieleDeviceTest {
     }
 
     @Test
-    void deserialises2() throws IOException {
-        testDeserialisation("/miele-device-2.json", state -> {
+    void deserialises2() {
+        testDeserialisation(NOT_CONNECTED_DEVICE, state -> {
             assertThat(state.program()).isEqualTo(StateValue.builder()
                                                             .setId(0)
                                                             .setName("")
@@ -50,11 +51,22 @@ class MieleDeviceTest {
         });
     }
 
-    private void testDeserialisation(String name, ThrowingConsumer<DeviceState> deviceStateThrowingConsumer) throws IOException {
-        try (var resourceAsStream = getClass().getResourceAsStream(name)) {
-            assert resourceAsStream != null;
-            MieleDevice mieleDevice = Json.parse(new String(resourceAsStream.readAllBytes(), UTF_8), new TypeToken<>() {});
-            assertThat(mieleDevice.state()).satisfies(deviceStateThrowingConsumer);
-        }
+    @Test
+    void devicesParsedFromSamePayloadAreEqual() {
+        assertThat(parse(RUNNING_DEVICE, MieleDevice.class)).isEqualTo(parse(RUNNING_DEVICE, MieleDevice.class));
+    }
+
+    @Test
+    void deserialisesNullRemainingTimeAsNone() {
+        String json = read(NOT_CONNECTED_DEVICE).replace("\"remainingTime\": []", "\"remainingTime\": null");
+
+        MieleDevice mieleDevice = Json.parse(json, MieleDevice.class);
+
+        assertThat(mieleDevice.state().remainingTimeParts()).isEmpty();
+        assertThat(mieleDevice.state().remainingTime()).isEmpty();
+    }
+
+    private static void testDeserialisation(String name, ThrowingConsumer<DeviceState> deviceStateThrowingConsumer) {
+        assertThat(parse(name, MieleDevice.class).state()).satisfies(deviceStateThrowingConsumer);
     }
 }

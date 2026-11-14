@@ -3,12 +3,15 @@ package net.yudichev.jiotty.connector.miele;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 
 @Immutable
@@ -21,13 +24,16 @@ interface BaseDeviceState extends MieleEvent {
 
     StateValue status();
 
+    /// @return the hours and minutes of the remaining time, or an empty list when the appliance reports none
     @JsonProperty("remainingTime")
-    Optional<int[]> remainingTimeParts();
+    @JsonSetter(nulls = Nulls.AS_EMPTY)
+    List<Integer> remainingTimeParts();
 
     @JsonIgnore
     @Value.Derived
     default Optional<Duration> remainingTime() {
-        return remainingTimeParts().map(hm -> hm.length == 2 ? Duration.ofHours(hm[0]).plusMinutes(hm[1]) : null);
+        List<Integer> parts = remainingTimeParts();
+        return parts.size() == 2 ? Optional.of(Duration.ofHours(parts.getFirst()).plusMinutes(parts.get(1))) : Optional.empty();
     }
 
     @JsonProperty("remoteEnable")

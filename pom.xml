@@ -174,11 +174,16 @@
                             <ignoreNonCompile>true</ignoreNonCompile>
                             <ignoredUsedUndeclaredDependencies>*</ignoredUsedUndeclaredDependencies>
                             <ignoredUnusedDeclaredDependencies>
-                                <!-- JSpecify @Nullable is CLASS-retention, so the bytecode analyzer can't see it used -->
+                                <!-- JSpecify @Nullable is CLASS-retention, so the bytecode analyser can't see it used -->
                                 <ignoredUnusedDeclaredDependency>org.jspecify:jspecify</ignoredUnusedDeclaredDependency>
                                 <!-- Error Prone's @GuardedBy is CLASS-retention too -->
                                 <ignoredUnusedDeclaredDependency>com.google.errorprone:error_prone_annotations</ignoredUnusedDeclaredDependency>
                             </ignoredUnusedDeclaredDependencies>
+                            <ignoredNonTestScopedDependencies>
+                                <!-- the same CLASS-retention annotations: where the tests use one too, the analyser sees only the tests' use -->
+                                <ignoredNonTestScopedDependency>org.jspecify:jspecify</ignoredNonTestScopedDependency>
+                                <ignoredNonTestScopedDependency>com.google.errorprone:error_prone_annotations</ignoredNonTestScopedDependency>
+                            </ignoredNonTestScopedDependencies>
                         </configuration>
                     </execution>
                 </executions>
