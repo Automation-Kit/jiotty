@@ -21,6 +21,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.Closeable.forCloseables;
 import static net.yudichev.jiotty.common.lang.Closeable.idempotent;
+import static net.yudichev.jiotty.user.ui.UIServerModule.Dependency;
 
 public final class OptionRegistryImpl extends BaseLifecycleComponent implements OptionRegistry {
     private static final Logger logger = LogManager.getLogger(OptionRegistryImpl.class);
@@ -29,10 +30,12 @@ public final class OptionRegistryImpl extends BaseLifecycleComponent implements 
     private final List<Closeable> optionsPersistenceRegistrations = new ArrayList<>();
     private final Listeners<Void> snapshotChangeListeners = new Listeners<>();
     private final OptionPersistence persistence;
+    private final OptionSaveListener saveListener;
 
     @Inject
-    public OptionRegistryImpl(OptionPersistence persistence) {
+    public OptionRegistryImpl(OptionPersistence persistence, @Dependency OptionSaveListener saveListener) {
         this.persistence = checkNotNull(persistence, "persistence");
+        this.saveListener = checkNotNull(saveListener, "saveListener");
     }
 
     @Override
@@ -44,6 +47,11 @@ public final class OptionRegistryImpl extends BaseLifecycleComponent implements 
             optionsByKey.put(option.meta().key(), option);
             Closeable persistenceRegistration = option.addChangeListener(theOption -> {
                 persistence.save(theOption);
+                try {
+                    saveListener.onSaved(theOption);
+                } catch (RuntimeException e) {
+                    logger.info("The save listener failed on option {}", theOption.meta().key(), e);
+                }
                 snapshotChangeListeners.notify(null);
             });
             optionsPersistenceRegistrations.add(persistenceRegistration);

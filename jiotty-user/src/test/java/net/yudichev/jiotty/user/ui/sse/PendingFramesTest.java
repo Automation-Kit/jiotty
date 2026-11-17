@@ -81,12 +81,12 @@ class PendingFramesTest {
 
     @Test
     void refusesAFrameOnceCapacityFramesArePendingAndAcceptsAgainOnceTaken() {
-        for (int i = 0; i < PendingFrames.CAPACITY; i++) {
+        for (int i = 0; i < SseChannel.MAX_PENDING_FRAMES_PER_CLIENT; i++) {
             assertThat(pendingFrames.offer(createUnsuperseded("update"))).isEqualTo(ACCEPTED);
         }
 
         assertThat(pendingFrames.offer(createUnsuperseded("update"))).isEqualTo(OVERFLOWED);
-        assertThat(pendingFrames.takeAll()).hasSize(PendingFrames.CAPACITY);
+        assertThat(pendingFrames.takeAll()).hasSize(SseChannel.MAX_PENDING_FRAMES_PER_CLIENT);
         assertThat(pendingFrames.offer(createUnsuperseded("update"))).isEqualTo(ACCEPTED);
     }
 
@@ -109,7 +109,7 @@ class PendingFramesTest {
     @Test
     void framesOfferedConcurrentlyAreEachTakenOnceInEachOfferersOrder() {
         int offerers = 4;
-        int framesPerOfferer = PendingFrames.CAPACITY / offerers;
+        int framesPerOfferer = SseChannel.MAX_PENDING_FRAMES_PER_CLIENT / offerers;
         executor = Executors.newFixedThreadPool(offerers + 1);
         ExecutorService testExecutor = executor;
         CompletableFuture<List<Void>> allOffers = IntStream.range(0, offerers)

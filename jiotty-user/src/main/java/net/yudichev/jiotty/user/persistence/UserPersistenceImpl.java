@@ -2,6 +2,8 @@ package net.yudichev.jiotty.user.persistence;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Iterables;
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
@@ -29,12 +31,18 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -44,6 +52,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
+import static net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig.DOMAIN_PREFIX_PLACEHOLDER;
 import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.Dependency;
 import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.DomainName;
 import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.Executor;
@@ -53,17 +62,56 @@ import static net.yudichev.jiotty.user.persistence.UserPersistenceModule.SchemaV
 
 @SuppressWarnings("JDBCPrepareStatementWithNonConstantString")
 public class UserPersistenceImpl extends BaseLifecycleComponent implements UserPersistence {
+    @VisibleForTesting
+    static final String USER_TABLE = "user";
+    @VisibleForTesting
+    static final String IDENTITY_TABLE = "identity";
+    @VisibleForTesting
+    static final String ACTIVITY_DAY_TABLE = "user_activity_day";
+    @VisibleForTesting
+    static final String ATTACHMENT_TABLE = "user_attachment";
+    static final String USER_TABLE_TEMPLATE = DOMAIN_PREFIX_PLACEHOLDER + USER_TABLE;
+    @VisibleForTesting
+    static final String IDENTITY_TABLE_TEMPLATE = DOMAIN_PREFIX_PLACEHOLDER + IDENTITY_TABLE;
+    @VisibleForTesting
+    static final String ACTIVITY_DAY_TABLE_TEMPLATE = DOMAIN_PREFIX_PLACEHOLDER + ACTIVITY_DAY_TABLE;
+    @VisibleForTesting
+    static final String ATTACHMENT_TABLE_TEMPLATE = DOMAIN_PREFIX_PLACEHOLDER + ATTACHMENT_TABLE;
+    private static final String USER_ID_FOREIGN_KEY_DDL = "FOREIGN KEY (user_id) REFERENCES " + USER_TABLE_TEMPLATE + "(id)";
     /// Shared with [UserSchemaMigrator], which adds the column to a store created before it existed: one statement, so a fresh store and a migrated one
     /// cannot end up with differently-shaped indexes. The `deleted_at IS NULL` matches what [#listInactiveSince] scans.
     static final String LAST_ACTIVE_AT_INDEX_DDL =
-            "CREATE INDEX IF NOT EXISTS %DOMAIN_PREFIX%user_last_active_at_idx ON %DOMAIN_PREFIX%user (last_active_at) WHERE deleted_at IS NULL;";
+            "CREATE INDEX IF NOT EXISTS " + DOMAIN_PREFIX_PLACEHOLDER + "user_last_active_at_idx ON " + USER_TABLE_TEMPLATE +
+            " (last_active_at) WHERE deleted_at IS NULL;";
+    @VisibleForTesting
+    static final String ACTIVITY_HISTORY_DISABLED_COLUMN = "activity_history_disabled";
+    static final String ACTIVITY_HISTORY_DISABLED_COLUMN_DDL = ACTIVITY_HISTORY_DISABLED_COLUMN + " boolean NOT NULL DEFAULT false";
+    /// Creates the {@value #ACTIVITY_DAY_TABLE} table. The table holds one row for each user, kind and UTC day that [#recordActivity] recorded while the
+    /// user's activity history was enabled.
+    static final String ACTIVITY_DAY_TABLE_DDL = "CREATE TABLE IF NOT EXISTS " + ACTIVITY_DAY_TABLE_TEMPLATE +
+                                                 """
+                                                 (
+                                                     user_id text NOT NULL,
+                                                     day date NOT NULL,
+                                                     kind text NOT NULL,
+                                                     PRIMARY KEY (user_id, day, kind),
+                                                 """ + USER_ID_FOREIGN_KEY_DDL + ");";
+    static final String ATTACHMENT_TABLE_DDL = "CREATE TABLE IF NOT EXISTS " + ATTACHMENT_TABLE_TEMPLATE +
+                                               """
+                                               (
+                                                   user_id text NOT NULL,
+                                                   name text NOT NULL,
+                                                   value jsonb NOT NULL,
+                                                   PRIMARY KEY (user_id, name),
+                                               """ + USER_ID_FOREIGN_KEY_DDL + ");";
     @VisibleForTesting
     static final String FAILED_COMMIT_READ_BACK_TASK = "reading back a user whose commit reported a failure";
     private static final Logger logger = LogManager.getLogger(UserPersistenceImpl.class);
     private static final String UNIQUE_VIOLATION_SQL_STATE = "23505";
     private static final List<String> BASE_INIT_STATEMENTS = ImmutableList.of(
+            "CREATE TABLE IF NOT EXISTS " + USER_TABLE_TEMPLATE +
             """
-            CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%user (
+             (
                 id text PRIMARY KEY,
                 email text NOT NULL UNIQUE,
                 display_name text,
@@ -71,21 +119,24 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                 created_at timestamptz NOT NULL,
                 updated_at timestamptz NOT NULL,
                 last_active_at timestamptz NOT NULL,
-                deleted_at timestamptz
-            );""",
+                deleted_at timestamptz,
+            """ + ACTIVITY_HISTORY_DISABLED_COLUMN_DDL + ");",
             LAST_ACTIVE_AT_INDEX_DDL,
+            ACTIVITY_DAY_TABLE_DDL,
+            ATTACHMENT_TABLE_DDL,
+            "CREATE TABLE IF NOT EXISTS " + IDENTITY_TABLE_TEMPLATE +
             """
-            CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%identity (
-                user_id text NOT NULL REFERENCES %DOMAIN_PREFIX%user(id),
+             (
+                user_id text NOT NULL,
                 provider text NOT NULL,
                 provider_user_id text NOT NULL,
                 created_at timestamptz NOT NULL,
                 updated_at timestamptz NOT NULL,
                 deleted_at timestamptz,
                 PRIMARY KEY (user_id, provider),
-                UNIQUE (provider, provider_user_id)
-            );""",
-            "CREATE INDEX IF NOT EXISTS %DOMAIN_PREFIX%identity_user_id_idx ON %DOMAIN_PREFIX%identity (user_id);"
+                UNIQUE (provider, provider_user_id),
+            """ + USER_ID_FOREIGN_KEY_DDL + ");",
+            "CREATE INDEX IF NOT EXISTS " + DOMAIN_PREFIX_PLACEHOLDER + "identity_user_id_idx ON " + IDENTITY_TABLE_TEMPLATE + " (user_id);"
     );
 
     private final DataSourceFactory dataSourceFactory;
@@ -100,7 +151,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     private final String selectAllUsersSql;
     private final String selectAllUsersIgnoringDeletionSql;
     private final String selectUserByIdWithDeletionSql;
-    private final String userExistsIgnoringDeletionSql;
+    private final String selectActivityHistoryDisabledSql;
     private final String selectIdentityByUserAndProviderSql;
     private final String selectIdentityByProviderUserIdSql;
     private final String selectActiveIdentityProvidersByUserSql;
@@ -121,6 +172,17 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     private final String touchLastActiveSql;
     private final String selectInactiveSinceSql;
     private final String softDeleteUserIfInactiveSql;
+    private final String insertActivityDaySql;
+    private final String updateActivityHistoryDisabledSql;
+    private final String deleteActivityDaysByUserSql;
+    private final String deleteActivityDaysBeforeSql;
+    private final String upsertAttachmentSql;
+    private final String deleteAttachmentsByUserSql;
+    private final String selectActivityDaysByUserSql;
+    private final String selectAttachmentsByUserSql;
+    private final String selectAllActivityHistoryDisabledSql;
+    private final String selectAllActivityDaysSinceSql;
+    private final String selectAllAttachmentsSql;
 
     private final UserStatePublisher publisher;
     private final TaskFailureReporter taskFailureReporter;
@@ -146,8 +208,8 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         this.timeProvider = checkNotNull(timeProvider, "timeProvider");
         checkArgument(schemaVersion > 0, "schemaVersion must be > 0, was %s", schemaVersion);
         var domain = new PersistenceDomain(checkNotNull(domainName, "domainName"));
-        String userTable = domain.prefix() + "user";
-        String identityTable = domain.prefix() + "identity";
+        String userTable = domain.prefix() + USER_TABLE;
+        String identityTable = domain.prefix() + IDENTITY_TABLE;
         domainConfig = new PersistenceDomainConfig(domain,
                                                    schemaVersion,
                                                    mergeInitStatements(BASE_INIT_STATEMENTS, checkNotNull(initStatements, "initStatements")),
@@ -168,7 +230,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                             " WHERE deleted_at IS NULL";
         selectAllUsersIgnoringDeletionSql = "SELECT id, email, display_name, timezone, created_at, updated_at, deleted_at FROM " + userTable;
         selectUserByIdWithDeletionSql = selectAllUsersIgnoringDeletionSql + " WHERE id=?";
-        userExistsIgnoringDeletionSql = "SELECT 1 FROM " + userTable + " WHERE id=?";
+        selectActivityHistoryDisabledSql = "SELECT " + ACTIVITY_HISTORY_DISABLED_COLUMN + " FROM " + userTable + " WHERE id=?";
         selectIdentityByUserAndProviderSql =
                 "SELECT provider_user_id, deleted_at FROM " + identityTable + " WHERE user_id=? AND provider=?";
         selectIdentityByProviderUserIdSql =
@@ -207,6 +269,24 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                                  " WHERE deleted_at IS NULL AND last_active_at<? ORDER BY last_active_at LIMIT ?";
         softDeleteUserIfInactiveSql =
                 "UPDATE " + userTable + " SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL AND last_active_at<?";
+        String activityDayTable = domain.prefix() + ACTIVITY_DAY_TABLE;
+        String attachmentTable = domain.prefix() + ATTACHMENT_TABLE;
+        insertActivityDaySql = "INSERT INTO " + activityDayTable + " (user_id, day, kind) VALUES (?,?,?) ON CONFLICT DO NOTHING";
+        updateActivityHistoryDisabledSql = "UPDATE " + userTable + " SET " + ACTIVITY_HISTORY_DISABLED_COLUMN + "=? WHERE id=?";
+        deleteActivityDaysByUserSql = "DELETE FROM " + activityDayTable + " WHERE user_id=?";
+        deleteActivityDaysBeforeSql = "DELETE FROM " + activityDayTable + " WHERE day<?";
+        // The statement writes no row when the stored `value` equals the new one. Its row count is therefore 1 when the attachment is inserted or changed, and
+        // 0 when the attachment is unchanged.
+        upsertAttachmentSql = "INSERT INTO " + attachmentTable +
+                              """
+                               AS stored (user_id, name, value) VALUES (?,?,?::jsonb)
+                              ON CONFLICT (user_id, name) DO UPDATE SET value=EXCLUDED.value WHERE stored.value IS DISTINCT FROM EXCLUDED.value""";
+        deleteAttachmentsByUserSql = "DELETE FROM " + attachmentTable + " WHERE user_id=?";
+        selectActivityDaysByUserSql = "SELECT kind, day FROM " + activityDayTable + " WHERE user_id=?";
+        selectAttachmentsByUserSql = "SELECT name, value FROM " + attachmentTable + " WHERE user_id=?";
+        selectAllActivityHistoryDisabledSql = "SELECT id, " + ACTIVITY_HISTORY_DISABLED_COLUMN + " FROM " + userTable;
+        selectAllActivityDaysSinceSql = "SELECT user_id, kind, day FROM " + activityDayTable + " WHERE day>=?";
+        selectAllAttachmentsSql = "SELECT user_id, name, value FROM " + attachmentTable;
     }
 
     @Override
@@ -276,7 +356,42 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     public CompletableFuture<Boolean> touchLastActive(String userId, Instant activeAt) {
         validateUserId(userId);
         checkNotNull(activeAt, "activeAt");
-        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doTouchLastActive(userId, activeAt)));
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(
+                () -> withConnection("Failed to record activity for user ", userId, connection -> touchLastActive(connection, userId, activeAt))));
+    }
+
+    @Override
+    public CompletableFuture<ActivityRecordOutcome> recordActivity(String userId, String kind, LocalDate day) {
+        validateUserId(userId);
+        checkNotNull(kind, "kind");
+        checkNotNull(day, "day");
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doRecordActivity(userId, kind, day)));
+    }
+
+    @Override
+    public CompletableFuture<Boolean> setActivityHistoryDisabled(String userId, boolean disabled) {
+        validateUserId(userId);
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doSetActivityHistoryDisabled(userId, disabled)));
+    }
+
+    @Override
+    public CompletableFuture<Boolean> putAttachment(String userId, String name, String json) {
+        validateUserId(userId);
+        checkNotNull(name, "name");
+        UserPersistence.checkAttachmentLength(name, json);
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doPutAttachment(userId, name, json)));
+    }
+
+    @Override
+    public CompletableFuture<Integer> purgeActivityDaysBefore(LocalDate day) {
+        checkNotNull(day, "day");
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doPurgeActivityDaysBefore(day)));
+    }
+
+    @Override
+    public CompletableFuture<Optional<UserRecord>> readRecord(String userId) {
+        validateUserId(userId);
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> Optional.ofNullable(doReadRecord(userId))));
     }
 
     @Override
@@ -290,7 +405,8 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     public CompletableFuture<ConditionalSoftDeleteOutcome> softDeleteIfInactiveSince(String userId, Instant cutoff) {
         validateUserId(userId);
         checkNotNull(cutoff, "cutoff");
-        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> doSoftDeleteIfInactiveSince(userId, cutoff)));
+        // When no user is soft-deleted, the outcome says which of the three reasons applies.
+        return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> softDeleteInTransaction(userId, cutoff)));
     }
 
     @Override
@@ -327,7 +443,9 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     public CompletableFuture<Void> softDelete(String userId) {
         validateUserId(userId);
         return whenStartedAndNotLifecycling(() -> executor.submitOrFail(() -> {
-            doSoftDelete(userId);
+            // A repeated call for a soft-deleted user changes nothing and succeeds, as a repeated `restore` or `hardDelete` does, because the update only
+            // matches a user who is not soft-deleted.
+            softDeleteInTransaction(userId, null);
             return null;
         }));
     }
@@ -366,6 +484,19 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
             activateOnExecutor("subscribe to an identity",
                                () -> doResolveByIdentity(identity),
                                resolution -> publisher.activate(subscription, resolution),
+                               listener::onSubscriptionFailed);
+            return subscription;
+        });
+    }
+
+    @Override
+    public Closeable subscribe(LocalDate earliestDay, UserRecordListener listener) {
+        checkNotNull(earliestDay, "earliestDay");
+        return whenStartedAndNotLifecycling(() -> {
+            SerialisedListeners<UserRecordListener>.Subscription subscription = publisher.newSubscription(earliestDay, listener);
+            activateOnExecutor("subscribe to user records",
+                               () -> doListRecords(earliestDay),
+                               image -> publisher.activateRecords(subscription, image),
                                listener::onSubscriptionFailed);
             return subscription;
         });
@@ -453,44 +584,20 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     }
 
     private @Nullable UserProfile doGetByIdentity(UserIdentity identity) {
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                return selectUserByIdentity(connection, identity);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to read user for identity " + identity, e);
-        }
+        return withConnection("Failed to read user for identity ", identity, connection -> selectUserByIdentity(connection, identity));
     }
 
     private IdentityResolution doResolveByIdentity(UserIdentity identity) {
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                return resolveUserByIdentity(connection, identity);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to resolve user for identity " + identity, e);
-        }
+        return withConnection("Failed to resolve user for identity ", identity, connection -> resolveUserByIdentity(connection, identity));
     }
 
     private @Nullable UserProfile doGetById(String userId) {
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                return selectUserById(connection, userId);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to read user " + userId, e);
-        }
+        return withConnection("Failed to read user ", userId, connection -> selectUserById(connection, userId));
     }
 
-    /// @return `null` when no row exists for `userId`, whether or not it was ever soft-deleted
+    /// @return `null` when no row exists for `userId`; a soft-deleted user has a row
     private @Nullable UserProfile doGetByIdIgnoringDeletion(String userId) {
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                return selectUserByIdIgnoringDeletion(connection, userId);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to read user ignoring deletion " + userId, e);
-        }
+        return withConnection("Failed to read user ignoring deletion ", userId, connection -> selectUserByIdIgnoringDeletion(connection, userId));
     }
 
     private List<UserProfile> doListAllProfiles() {
@@ -505,114 +612,252 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     }
 
     private boolean doExistsIgnoringDeletion(String userId) {
-        // The intermediate list holds at most one row (id is the primary key) — the price of reusing the shared query plumbing over a bespoke JDBC block.
-        return !queryList(userExistsIgnoringDeletionSql,
-                          stmt -> stmt.setString(1, userId),
-                          _ -> Boolean.TRUE,
-                          "Failed to check existence of user " + userId).isEmpty();
+        return withConnection("Failed to check existence of user ", userId, connection -> selectActivityHistoryDisabled(connection, userId) != null);
     }
 
     private UserProfile doUpdateProfile(String userId, UserProfileInput profile) {
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                connection.setAutoCommit(false);
-                try {
-                    Instant now = persistenceNow();
-                    doUpdate(connection, updateUserSql, stmt -> {
-                        stmt.setString(1, profile.email());
-                        stmt.setString(2, profile.displayName().orElse(null));
-                        stmt.setString(3, profile.timezone().getId());
-                        stmt.setTimestamp(4, Timestamp.from(now));
-                        stmt.setString(5, userId);
-                    });
-                    UserProfile updated = selectUserById(connection, userId);
-                    checkState(updated != null, "User %s not found after update", userId);
-                    commit(connection, userId, ImmutableList.of());
-                    publisher.publishChanged(new UserProfileWithDeletion(updated, Optional.empty()), ImmutableList.of(), ImmutableList.of());
-                    return updated;
-                } catch (SQLException e) {
-                    rollbackQuietly(connection);
-                    throw new RuntimeException("Failed to update user " + userId, e);
-                } finally {
-                    endTransaction(connection);
-                }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to update user " + userId, e);
-        }
+        return inTransaction("Failed to update user ", userId, connection -> {
+            Instant now = persistenceNow();
+            doUpdate(connection, updateUserSql, stmt -> {
+                stmt.setString(1, profile.email());
+                stmt.setString(2, profile.displayName().orElse(null));
+                stmt.setString(3, profile.timezone().getId());
+                stmt.setTimestamp(4, Timestamp.from(now));
+                stmt.setString(5, userId);
+            });
+            UserProfile updatedProfile = selectUserById(connection, userId);
+            assert updatedProfile != null : "the update matched this user's live row, which this transaction keeps locked until it commits";
+            commit(connection, userId, ImmutableList.of());
+            publisher.publishChanged(new UserProfileWithDeletion(updatedProfile, Optional.empty()), ImmutableList.of(), ImmutableList.of());
+            return updatedProfile;
+        });
     }
 
     private void doUpdateAllIdentities(String userId, List<UserIdentity> identities) {
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                connection.setAutoCommit(false);
-                try {
-                    UserProfileWithDeletion user = selectUserByIdWithDeletion(connection, userId);
-                    checkState(user != null && user.deletedAt().isEmpty(), "User %s not found or deleted", userId);
-                    Instant now = persistenceNow();
-                    var identitiesByProvider = LinkedHashMap.<String, UserIdentity>newLinkedHashMap(identities.size());
-                    identities.forEach(identity -> identitiesByProvider.put(identity.provider(), identity));
-                    boolean anyIdentityWritten = false;
-                    var linkedIdentitiesBuilder = ImmutableList.<UserIdentity>builderWithExpectedSize(identitiesByProvider.size());
-                    var unlinkedIdentitiesBuilder = ImmutableList.<UserIdentity>builderWithExpectedSize(identitiesByProvider.size());
-                    for (UserIdentity identity : identitiesByProvider.values()) {
-                        String existingUserId = selectIdentityByProviderUserId(connection, identity);
-                        checkState(existingUserId == null || existingUserId.equals(userId), "%s already linked to another user", identity);
-                        IdentityLinkRecord identityByProvider = selectIdentityByUserAndProvider(connection, userId, identity.provider());
-                        if (identityByProvider == null) {
-                            insertIdentity(connection, userId, identity, now);
+        inTransaction("Failed to update identities of user ", userId, connection -> {
+            UserProfileWithDeletion user = selectUserByIdWithDeletion(connection, userId);
+            checkState(user != null && user.deletedAt().isEmpty(), "User %s not found or deleted", userId);
+            Instant now = persistenceNow();
+            boolean anyIdentityWritten = false;
+            Set<String> providers = HashSet.newHashSet(identities.size());
+            var linkedIdentitiesBuilder = ImmutableList.<UserIdentity>builderWithExpectedSize(identities.size());
+            var unlinkedIdentitiesBuilder = ImmutableList.<UserIdentity>builderWithExpectedSize(identities.size());
+            for (UserIdentity identity : identities) {
+                providers.add(identity.provider());
+                String existingUserId = selectIdentityByProviderUserId(connection, identity);
+                checkState(existingUserId == null || existingUserId.equals(userId), "%s already linked to another user", identity);
+                IdentityLinkRecord identityByProvider = selectIdentityByUserAndProvider(connection, userId, identity.provider());
+                if (identityByProvider == null) {
+                    insertIdentity(connection, userId, identity, now);
+                    linkedIdentitiesBuilder.add(identity);
+                    anyIdentityWritten = true;
+                } else {
+                    boolean repointed = !identityByProvider.providerUserId().equals(identity.providerUserId());
+                    if (repointed || !identityByProvider.active()) {
+                        updateIdentity(connection, userId, identity, now);
+                        anyIdentityWritten = true;
+                        if (repointed) {
+                            unlinkedIdentitiesBuilder.add(new UserIdentity(identity.provider(), identityByProvider.providerUserId()));
                             linkedIdentitiesBuilder.add(identity);
-                            anyIdentityWritten = true;
-                        } else {
-                            boolean repointed = !identityByProvider.providerUserId().equals(identity.providerUserId());
-                            if (repointed || !identityByProvider.active()) {
-                                updateIdentity(connection, userId, identity, now);
-                                anyIdentityWritten = true;
-                                if (repointed) {
-                                    unlinkedIdentitiesBuilder.add(new UserIdentity(identity.provider(), identityByProvider.providerUserId()));
-                                    linkedIdentitiesBuilder.add(identity);
-                                }
-                            }
                         }
                     }
-                    // A dropped provider's row keeps resolving to this user through resolveUserByIdentitySql, which ignores its deletion mark.
-                    for (String existingProvider : selectActiveIdentityProvidersByUser(connection, userId)) {
-                        if (!identitiesByProvider.containsKey(existingProvider)) {
-                            updateIdentityDeletedAt(connection, userId, existingProvider, now, now);
-                            anyIdentityWritten = true;
-                        }
-                    }
-                    List<UserIdentity> linkedIdentities = linkedIdentitiesBuilder.build();
-                    List<UserIdentity> unlinkedIdentities = unlinkedIdentitiesBuilder.build();
-                    commit(connection, userId, Iterables.concat(linkedIdentities, unlinkedIdentities));
-                    if (anyIdentityWritten) {
-                        publisher.publishChanged(user, linkedIdentities, unlinkedIdentities);
-                    }
-                } catch (SQLException e) {
-                    rollbackQuietly(connection);
-                    throw new RuntimeException("Failed to update identities of user " + userId, e);
-                } finally {
-                    endTransaction(connection);
                 }
             }
+            // The loop below sets `deleted_at` on the identity row of each provider missing from `identities`. `resolveUserByIdentitySql` reads identity rows
+            // whatever their `deleted_at`, so such a row continues to resolve to this user.
+            for (String existingProvider : selectActiveIdentityProvidersByUser(connection, userId)) {
+                if (!providers.contains(existingProvider)) {
+                    updateIdentityDeletedAt(connection, userId, existingProvider, now, now);
+                    anyIdentityWritten = true;
+                }
+            }
+            List<UserIdentity> linkedIdentities = linkedIdentitiesBuilder.build();
+            List<UserIdentity> unlinkedIdentities = unlinkedIdentitiesBuilder.build();
+            commit(connection, userId, Iterables.concat(linkedIdentities, unlinkedIdentities));
+            if (anyIdentityWritten) {
+                publisher.publishChanged(user, linkedIdentities, unlinkedIdentities);
+            }
+            return null;
+        });
+    }
+
+    private ActivityRecordOutcome doRecordActivity(String userId, String kind, LocalDate day) {
+        return inTransaction("Failed to record an activity day for user ", userId, connection -> {
+            Boolean historyDisabled = selectActivityHistoryDisabled(connection, userId);
+            if (historyDisabled == null) {
+                return ActivityRecordOutcome.ABSENT;
+            }
+            touchLastActive(connection, userId, day.atStartOfDay(ZoneOffset.UTC).toInstant());
+            boolean dayAdded = !historyDisabled && doUpdate(connection, insertActivityDaySql, -1, stmt -> {
+                stmt.setString(1, userId);
+                stmt.setObject(2, day);
+                stmt.setString(3, kind);
+            }) > 0;
+            commitAndPublishRecord(connection, userId, historyDisabled, dayAdded);
+            return historyDisabled ? ActivityRecordOutcome.HISTORY_OFF : ActivityRecordOutcome.RECORDED;
+        });
+    }
+
+    /// @return whether this call advanced the user's last-active instant to `activeAt`
+    private boolean touchLastActive(Connection connection, String userId, Instant activeAt) throws SQLException {
+        Timestamp at = Timestamp.from(activeAt);
+        return doUpdate(connection, touchLastActiveSql, -1, stmt -> {
+            stmt.setTimestamp(1, at);
+            stmt.setString(2, userId);
+            stmt.setTimestamp(3, at);
+        }) > 0;
+    }
+
+    private boolean doSetActivityHistoryDisabled(String userId, boolean disabled) {
+        return inTransaction("Failed to switch the activity history of user ", userId, connection -> {
+            Boolean currentlyDisabled = selectActivityHistoryDisabled(connection, userId);
+            if (currentlyDisabled == null) {
+                return false;
+            }
+            if (currentlyDisabled != disabled) {
+                doUpdate(connection, updateActivityHistoryDisabledSql, stmt -> {
+                    stmt.setBoolean(1, disabled);
+                    stmt.setString(2, userId);
+                });
+                int dayRows = disabled ? doUpdate(connection, deleteActivityDaysByUserSql, -1, stmt -> stmt.setString(1, userId)) : 0;
+                commitAndPublishRecord(connection, userId, disabled, true);
+                if (disabled) {
+                    logger.info("[{}] Activity history disabled: {} activity day row(s) deleted", userId, dayRows);
+                } else {
+                    logger.info("[{}] Activity history enabled", userId);
+                }
+            }
+            return true;
+        });
+    }
+
+    private boolean doPutAttachment(String userId, String name, String json) {
+        return inTransaction("Failed to store an attachment of user ", userId, connection -> {
+            Boolean historyDisabled = selectActivityHistoryDisabled(connection, userId);
+            if (historyDisabled == null) {
+                return false;
+            }
+            boolean attachmentChanged = doUpdate(connection, upsertAttachmentSql, -1, stmt -> {
+                stmt.setString(1, userId);
+                stmt.setString(2, name);
+                stmt.setString(3, json);
+            }) > 0;
+            commitAndPublishRecord(connection, userId, historyDisabled, attachmentChanged);
+            return true;
+        });
+    }
+
+    private int doPurgeActivityDaysBefore(LocalDate day) {
+        return inTransaction("Failed to purge activity days before ", day, connection -> {
+            int dayRows = doUpdate(connection, deleteActivityDaysBeforeSql, -1, stmt -> stmt.setObject(1, day));
+            try {
+                connection.commit();
+            } catch (SQLException e) {
+                // The commit may have deleted the activity days of any number of users, so no single user's record can be read back and published.
+                publisher.failRecordSubscriptions(e);
+                throw e;
+            }
+            if (dayRows > 0) {
+                publisher.publishDaysPurged(day);
+            }
+            return dayRows;
+        });
+    }
+
+    /// @return `null` when no row exists for `userId`; a soft-deleted user has a row
+    private @Nullable UserRecord doReadRecord(String userId) {
+        return withConnection("Failed to read the record of user ", userId, connection -> selectRecord(connection, userId));
+    }
+
+    /// Reads every user's record with three statements, which read:
+    ///
+    /// - whether each user's activity history is disabled;
+    /// - the users' activity days from `earliestDay` on;
+    /// - the users' attachments.
+    ///
+    /// The statements run on one connection outside a transaction. They read one consistent state, because every write to these tables runs as a task on
+    /// the same executor as this read, one task at a time.
+    ///
+    /// @return every user's record, holding no activity day before `earliestDay`
+    private List<UserRecord> doListRecords(LocalDate earliestDay) {
+        return withConnection("Failed to list user records", connection -> {
+            // The three statements return their rows in unrelated orders, so the builder for each activity-day row and attachment row is looked up in
+            // `recordBuildersByUserId` by the row's user id.
+            Map<String, UserRecordBuilder> recordBuildersByUserId = new HashMap<>();
+            forEachRow(connection, selectAllActivityHistoryDisabledSql, _ -> {}, rs -> {
+                String userId = rs.getString(1);
+                recordBuildersByUserId.put(userId, new UserRecordBuilder(userId, rs.getBoolean(2)));
+            });
+            forEachRow(connection, selectAllActivityDaysSinceSql, stmt -> stmt.setObject(1, earliestDay), rs -> {
+                UserRecordBuilder recordBuilder = recordBuildersByUserId.get(rs.getString(1));
+                assert recordBuilder != null : "an activity day row references a user row";
+                recordBuilder.addActivityDay(rs.getString(2), rs.getObject(3, LocalDate.class));
+            });
+            forEachRow(connection, selectAllAttachmentsSql, _ -> {}, rs -> {
+                UserRecordBuilder recordBuilder = recordBuildersByUserId.get(rs.getString(1));
+                assert recordBuilder != null : "an attachment row references a user row";
+                recordBuilder.addAttachment(rs.getString(2), rs.getString(3));
+            });
+            var recordsBuilder = ImmutableList.<UserRecord>builderWithExpectedSize(recordBuildersByUserId.size());
+            recordBuildersByUserId.values().forEach(recordBuilder -> recordsBuilder.add(recordBuilder.build()));
+            return recordsBuilder.build();
+        });
+    }
+
+    /// Commits a write to `userId`'s record and, when the write changed the record, publishes the record as the write left it. A commit that reports a
+    /// failure may still have taken effect, so the record is then read again from the database and published before the failure propagates.
+    ///
+    /// @param historyDisabled whether the user's activity history is disabled as the write leaves it
+    /// @param recordChanged   whether the write changed any value that a [UserRecord] holds
+    private void commitAndPublishRecord(Connection connection, String userId, boolean historyDisabled, boolean recordChanged) throws SQLException {
+        UserRecord record = recordChanged ? selectRecord(connection, userId, historyDisabled) : null;
+        try {
+            connection.commit();
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to update identities of user " + userId, e);
+            if (recordChanged) {
+                publishRecordAfterFailedCommit(userId);
+            }
+            throw e;
+        }
+        if (record != null) {
+            publisher.publishRecordChanged(record);
         }
     }
 
-    private boolean doTouchLastActive(String userId, Instant activeAt) {
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                Timestamp at = Timestamp.from(activeAt);
-                return doUpdate(connection, touchLastActiveSql, -1, stmt -> {
-                    stmt.setTimestamp(1, at);
-                    stmt.setString(2, userId);
-                    stmt.setTimestamp(3, at);
-                }) > 0;
-            }
+    private void publishRecordAfterFailedCommit(String userId) {
+        try (Connection connection = dataSource.getConnection()) {
+            UserRecord record = selectRecord(connection, userId);
+            assert record != null : "a write that changed a record found its user, and no other write has run since";
+            publisher.publishRecordChanged(record);
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to record activity for user " + userId, e);
+            publisher.failRecordSubscriptions(e);
+            reportFailedCommitReadBack(userId, e);
         }
+    }
+
+    /// @return `null` when no row exists for `userId`; a soft-deleted user has a row
+    private @Nullable UserRecord selectRecord(Connection connection, String userId) throws SQLException {
+        Boolean historyDisabled = selectActivityHistoryDisabled(connection, userId);
+        return historyDisabled == null ? null : selectRecord(connection, userId, historyDisabled);
+    }
+
+    /// Reads the record of a user whose row exists, with one statement for the user's activity days and one for the user's attachments.
+    private UserRecord selectRecord(Connection connection, String userId, boolean historyDisabled) throws SQLException {
+        var recordBuilder = new UserRecordBuilder(userId, historyDisabled);
+        forEachRow(connection,
+                   selectActivityDaysByUserSql,
+                   stmt -> stmt.setString(1, userId),
+                   rs -> recordBuilder.addActivityDay(rs.getString(1), rs.getObject(2, LocalDate.class)));
+        forEachRow(connection,
+                   selectAttachmentsByUserSql,
+                   stmt -> stmt.setString(1, userId),
+                   rs -> recordBuilder.addAttachment(rs.getString(1), rs.getString(2)));
+        return recordBuilder.build();
+    }
+
+    /// @return `null` when no row exists for `userId`; a soft-deleted user has a row
+    private @Nullable Boolean selectActivityHistoryDisabled(Connection connection, String userId) throws SQLException {
+        return selectUserByIdUsing(connection, selectActivityHistoryDisabledSql, userId, rs -> rs.getBoolean(1));
     }
 
     private List<UserProfile> doListInactiveSince(Instant cutoff, int limit) {
@@ -630,32 +875,11 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     }
 
     private <T> List<T> queryList(String sql, SqlConsumer<PreparedStatement> paramSetter, SqlFunction<ResultSet, T> rowMapper, String failureDescription) {
-        try {
-            try (Connection connection = dataSource.getConnection();
-                 PreparedStatement stmt = connection.prepareStatement(sql)) {
-                paramSetter.accept(stmt);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    var result = ImmutableList.<T>builder();
-                    while (rs.next()) {
-                        result.add(rowMapper.apply(rs));
-                    }
-                    return result.build();
-                }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException(failureDescription, e);
-        }
-    }
-
-    /// Idempotent: the `WHERE deleted_at IS NULL` guard makes a repeat call a no-op (0 rows), mirroring restore/hardDelete — a re-issued soft-delete (e.g.
-    /// crash-recovery reconciliation) must not fail.
-    private void doSoftDelete(String userId) {
-        softDeleteInTransaction(userId, null);
-    }
-
-    /// Unlike [#doSoftDelete] a zero-row outcome here is reported rather than committed over, and says which of three things happened.
-    private ConditionalSoftDeleteOutcome doSoftDeleteIfInactiveSince(String userId, Instant cutoff) {
-        return softDeleteInTransaction(userId, cutoff);
+        return withConnection(failureDescription, connection -> {
+            var resultBuilder = ImmutableList.<T>builder();
+            forEachRow(connection, sql, paramSetter, rs -> resultBuilder.add(rowMapper.apply(rs)));
+            return resultBuilder.build();
+        });
     }
 
     /// Soft-deletes the user and the identities that must share their deletion timestamp, so [#restore] can match them again, in one transaction.
@@ -664,49 +888,37 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     ///               transaction; when `null` the delete is unconditional and idempotent, and the outcome is always
     ///               [ConditionalSoftDeleteOutcome#SOFT_DELETED]
     private ConditionalSoftDeleteOutcome softDeleteInTransaction(String userId, @Nullable Instant cutoff) {
-        String failureDescription = (cutoff == null ? "Failed to delete user " : "Failed to delete inactive user ") + userId;
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                connection.setAutoCommit(false);
-                try {
-                    Instant now = persistenceNow();
-                    int userRows = doUpdate(connection,
-                                            cutoff == null ? softDeleteUserSql : softDeleteUserIfInactiveSql,
-                                            -1,
-                                            stmt -> {
-                                                stmt.setTimestamp(1, Timestamp.from(now));
-                                                stmt.setTimestamp(2, Timestamp.from(now));
-                                                stmt.setString(3, userId);
-                                                if (cutoff != null) {
-                                                    stmt.setTimestamp(4, Timestamp.from(cutoff));
-                                                }
-                                            });
-                    if (cutoff != null && userRows == 0) {
-                        // Classified inside the same transaction, so the answer cannot be overtaken between the update and the explanation.
-                        ConditionalSoftDeleteOutcome outcome = classifyMissedConditionalDelete(connection, userId);
-                        connection.rollback();
-                        return outcome;
-                    }
-                    doUpdate(connection,
-                             softDeleteIdentitiesSql,
-                             -1,
-                             stmt -> {
-                                 stmt.setTimestamp(1, Timestamp.from(now));
-                                 stmt.setTimestamp(2, Timestamp.from(now));
-                                 stmt.setString(3, userId);
-                             });
-                    commitAndPublishState(connection, userId);
-                    return ConditionalSoftDeleteOutcome.SOFT_DELETED;
-                } catch (SQLException e) {
-                    rollbackQuietly(connection);
-                    throw new RuntimeException(failureDescription, e);
-                } finally {
-                    endTransaction(connection);
-                }
+        return inTransaction(cutoff == null ? "Failed to delete user " : "Failed to delete inactive user ", userId, connection -> {
+            Instant now = persistenceNow();
+            int userRows = doUpdate(connection,
+                                    cutoff == null ? softDeleteUserSql : softDeleteUserIfInactiveSql,
+                                    -1,
+                                    stmt -> {
+                                        stmt.setTimestamp(1, Timestamp.from(now));
+                                        stmt.setTimestamp(2, Timestamp.from(now));
+                                        stmt.setString(3, userId);
+                                        if (cutoff != null) {
+                                            stmt.setTimestamp(4, Timestamp.from(cutoff));
+                                        }
+                                    });
+            if (cutoff != null && userRows == 0) {
+                // Every write to the user table runs as a task on `executor`, one task at a time, so no write changes the user's row between the update above
+                // and the read in `classifyMissedConditionalDelete`.
+                ConditionalSoftDeleteOutcome outcome = classifyMissedConditionalDelete(connection, userId);
+                connection.rollback();
+                return outcome;
             }
-        } catch (SQLException e) {
-            throw new RuntimeException(failureDescription, e);
-        }
+            doUpdate(connection,
+                     softDeleteIdentitiesSql,
+                     -1,
+                     stmt -> {
+                         stmt.setTimestamp(1, Timestamp.from(now));
+                         stmt.setTimestamp(2, Timestamp.from(now));
+                         stmt.setString(3, userId);
+                     });
+            commitAndPublishState(connection, userId);
+            return ConditionalSoftDeleteOutcome.SOFT_DELETED;
+        });
     }
 
     /// Why the conditional statement matched nothing: the row is gone, it is already soft-deleted, or the user has been active since the cutoff. Only the last
@@ -725,63 +937,88 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         }
     }
 
-    /// @return completes once every state subscriber has applied the removal
+    /// @return a future that completes once every subscribed [UserRecordListener] and [UserStateListener] has applied the removal, and completes
+    ///         exceptionally if one of them fails to apply it
     private CompletableFuture<Void> doHardDelete(String userId) {
-        try {
-            try (Connection connection = dataSource.getConnection()) {
-                connection.setAutoCommit(false);
-                try {
-                    int identityRows = doUpdate(connection, hardDeleteIdentitiesSql, -1, stmt -> stmt.setString(1, userId));
-                    int userRows = doUpdate(connection, hardDeleteUserSql, -1, stmt -> stmt.setString(1, userId));
-                    // If this commit reports a failure, the caller's retry delivers the removal again whatever the commit did.
-                    connection.commit();
-                    logger.info("Hard-deleted user {}: {} identity row(s), {} user row(s)", userId, identityRows, userRows);
-                    return publisher.publishRemoved(userId);
-                } catch (SQLException e) {
-                    rollbackQuietly(connection);
-                    throw new RuntimeException("Failed hard-deleting user " + userId, e);
-                } finally {
-                    endTransaction(connection);
-                }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed hard-deleting user " + userId, e);
-        }
+        return inTransaction("Failed hard-deleting user ", userId, connection -> {
+            int activityDayRows = doUpdate(connection, deleteActivityDaysByUserSql, -1, stmt -> stmt.setString(1, userId));
+            int attachmentRows = doUpdate(connection, deleteAttachmentsByUserSql, -1, stmt -> stmt.setString(1, userId));
+            int identityRows = doUpdate(connection, hardDeleteIdentitiesSql, -1, stmt -> stmt.setString(1, userId));
+            int userRows = doUpdate(connection, hardDeleteUserSql, -1, stmt -> stmt.setString(1, userId));
+            // When this commit throws, the hard delete fails, and a repeated `hardDelete` call publishes the removal whether or not this commit took effect.
+            connection.commit();
+            logger.info("[{}] Hard-deleted: {} activity day row(s), {} attachment row(s), {} identity row(s), {} user row(s)",
+                        userId, activityDayRows, attachmentRows, identityRows, userRows);
+            return publisher.publishRemoved(userId);
+        });
     }
 
     private void doRestore(String userId) {
+        inTransaction("Failed to restore user ", userId, connection -> {
+            UserProfileWithDeletion existingUser = selectUserByIdWithDeletion(connection, userId);
+            Optional<Instant> deletedAt = existingUser == null ? Optional.empty() : existingUser.deletedAt();
+            if (deletedAt.isPresent()) {
+                Instant now = persistenceNow();
+                doUpdate(connection, restoreUserSql, 1, stmt -> {
+                    stmt.setTimestamp(1, Timestamp.from(now));
+                    stmt.setString(2, userId);
+                });
+                // `restoreIdentitiesSql` restores the identities whose `deleted_at` equals the user's `deleted_at`, which are the identities soft-deleted
+                // together with the user. An identity soft-deleted at any other time keeps its `deleted_at`.
+                doUpdate(connection, restoreIdentitiesSql, -1, stmt -> {
+                    stmt.setTimestamp(1, Timestamp.from(now));
+                    stmt.setString(2, userId);
+                    stmt.setTimestamp(3, Timestamp.from(deletedAt.get()));
+                });
+                commitAndPublishState(connection, userId);
+            } else {
+                // This branch writes nothing, so `existingUser` is the user's state after the commit, or `null` when the user has no row.
+                commitAndPublish(connection, userId, existingUser);
+            }
+            return null;
+        });
+    }
+
+    /// Runs `transaction` on a connection with auto-commit off, and rolls back any write that `transaction` leaves uncommitted.
+    ///
+    /// @param <T>         the type of the transaction's result
+    /// @param transaction must commit what it writes
+    /// @throws RuntimeException if `transaction` or obtaining the connection fails with an [SQLException]; its message is `failureDescriptionPrefix` followed
+    ///                          by `failureSubject`
+    private <T> T inTransaction(String failureDescriptionPrefix, Object failureSubject, SqlFunction<Connection, T> transaction) {
+        return withConnection(failureDescriptionPrefix, failureSubject, connection -> {
+            connection.setAutoCommit(false);
+            try {
+                return transaction.apply(connection);
+            } catch (SQLException e) {
+                rollbackQuietly(connection);
+                throw e;
+            } finally {
+                endTransaction(connection);
+            }
+        });
+    }
+
+    /// Runs `work` on a connection of its own.
+    ///
+    /// @param <T> the type of the work's result
+    /// @throws RuntimeException if `work` or obtaining the connection fails with an [SQLException]; its message is `failureDescription`
+    private <T> T withConnection(String failureDescription, SqlFunction<Connection, T> work) {
+        return withConnection(failureDescription, "", work);
+    }
+
+    /// Runs `work` on a connection of its own.
+    ///
+    /// @param <T> the type of the work's result
+    /// @throws RuntimeException if `work` or obtaining the connection fails with an [SQLException]; its message is `failureDescriptionPrefix` followed by
+    ///                          `failureSubject`
+    private <T> T withConnection(String failureDescriptionPrefix, Object failureSubject, SqlFunction<Connection, T> work) {
         try {
             try (Connection connection = dataSource.getConnection()) {
-                connection.setAutoCommit(false);
-                try {
-                    UserProfileWithDeletion existingUser = selectUserByIdWithDeletion(connection, userId);
-                    Optional<Instant> deletedAt = existingUser == null ? Optional.empty() : existingUser.deletedAt();
-                    if (deletedAt.isPresent()) {
-                        Instant now = persistenceNow();
-                        doUpdate(connection, restoreUserSql, 1, stmt -> {
-                            stmt.setTimestamp(1, Timestamp.from(now));
-                            stmt.setString(2, userId);
-                        });
-                        // Only revive the identities soft-deleted as part of this account deletion (same timestamp as the user), not ones removed earlier.
-                        doUpdate(connection, restoreIdentitiesSql, -1, stmt -> {
-                            stmt.setTimestamp(1, Timestamp.from(now));
-                            stmt.setString(2, userId);
-                            stmt.setTimestamp(3, Timestamp.from(deletedAt.get()));
-                        });
-                        commitAndPublishState(connection, userId);
-                    } else {
-                        // Nothing was written, so the row read above is what the transaction leaves.
-                        commitAndPublish(connection, userId, existingUser);
-                    }
-                } catch (SQLException e) {
-                    rollbackQuietly(connection);
-                    throw new RuntimeException("Failed to restore user " + userId, e);
-                } finally {
-                    endTransaction(connection);
-                }
+                return work.apply(connection);
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to restore user " + userId, e);
+            throw new RuntimeException(failureDescriptionPrefix + failureSubject, e);
         }
     }
 
@@ -816,10 +1053,15 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                 publisher.publishResolution(identity, resolveUserByIdentity(connection, identity));
             }
         } catch (SQLException e) {
-            // The id stays out of the report: it reaches an unlabelled admin alert, which the erasure cascade purges by label and so would never reach.
-            logger.info("[{}] Failed reading back a user whose commit reported a failure", userId, e);
-            taskFailureReporter.onTaskException(FAILED_COMMIT_READ_BACK_TASK, e);
+            reportFailedCommitReadBack(userId, e);
         }
+    }
+
+    private void reportFailedCommitReadBack(String userId, SQLException failure) {
+        // `taskFailureReporter` raises an admin alert with no label, and the erasure cascade purges admin alerts by label, so the cascade would never purge a
+        // user id held in this alert. The report therefore carries the failure without `userId`.
+        logger.info("[{}] Failed reading back a user whose commit reported a failure", userId, failure);
+        taskFailureReporter.onTaskException(FAILED_COMMIT_READ_BACK_TASK, failure);
     }
 
     /// @param user the user as a write left them, or `null` when it left no row, which publishes nothing
@@ -856,12 +1098,12 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         return selectUserByIdUsing(connection, selectUserByIdSql, userId, UserPersistenceImpl::mapUserProfile);
     }
 
-    /// @return `null` when no row exists for `userId`, whether or not it was ever soft-deleted
+    /// @return `null` when no row exists for `userId`; a soft-deleted user has a row
     private @Nullable UserProfile selectUserByIdIgnoringDeletion(Connection connection, String userId) throws SQLException {
         return selectUserByIdUsing(connection, selectUserByIdIgnoringDeletionSql, userId, UserPersistenceImpl::mapUserProfile);
     }
 
-    /// @return `null` when no row exists for `userId`, whether or not it was ever soft-deleted
+    /// @return `null` when no row exists for `userId`; a soft-deleted user has a row
     private @Nullable UserProfileWithDeletion selectUserByIdWithDeletion(Connection connection, String userId) throws SQLException {
         return selectUserByIdUsing(connection, selectUserByIdWithDeletionSql, userId, UserPersistenceImpl::mapUserProfileWithDeletion);
     }
@@ -907,14 +1149,21 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     }
 
     private List<String> selectActiveIdentityProvidersByUser(Connection connection, String userId) throws SQLException {
-        try (PreparedStatement stmt = connection.prepareStatement(selectActiveIdentityProvidersByUserSql)) {
-            stmt.setString(1, userId);
+        var providers = new ArrayList<String>(4);
+        forEachRow(connection, selectActiveIdentityProvidersByUserSql, stmt -> stmt.setString(1, userId), rs -> providers.add(rs.getString(1)));
+        return providers;
+    }
+
+    private static void forEachRow(Connection connection,
+                                   String sql,
+                                   SqlConsumer<PreparedStatement> paramSetter,
+                                   SqlConsumer<ResultSet> rowConsumer) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            paramSetter.accept(stmt);
             try (ResultSet rs = stmt.executeQuery()) {
-                var result = new ArrayList<String>(4);
                 while (rs.next()) {
-                    result.add(rs.getString(1));
+                    rowConsumer.accept(rs);
                 }
-                return result;
             }
         }
     }
@@ -1008,10 +1257,10 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
         if (extraStatements.isEmpty()) {
             return baseStatements;
         }
-        var merged = new ArrayList<String>(baseStatements.size() + extraStatements.size());
-        merged.addAll(baseStatements);
-        merged.addAll(extraStatements);
-        return ImmutableList.copyOf(merged);
+        return ImmutableList.<String>builderWithExpectedSize(baseStatements.size() + extraStatements.size())
+                            .addAll(baseStatements)
+                            .addAll(extraStatements)
+                            .build();
     }
 
     private static boolean isUniqueViolation(SQLException exception) {
@@ -1089,5 +1338,29 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
     }
 
     private record IdentityLinkRecord(String providerUserId, boolean active) {
+    }
+
+    private static final class UserRecordBuilder {
+        private final String userId;
+        private final boolean activityHistoryDisabled;
+        private final ImmutableSetMultimap.Builder<String, LocalDate> activityDaysByKindBuilder = ImmutableSetMultimap.builder();
+        private final ImmutableMap.Builder<String, String> attachmentsByNameBuilder = ImmutableMap.builder();
+
+        private UserRecordBuilder(String userId, boolean activityHistoryDisabled) {
+            this.userId = checkNotNull(userId, "userId");
+            this.activityHistoryDisabled = activityHistoryDisabled;
+        }
+
+        public void addActivityDay(String kind, LocalDate day) {
+            activityDaysByKindBuilder.put(kind, day);
+        }
+
+        public void addAttachment(String name, String json) {
+            attachmentsByNameBuilder.put(name, json);
+        }
+
+        public UserRecord build() {
+            return new UserRecord(userId, activityDaysByKindBuilder.build(), activityHistoryDisabled, attachmentsByNameBuilder.build());
+        }
     }
 }

@@ -232,7 +232,7 @@ class ContainerIoJettyTest {
         SseChannel.SseStream stream = openedStreamWhenOpen();
 
         // Twice the bound, so the frames left pending past the batch the first drain takes overflow it.
-        for (int i = 0; i < 2 * SseInternals.PENDING_FRAMES_CAPACITY; i++) {
+        for (int i = 0; i < 2 * SseChannel.MAX_PENDING_FRAMES_PER_CLIENT; i++) {
             stream.sendUnsuperseded("large", LARGE_TEXT);
         }
 

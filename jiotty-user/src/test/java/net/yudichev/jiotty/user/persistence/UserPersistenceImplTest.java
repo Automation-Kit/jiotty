@@ -1,5 +1,7 @@
 package net.yudichev.jiotty.user.persistence;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSetMultimap;
 import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
@@ -7,15 +9,18 @@ import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.testutil.LogCapture;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.common.time.TimeProvider;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
 import net.yudichev.jiotty.persistence.db.DataSourceFactory;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
+import net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainServiceImpl;
 import net.yudichev.jiotty.persistence.test.EmbeddedPostgresExtension;
 import net.yudichev.jiotty.persistence.test.UsingEmbeddedPostgres;
+import org.apache.logging.log4j.Level;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,15 +31,19 @@ import javax.sql.DataSource;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -45,7 +54,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Optional.of;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static net.yudichev.jiotty.common.lang.EvenMoreObjects.mapIfNotNull;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
+import static net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig.DOMAIN_PREFIX_PLACEHOLDER;
 import static net.yudichev.jiotty.user.persistence.BaseUserChangeContractTest.IDENTITY;
 import static net.yudichev.jiotty.user.persistence.RecordingUserStateListener.Changed;
 import static net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolution;
@@ -54,15 +65,17 @@ import static net.yudichev.jiotty.user.persistence.UserPersistenceTestTimeouts.D
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
+import static org.assertj.core.api.InstanceOfAssertFactories.optional;
 
 @UsingEmbeddedPostgres
 class UserPersistenceImplTest {
     private static final String DOMAIN_NAME = "users";
-    private static final String EXTRA_INIT_STATEMENT = "CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%extra (id integer);";
-    private static final String DROP_IDENTITY_TABLE_SQL = "DROP TABLE %DOMAIN_PREFIX%identity";
-    private static final String DROP_USER_TABLE_SQL = "DROP TABLE %DOMAIN_PREFIX%user CASCADE";
+    private static final String EXTRA_INIT_STATEMENT = "CREATE TABLE IF NOT EXISTS " + DOMAIN_PREFIX_PLACEHOLDER + "extra (id integer);";
     private static final ZoneId UTC = ZoneId.of("UTC");
     private static final ZoneId EUROPE_LONDON = ZoneId.of("Europe/London");
+    private static final String ACTIVITY_KIND = "CHARGE_STARTED";
+    private static final LocalDate ACTIVITY_DAY = LocalDate.of(2026, 3, 1);
+    private static final String ATTACHMENT = "devices";
     private static final ListenerBackedTaskExceptionHandlerRegistry failureRegistry = new ListenerBackedTaskExceptionHandlerRegistry();
 
     @RegisterExtension
@@ -213,7 +226,7 @@ class UserPersistenceImplTest {
     @Test
     void failsOnInsertWhenUserTableMissing() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
-        dropUserTable(dataSource, domain);
+        dropUserTable();
 
         var identity = new UserIdentity("firebase", "uid-1");
         var profileInput = createProfileInput("user@example.com", "Alex", UTC);
@@ -227,8 +240,8 @@ class UserPersistenceImplTest {
         // A soft-deleted user keeps its email until it is hard-deleted, so the address is still taken. The recovery path
         // must decide from the identity, not from a select that hides deleted rows.
         startUserPersistence(dataSourceFactory, List.of());
-        var created = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
-        userPersistence.softDelete(created.id()).get(5, SECONDS);
+        UserProfile createdProfile = createUser();
+        assertThat(userPersistence.softDelete(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT);
 
         var creation = userPersistence.getOrCreateByIdentity(new UserIdentity("firebase", "uid-2"),
                                                              createProfileInput("user@example.com", "Other", UTC)).get(5, SECONDS);
@@ -288,25 +301,24 @@ class UserPersistenceImplTest {
     }
 
     @Test
-    void existsIgnoringDeletionSeesSoftDeletedButNotHardDeletedUsers() throws Exception {
+    void existsIgnoringDeletionSeesSoftDeletedButNotHardDeletedUsers() {
         startUserPersistence(dataSourceFactory, List.of());
-        var created = createUser(new UserIdentity("firebase", "uid-1"),
-                                 createProfileInput("user@example.com", "Alex", UTC));
+        UserProfile createdProfile = createUser();
 
-        assertThat(userPersistence.existsIgnoringDeletion(created.id()).get(5, SECONDS)).isTrue();
-        assertThat(userPersistence.existsIgnoringDeletion("u-does-not-exist").get(5, SECONDS)).isFalse();
+        assertThat(userPersistence.existsIgnoringDeletion(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT).isEqualTo(true);
+        assertThat(userPersistence.existsIgnoringDeletion("u-does-not-exist")).succeedsWithin(DELIVERY_TIMEOUT).isEqualTo(false);
 
-        userPersistence.softDelete(created.id()).get(5, SECONDS);
-        assertThat(userPersistence.existsIgnoringDeletion(created.id()).get(5, SECONDS)).isTrue();
+        assertThat(userPersistence.softDelete(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT);
+        assertThat(userPersistence.existsIgnoringDeletion(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT).isEqualTo(true);
 
-        userPersistence.hardDelete(created.id()).get(5, SECONDS);
-        assertThat(userPersistence.existsIgnoringDeletion(created.id()).get(5, SECONDS)).isFalse();
+        assertThat(userPersistence.hardDelete(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT);
+        assertThat(userPersistence.existsIgnoringDeletion(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT).isEqualTo(false);
     }
 
     @Test
     void failsListingProfilesIgnoringDeletionWhenUserTableMissing() throws Exception {
         startUserPersistence(dataSourceFactory, List.of());
-        dropUserTable(dataSource, domain);
+        dropUserTable();
 
         assertThatThrownBy(() -> userPersistence.listAllProfilesIgnoringDeletion().get(5, SECONDS))
                 .hasCauseInstanceOf(RuntimeException.class)
@@ -315,9 +327,7 @@ class UserPersistenceImplTest {
 
     @Test
     void failsWhenConnectionUnavailable() {
-        var toggleableDataSource = new ToggleableDataSource(dataSource);
-        DataSourceFactory failingFactory = () -> toggleableDataSource;
-        startUserPersistence(failingFactory, List.of());
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
         toggleableDataSource.setFailConnections(true);
 
         var identity = new UserIdentity("firebase", "uid-1");
@@ -354,7 +364,7 @@ class UserPersistenceImplTest {
         var profileInput = createProfileInput("user@example.com", "Alex", UTC);
         var created = createUser(identity, profileInput);
 
-        dropIdentityTable(dataSource, domain);
+        executeSql("DROP TABLE " + UserPersistenceImpl.IDENTITY_TABLE_TEMPLATE);
 
         var otherIdentity = new UserIdentity("google.com", "uid-2");
         assertThatThrownBy(() -> userPersistence.updateAllIdentities(created.id(), List.of(identity, otherIdentity)).get(5, SECONDS))
@@ -622,7 +632,7 @@ class UserPersistenceImplTest {
         startUserPersistence(dataSourceFactory, List.of());
         var identity = new UserIdentity("firebase", "uid-1");
         UserProfile createdProfile = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
-        userPersistence.softDelete(createdProfile.id()).get(5, SECONDS);
+        assertThat(userPersistence.softDelete(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT);
         var googleIdentity = new UserIdentity("google.com", "uid-g");
 
         assertThat(userPersistence.updateAllIdentities(createdProfile.id(), List.of(identity, googleIdentity)))
@@ -647,10 +657,9 @@ class UserPersistenceImplTest {
 
     /// A soft delete that cannot read the state it leaves fails, leaves the user as they were, and announces nothing.
     @Test
-    void aWriteWhoseResultingStateCannotBeReadFailsAndChangesNothing() throws Exception {
-        var toggleableDataSource = new ToggleableDataSource(dataSource);
-        startUserPersistence(() -> toggleableDataSource, List.of());
-        UserProfile createdProfile = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
+    void aWriteWhoseResultingStateCannotBeReadFailsAndChangesNothing() {
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
+        UserProfile createdProfile = createUser();
         var stateListener = new RecordingUserStateListener();
         userPersistence.subscribe(stateListener);
         stateListener.awaitImage();
@@ -669,8 +678,7 @@ class UserPersistenceImplTest {
     /// A subscriber whose first delivery cannot be read is told so, and receives no change after it.
     @Test
     void aSubscriptionWhoseFirstDeliveryCannotBeReadIsToldSoAndReceivesNothingAfter() throws Exception {
-        var toggleableDataSource = new ToggleableDataSource(dataSource);
-        startUserPersistence(() -> toggleableDataSource, List.of());
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
         var identity = new UserIdentity("firebase", "uid-1");
         var stateListener = new RecordingUserStateListener();
         var identityListener = new RecordingIdentityListener();
@@ -693,8 +701,7 @@ class UserPersistenceImplTest {
     /// kinds of subscriber before the failure reaches the caller.
     @Test
     void aCommitReportingAFailureStillAnnouncesWhatTheDatabaseHolds() throws Exception {
-        var toggleableDataSource = new ToggleableDataSource(dataSource);
-        startUserPersistence(() -> toggleableDataSource, List.of());
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
         var identity = new UserIdentity("firebase", "uid-1");
         UserProfile createdProfile = createUser(identity, createProfileInput("user@example.com", "Alex", UTC));
         var stateListener = new RecordingUserStateListener();
@@ -717,10 +724,9 @@ class UserPersistenceImplTest {
     }
 
     @Test
-    void reportsACommitReportingAFailureWhoseOutcomeCannotBeReadBack() throws Exception {
-        var toggleableDataSource = new ToggleableDataSource(dataSource);
-        startUserPersistence(() -> toggleableDataSource, List.of());
-        UserProfile createdProfile = createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC));
+    void reportsACommitReportingAFailureWhoseOutcomeCannotBeReadBack() {
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
+        UserProfile createdProfile = createUser();
         var stateListener = new RecordingUserStateListener();
         userPersistence.subscribe(stateListener);
         // Synchronised: the persistence thread reports into it, and the test thread reads it.
@@ -737,6 +743,186 @@ class UserPersistenceImplTest {
             assertThat(reportedFailures).contains(UserPersistenceImpl.FAILED_COMMIT_READ_BACK_TASK);
             assertThat(stateListener.changes()).isEmpty();
         }
+    }
+
+    /// When the commit of a record write takes effect and reports a failure, the store reads the user's record again and delivers it to the record
+    /// subscribers before the write's future fails.
+    @Test
+    void aRecordCommitReportingAFailureStillDeliversWhatTheDatabaseHolds() {
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
+        UserProfile createdProfile = createUser();
+        RecordingUserRecordListener recordListener = subscribeRecordListener();
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(true);
+
+        assertThat(userPersistence.recordActivity(createdProfile.id(), ACTIVITY_KIND, ACTIVITY_DAY)).failsWithin(DELIVERY_TIMEOUT)
+                                                                                                    .withThrowableThat()
+                                                                                                    .havingRootCause()
+                                                                                                    .withMessage(ToggleableDataSource.EFFECTIVE_COMMIT_FAILURE);
+
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(false);
+        assertThat(recordListener.changes()).singleElement().isEqualTo(new RecordingUserRecordListener.Changed(
+                new UserRecord(createdProfile.id(), ImmutableSetMultimap.of(ACTIVITY_KIND, ACTIVITY_DAY), false, Map.of())));
+    }
+
+    /// When the commit of a record write takes effect and reports a failure, and the store then fails to read the user's record again, the store ends the
+    /// record subscriptions, so that a new subscription delivers a current image. The state subscriptions continue.
+    @Test
+    void aRecordCommitReportingAFailureThatCannotBeReadBackEndsTheRecordSubscriptions() {
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
+        UserProfile createdProfile = createUser();
+        RecordingUserRecordListener recordListener = subscribeRecordListener();
+        var stateListener = new RecordingUserStateListener();
+        userPersistence.subscribe(stateListener);
+        // The persistence thread adds each reported failure to `reportedFailures`, and the test thread reads the list, so the list is synchronised.
+        var reportedFailures = Collections.synchronizedList(new ArrayList<String>());
+        try (Closeable _ = failureRegistry.addExceptionHandler((description, _) -> reportedFailures.add(description))) {
+            toggleableDataSource.setCommitsTakeEffectButReportFailure(true);
+            toggleableDataSource.setUnreachableOnceACommitReportsFailure(true);
+
+            assertThat(userPersistence.putAttachment(createdProfile.id(), ATTACHMENT, "[]")).failsWithin(DELIVERY_TIMEOUT);
+
+            assertThat(recordListener.failure()).succeedsWithin(DELIVERY_TIMEOUT).isInstanceOf(SQLException.class);
+            assertThat(reportedFailures).contains(UserPersistenceImpl.FAILED_COMMIT_READ_BACK_TASK);
+            assertThat(recordListener.changes()).isEmpty();
+        }
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(false);
+        toggleableDataSource.setFailConnections(false);
+        assertThat(userPersistence.softDelete(createdProfile.id())).succeedsWithin(DELIVERY_TIMEOUT);
+        assertThat(stateListener.changes()).as("the state subscription is unaffected").hasSize(1);
+    }
+
+    /// [UserPersistence#purgeActivityDaysBefore] deletes the days of every user in one commit. When that commit reports a failure, the store has no single
+    /// user's record to read again, so it ends the record subscriptions.
+    @Test
+    void aPurgeCommitReportingAFailureEndsTheRecordSubscriptions() {
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
+        UserProfile createdProfile = createUser();
+        assertThat(userPersistence.recordActivity(createdProfile.id(), ACTIVITY_KIND, ACTIVITY_DAY)).succeedsWithin(DELIVERY_TIMEOUT);
+        RecordingUserRecordListener recordListener = subscribeRecordListener();
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(true);
+
+        assertThat(userPersistence.purgeActivityDaysBefore(ACTIVITY_DAY.plusDays(1))).failsWithin(DELIVERY_TIMEOUT);
+
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(false);
+        assertThat(recordListener.failure()).succeedsWithin(DELIVERY_TIMEOUT).isInstanceOf(SQLException.class);
+        assertThat(recordListener.changes()).isEmpty();
+    }
+
+    @Test
+    void aRecordCommitReportingAFailureAfterAWriteThatChangedNothingDeliversNothing() {
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
+        UserProfile createdProfile = createUser();
+        assertThat(userPersistence.putAttachment(createdProfile.id(), ATTACHMENT, "[]")).succeedsWithin(DELIVERY_TIMEOUT);
+        RecordingUserRecordListener recordListener = subscribeRecordListener();
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(true);
+
+        assertThat(userPersistence.putAttachment(createdProfile.id(), ATTACHMENT, "[]")).failsWithin(DELIVERY_TIMEOUT);
+
+        toggleableDataSource.setCommitsTakeEffectButReportFailure(false);
+        assertThat(userPersistence.putAttachment(createdProfile.id(), ATTACHMENT, "[1]")).succeedsWithin(DELIVERY_TIMEOUT);
+        assertThat(recordListener.changes()).as("only the write that changed the record is delivered").hasSize(1);
+    }
+
+    /// [UserPersistenceImpl#setActivityHistoryDisabled] logs an INFO line with the user's internal id and the new state when the call changes the state. A
+    /// call that leaves the state unchanged logs nothing.
+    @Test
+    void switchingActivityHistoryLogsOnlyAChangeOfState() {
+        startUserPersistence(dataSourceFactory, List.of());
+        String userId = createUser().id();
+
+        try (LogCapture log = LogCapture.capture(UserPersistenceImpl.class, Level.INFO)) {
+            assertThat(userPersistence.setActivityHistoryDisabled(userId, false)).succeedsWithin(DELIVERY_TIMEOUT);
+            assertThat(userPersistence.setActivityHistoryDisabled(userId, true)).succeedsWithin(DELIVERY_TIMEOUT);
+            assertThat(userPersistence.setActivityHistoryDisabled(userId, true)).succeedsWithin(DELIVERY_TIMEOUT);
+            assertThat(userPersistence.setActivityHistoryDisabled(userId, false)).succeedsWithin(DELIVERY_TIMEOUT);
+
+            assertThat(log.lines()).map(LogCapture.CapturedLine::message)
+                                   .filteredOn(message -> message.contains("Activity history"))
+                                   .satisfiesExactly(message -> assertThat(message).startsWith('[' + userId + "] Activity history disabled"),
+                                                     message -> assertThat(message).isEqualTo('[' + userId + "] Activity history enabled"));
+        }
+    }
+
+    @Test
+    void aRecordReadOrAnActivityWriteFailsWhenNoConnectionIsAvailable() {
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
+        toggleableDataSource.setFailConnections(true);
+
+        assertThat(userPersistence.readRecord("user-1")).failsWithin(DELIVERY_TIMEOUT).withThrowableThat().havingRootCause().isInstanceOf(SQLException.class);
+        assertThat(userPersistence.recordActivity("user-1", ACTIVITY_KIND, ACTIVITY_DAY)).failsWithin(DELIVERY_TIMEOUT)
+                                                                                         .withThrowableThat()
+                                                                                         .havingRootCause()
+                                                                                         .isInstanceOf(SQLException.class);
+        assertThat(userPersistence.touchLastActive("user-1", ACTIVITY_DAY.atStartOfDay(UTC).toInstant())).failsWithin(DELIVERY_TIMEOUT)
+                                                                                                         .withThrowableThat()
+                                                                                                         .havingRootCause()
+                                                                                                         .isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void aRecordSubscriptionWhoseImageCannotBeReadIsToldSo() {
+        ToggleableDataSource toggleableDataSource = startUserPersistenceOnToggleableDataSource();
+        var recordListener = new RecordingUserRecordListener();
+        toggleableDataSource.setFailConnections(true);
+
+        userPersistence.subscribe(ACTIVITY_DAY, recordListener);
+
+        assertThat(recordListener.image()).failsWithin(DELIVERY_TIMEOUT).withThrowableThat().havingRootCause().isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void aRecordSubscriptionTheExecutorRejectsThrowsTheRejection() {
+        startUserPersistence(dataSourceFactory, List.of());
+        rejectingExecutor.fillQueue();
+
+        assertThatThrownBy(() -> userPersistence.subscribe(ACTIVITY_DAY, new RecordingUserRecordListener())).isInstanceOf(RejectedExecutionException.class);
+    }
+
+    /// A store created at version 3 holds users, and lacks the column and the tables that version 4 adds. After the store's migration to version 4:
+    ///
+    /// - each existing user's activity history is enabled;
+    /// - each user can hold activity days and attachments;
+    /// - the `user_id` column of each new table references the user table, as the `user_id` column of the identity table does;
+    /// - the store has the columns, defaults and keys that [#assertHoldsTheVersion4Schema()] checks, as a store created at the current version has them.
+    @Test
+    void migratesAPopulatedVersion3StoreToVersion4() throws SQLException {
+        startUserPersistence(dataSourceFactory, List.of(), new TimeProvider(), 3, PersistenceDomainMigrator.FAIL_ON_MIGRATION);
+        UserProfile existingProfile = createUser();
+        userPersistence.stop();
+        executeSql("DROP TABLE " + UserPersistenceImpl.ACTIVITY_DAY_TABLE_TEMPLATE);
+        executeSql("DROP TABLE " + UserPersistenceImpl.ATTACHMENT_TABLE_TEMPLATE);
+        executeSql("ALTER TABLE " + UserPersistenceImpl.USER_TABLE_TEMPLATE + " DROP COLUMN " + UserPersistenceImpl.ACTIVITY_HISTORY_DISABLED_COLUMN);
+
+        startUserPersistence(dataSourceFactory, List.of(), new TimeProvider(), UserSchemaMigrator.BASE_SCHEMA_VERSION, new UserSchemaMigrator());
+
+        assertThat(userPersistence.recordActivity(existingProfile.id(), ACTIVITY_KIND, ACTIVITY_DAY)).succeedsWithin(DELIVERY_TIMEOUT)
+                                                                                                     .isEqualTo(ActivityRecordOutcome.RECORDED);
+        assertThat(userPersistence.putAttachment(existingProfile.id(), ATTACHMENT, "[]")).succeedsWithin(DELIVERY_TIMEOUT).isEqualTo(true);
+        assertThat(userPersistence.readRecord(existingProfile.id())).succeedsWithin(DELIVERY_TIMEOUT)
+                                                                    .asInstanceOf(optional(UserRecord.class))
+                                                                    .hasValue(new UserRecord(existingProfile.id(),
+                                                                                             ImmutableSetMultimap.of(ACTIVITY_KIND, ACTIVITY_DAY),
+                                                                                             false,
+                                                                                             Map.of(ATTACHMENT, "[]")));
+        assertThat(userPersistence.getById(existingProfile.id())).succeedsWithin(DELIVERY_TIMEOUT)
+                                                                 .asInstanceOf(optional(UserProfile.class))
+                                                                 .hasValue(existingProfile);
+        assertThat(listTablesReferencingTheUserTable()).containsExactlyInAnyOrder(UserPersistenceImpl.IDENTITY_TABLE,
+                                                                                  UserPersistenceImpl.ACTIVITY_DAY_TABLE,
+                                                                                  UserPersistenceImpl.ATTACHMENT_TABLE);
+        assertHoldsTheVersion4Schema();
+    }
+
+    /// A store created at the current version has the same foreign keys to the user table as a store migrated to that version, and the same columns, defaults
+    /// and keys that [#assertHoldsTheVersion4Schema()] checks.
+    @Test
+    void aStoreCreatedAtTheCurrentVersionHoldsTheVersion4ColumnsAndKeys() throws SQLException {
+        startUserPersistence(dataSourceFactory, List.of());
+
+        assertThat(listTablesReferencingTheUserTable()).containsExactlyInAnyOrder(UserPersistenceImpl.IDENTITY_TABLE,
+                                                                                  UserPersistenceImpl.ACTIVITY_DAY_TABLE,
+                                                                                  UserPersistenceImpl.ATTACHMENT_TABLE);
+        assertHoldsTheVersion4Schema();
     }
 
     /// A row starts current rather than at the epoch, so a selection by activity never returns a user who has simply not been touched yet — and it starts on
@@ -889,6 +1075,23 @@ class UserPersistenceImplTest {
                 .isEqualTo(ConditionalSoftDeleteOutcome.ALREADY_SOFT_DELETED);
     }
 
+    /// Starts the store on a new [ToggleableDataSource] and returns the data source, so that the test can switch its failures on and off.
+    private ToggleableDataSource startUserPersistenceOnToggleableDataSource() {
+        var toggleableDataSource = new ToggleableDataSource(dataSource);
+        startUserPersistence(() -> toggleableDataSource, List.of());
+        return toggleableDataSource;
+    }
+
+    private RecordingUserRecordListener subscribeRecordListener() {
+        var recordListener = new RecordingUserRecordListener();
+        userPersistence.subscribe(ACTIVITY_DAY, recordListener);
+        return recordListener;
+    }
+
+    private UserProfile createUser() {
+        return getAsUnchecked(() -> createUser(new UserIdentity("firebase", "uid-1"), createProfileInput("user@example.com", "Alex", UTC)));
+    }
+
     /// Returns the profile for `identity`, creating the user if needed; fails the test if the store reports an email conflict.
     private UserProfile createUser(UserIdentity identity, UserProfileInput profile) throws Exception {
         var creation = userPersistence.getOrCreateByIdentity(identity, profile).get(5, SECONDS);
@@ -903,14 +1106,22 @@ class UserPersistenceImplTest {
     }
 
     private void startUserPersistence(DataSourceFactory factory, List<String> initStatements, CurrentDateTimeProvider timeProvider) {
+        startUserPersistence(factory, initStatements, timeProvider, 1, PersistenceDomainMigrator.FAIL_ON_MIGRATION);
+    }
+
+    private void startUserPersistence(DataSourceFactory factory,
+                                      List<String> initStatements,
+                                      CurrentDateTimeProvider timeProvider,
+                                      int schemaVersion,
+                                      PersistenceDomainMigrator migrator) {
         userPersistence = new UserPersistenceImpl(factory,
                                                   executorProvider,
                                                   domainService,
                                                   timeProvider,
-                                                  1,
+                                                  schemaVersion,
                                                   domain.name(),
                                                   initStatements,
-                                                  PersistenceDomainMigrator.FAIL_ON_MIGRATION,
+                                                  migrator,
                                                   failureRegistry);
         userPersistence.start();
     }
@@ -919,24 +1130,109 @@ class UserPersistenceImplTest {
         return new UserProfileInput(email, of(displayName), timezone);
     }
 
-    private static void dropIdentityTable(DataSource dataSource, PersistenceDomain domain) throws SQLException {
-        var sql = expandSql(DROP_IDENTITY_TABLE_SQL, domain);
-        try (Connection connection = dataSource.getConnection();
-             Statement statement = connection.createStatement()) {
-            statement.execute(sql);
-        }
+    private void dropUserTable() throws SQLException {
+        executeSql("DROP TABLE " + UserPersistenceImpl.USER_TABLE_TEMPLATE + " CASCADE");
     }
 
-    private static void dropUserTable(DataSource dataSource, PersistenceDomain domain) throws SQLException {
-        var sql = expandSql(DROP_USER_TABLE_SQL, domain);
-        try (Connection connection = dataSource.getConnection();
-             Statement statement = connection.createStatement()) {
-            statement.execute(sql);
-        }
+    /// @return the name of each table with a foreign key to the domain's user table, without the domain's prefix
+    private List<String> listTablesReferencingTheUserTable() throws SQLException {
+        return query("""
+                     SELECT DISTINCT constraints.table_name
+                     FROM information_schema.table_constraints constraints
+                     JOIN information_schema.constraint_column_usage referenced
+                       ON referenced.constraint_name = constraints.constraint_name
+                      AND referenced.table_schema = constraints.table_schema
+                     WHERE constraints.constraint_type = 'FOREIGN KEY' AND referenced.table_name = ?""",
+                     resultSet -> withoutDomainPrefix(resultSet.getString(1)),
+                     domain.prefix() + UserPersistenceImpl.USER_TABLE);
     }
 
-    private static String expandSql(String sql, PersistenceDomain domain) {
-        return sql.replace("%DOMAIN_PREFIX%", domain.prefix());
+    /// Asserts that `information_schema` describes each column, default, primary key and foreign key that the version 4 migration declares: the
+    /// [UserPersistenceImpl#ACTIVITY_HISTORY_DISABLED_COLUMN] column of the user table, and the columns and keys of the
+    /// [UserPersistenceImpl#ACTIVITY_DAY_TABLE] and [UserPersistenceImpl#ATTACHMENT_TABLE] tables.
+    private void assertHoldsTheVersion4Schema() throws SQLException {
+        String activityDayTable = UserPersistenceImpl.ACTIVITY_DAY_TABLE;
+        String attachmentTable = UserPersistenceImpl.ATTACHMENT_TABLE;
+        String userIdReference = UserPersistenceImpl.USER_TABLE + "(id)";
+        assertThat(query("""
+                         SELECT table_name, column_name, data_type, is_nullable = 'YES', column_default
+                         FROM information_schema.columns
+                         WHERE table_name IN (?, ?) OR (table_name = ? AND column_name = ?)""",
+                         resultSet -> new ColumnDescription(withoutDomainPrefix(resultSet.getString(1)),
+                                                            resultSet.getString(2),
+                                                            resultSet.getString(3),
+                                                            resultSet.getBoolean(4),
+                                                            resultSet.getString(5)),
+                         domain.prefix() + activityDayTable,
+                         domain.prefix() + attachmentTable,
+                         domain.prefix() + UserPersistenceImpl.USER_TABLE,
+                         UserPersistenceImpl.ACTIVITY_HISTORY_DISABLED_COLUMN))
+                .containsExactlyInAnyOrder(
+                        new ColumnDescription(UserPersistenceImpl.USER_TABLE, UserPersistenceImpl.ACTIVITY_HISTORY_DISABLED_COLUMN, "boolean", false, "false"),
+                        new ColumnDescription(activityDayTable, "user_id", "text", false, null),
+                        new ColumnDescription(activityDayTable, "day", "date", false, null),
+                        new ColumnDescription(activityDayTable, "kind", "text", false, null),
+                        new ColumnDescription(attachmentTable, "user_id", "text", false, null),
+                        new ColumnDescription(attachmentTable, "name", "text", false, null),
+                        new ColumnDescription(attachmentTable, "value", "jsonb", false, null));
+        assertThat(query("""
+                         SELECT constraints.table_name,
+                                constraints.constraint_type,
+                                string_agg(keys.column_name, ',' ORDER BY keys.ordinal_position),
+                                (SELECT referenced.table_name || '(' || string_agg(referenced.column_name, ',') || ')'
+                                 FROM information_schema.constraint_column_usage referenced
+                                 WHERE constraints.constraint_type = 'FOREIGN KEY'
+                                   AND referenced.constraint_name = constraints.constraint_name
+                                   AND referenced.table_schema = constraints.table_schema
+                                 GROUP BY referenced.table_name)
+                         FROM information_schema.table_constraints constraints
+                         JOIN information_schema.key_column_usage keys
+                           ON keys.constraint_name = constraints.constraint_name
+                          AND keys.table_schema = constraints.table_schema
+                          AND keys.table_name = constraints.table_name
+                         WHERE constraints.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') AND constraints.table_name IN (?, ?)
+                         GROUP BY constraints.table_schema, constraints.table_name, constraints.constraint_name, constraints.constraint_type""",
+                         resultSet -> new KeyDescription(withoutDomainPrefix(resultSet.getString(1)),
+                                                         resultSet.getString(2),
+                                                         List.of(resultSet.getString(3).split(",")),
+                                                         mapIfNotNull(resultSet.getString(4), this::withoutDomainPrefix)),
+                         domain.prefix() + activityDayTable,
+                         domain.prefix() + attachmentTable))
+                .containsExactlyInAnyOrder(new KeyDescription(activityDayTable, "PRIMARY KEY", List.of("user_id", "day", "kind"), null),
+                                           new KeyDescription(activityDayTable, "FOREIGN KEY", List.of("user_id"), userIdReference),
+                                           new KeyDescription(attachmentTable, "PRIMARY KEY", List.of("user_id", "name"), null),
+                                           new KeyDescription(attachmentTable, "FOREIGN KEY", List.of("user_id"), userIdReference));
+    }
+
+    /// @param <T> the type of the value read from each row
+    /// @return the values that `rowReader` reads, one from each row that `sql` selects when `parameters` are bound to its placeholders in order
+    private <T> List<T> query(String sql, RowReader<T> rowReader, String... parameters) throws SQLException {
+        var valuesBuilder = ImmutableList.<T>builder();
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (int i = 0; i < parameters.length; i++) {
+                statement.setString(i + 1, parameters[i]);
+            }
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    valuesBuilder.add(rowReader.read(resultSet));
+                }
+            }
+        }
+        return valuesBuilder.build();
+    }
+
+    private String withoutDomainPrefix(String tableName) {
+        assertThat(tableName).startsWith(domain.prefix());
+        return tableName.substring(domain.prefix().length());
+    }
+
+    /// @param sql a statement whose table names hold [PersistenceDomainConfig#DOMAIN_PREFIX_PLACEHOLDER] in place of the domain's prefix
+    private void executeSql(String sql) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute(sql.replace(DOMAIN_PREFIX_PLACEHOLDER, domain.prefix()));
+        }
     }
 
     private static final class ToggleableDataSource implements CloseableDataSource {
@@ -1015,4 +1311,24 @@ class UserPersistenceImplTest {
         }
     }
 
+    private interface RowReader<T> {
+        T read(ResultSet resultSet) throws SQLException;
+    }
+
+    /// A column as `information_schema.columns` describes it.
+    ///
+    /// @param table        the name of the column's table, without the domain's prefix
+    /// @param column       the column's name
+    /// @param dataType     the column's type, as `information_schema.columns.data_type` names it
+    /// @param nullable     whether the column accepts `null`
+    /// @param defaultValue the column's default expression; `null` when the column has no default
+    private record ColumnDescription(String table, String column, String dataType, boolean nullable, @Nullable String defaultValue) {}
+
+    /// A primary or foreign key as `information_schema` describes it.
+    ///
+    /// @param table      the name of the key's table, without the domain's prefix
+    /// @param type       `PRIMARY KEY` or `FOREIGN KEY`
+    /// @param columns    the key's columns, in key order
+    /// @param references the table and column that a foreign key references, as `table(column)` without the domain's prefix; `null` for a primary key
+    private record KeyDescription(String table, String type, List<String> columns, @Nullable String references) {}
 }

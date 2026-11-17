@@ -1,12 +1,12 @@
 package net.yudichev.jiotty.user.ui;
 
 import com.fasterxml.jackson.databind.ObjectWriter;
-import com.google.common.collect.ImmutableList;
 import jakarta.inject.Inject;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -53,7 +53,7 @@ public final class GetDisplayablesListHandler implements ApiPathHandler {
         response.setCharacterEncoding(CHARSET_UTF_8);
         response.setContentType(CONTENT_TYPE_JSON);
         Collection<Displayable> displayables = registry.all();
-        var items = ImmutableList.<Item>builderWithExpectedSize(displayables.size());
+        var items = new ArrayList<Item>(displayables.size());
         for (Displayable displayable : displayables) {
             if (displayable.visible()) {
                 items.add(new Item(displayable.getId(),
@@ -61,7 +61,7 @@ public final class GetDisplayablesListHandler implements ApiPathHandler {
                                    TAB_NAME_TO_ID_CONVERSION_PATTERN.matcher(displayable.getId()).replaceAll("-")));
             }
         }
-        LIST_WRITER.writeValue(response.getOutputStream(), new ListResponse(items.build()));
+        LIST_WRITER.writeValue(response.getOutputStream(), new ListResponse(items));
     }
 
     private record Item(String id, String name, String safeId) {}

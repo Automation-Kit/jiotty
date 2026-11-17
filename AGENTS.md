@@ -4,6 +4,11 @@ Cross-cutting workflow rules (build verification, IntelliJ inspections, re-read 
 
 ## Repo-specific
 
+### jiotty-common's core types change only for a high-value reason
+
+**A change to a core type in jiotty-common — `Listeners`, `Closeable`, the executors, `CompletableFutures` and the like — needs a reason worth its cost to
+every module that uses it.** A need of one caller is met in that caller, unless the change fixes a defect in the core type itself.
+
 ### The PII log guard runs over these tests
 
 `JiottyPiiLogGuardExtension` (in `jiotty-common`'s test sources, registered via `META-INF/services/org.junit.jupiter.api.extension.Extension`) attaches an

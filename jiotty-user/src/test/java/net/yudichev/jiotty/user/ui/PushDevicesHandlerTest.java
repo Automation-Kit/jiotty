@@ -8,6 +8,7 @@ import net.yudichev.jiotty.adminalerts.AdminAlertSeverity;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.user.push.DevicePlatform;
 import net.yudichev.jiotty.user.push.PushDeviceRecord;
 import net.yudichev.jiotty.user.push.PushDeviceStore;
 import net.yudichev.jiotty.user.ui.io.testing.DispatchedRequest;
@@ -20,6 +21,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
@@ -30,6 +33,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
@@ -38,6 +42,7 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.INTERNAL_SERVER_ERROR
 import static net.yudichev.jiotty.common.rest.HttpStatuses.NO_CONTENT_204;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.PAYLOAD_TOO_LARGE_413;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
@@ -96,7 +101,7 @@ class PushDevicesHandlerTest {
         assertThat(record.deviceId()).isEqualTo("dev1");
         assertThat(record.token()).isEqualTo("tok1");
         assertThat(record.registeredAt()).isEqualTo(clock.currentInstant());
-        assertThat(record.platform()).isEmpty();
+        assertThat(record.platform()).isEqualTo(DevicePlatform.UNKNOWN);
         assertThat(record.appVersion()).isEmpty();
         verify(response).setStatus(NO_CONTENT_204);
         assertThat(asyncContext.isCompleted()).isTrue();
@@ -113,8 +118,42 @@ class PushDevicesHandlerTest {
 
         verify(pushDeviceStore).upsert(captor.capture());
         var record = captor.getValue();
-        assertThat(record.platform()).hasValue("ios");
+        assertThat(record.platform()).isEqualTo(DevicePlatform.IOS);
         assertThat(record.appVersion()).hasValue("2.1.0");
+    }
+
+    /// The phone sends its platform in lower case. The handler reads [DevicePlatform#IOS] and [DevicePlatform#ANDROID] in any letter case, and stores every
+    /// other value, JSON `null` and a value that is not a string included, as [DevicePlatform#UNKNOWN].
+    @ParameterizedTest
+    @MethodSource
+    void registerReadsThePlatformLeniently(String platformJson, DevicePlatform expectedPlatform, @Captor ArgumentCaptor<PushDeviceRecord> captor) {
+        when(pushDeviceStore.upsert(any())).thenReturn(completedFuture(null));
+        configureRequest("POST", PushDevicesHandler.PATH);
+        withBody("{\"deviceId\":\"dev1\",\"token\":\"tok1\",\"platform\":" + platformJson + '}');
+
+        dispatch();
+        clock.tick();
+
+        verify(pushDeviceStore).upsert(captor.capture());
+        assertThat(captor.getValue().platform()).isEqualTo(expectedPlatform);
+        verify(response).setStatus(NO_CONTENT_204);
+    }
+
+    static Stream<Arguments> registerReadsThePlatformLeniently() {
+        return Stream.of(
+                // each platform name, in any letter case
+                arguments("\"ios\"", DevicePlatform.IOS),
+                arguments("\"IOS\"", DevicePlatform.IOS),
+                arguments("\"android\"", DevicePlatform.ANDROID),
+                arguments("\"Android\"", DevicePlatform.ANDROID),
+                arguments("\"unknown\"", DevicePlatform.UNKNOWN),
+                // values that name neither iOS nor Android
+                arguments("\"web\"", DevicePlatform.UNKNOWN),
+                arguments("\"\"", DevicePlatform.UNKNOWN),
+                arguments("null", DevicePlatform.UNKNOWN),
+                arguments("7", DevicePlatform.UNKNOWN),
+                arguments("{\"os\":\"ios\"}", DevicePlatform.UNKNOWN),
+                arguments("[\"ios\"]", DevicePlatform.UNKNOWN));
     }
 
     @ParameterizedTest
@@ -252,11 +291,12 @@ class PushDevicesHandlerTest {
                 .satisfies(alert -> assertThat(alert.title()).isEqualTo(PushDevicesHandler.TIMED_OUT_ALERT_TITLE));
     }
 
-    /// Asserts the one admin alert a store failure raises: a WARNING, because the failure is confined to one request.
     private void dispatch() {
         dispatchedRequests.add(DispatchedRequest.dispatch(request, asyncContext, dispatched -> handler.handle(dispatched, response)));
     }
 
+    /// Asserts that the store failure raised exactly one admin alert, with the title {@value PushDevicesHandler#REQUEST_FAILED_ALERT_TITLE}. The alert's
+    /// severity is [AdminAlertSeverity#WARNING], because the failure affects one request.
     private void assertRaisedAlert() {
         assertThat(alertService.activeAlertsById().values())
                 .singleElement()

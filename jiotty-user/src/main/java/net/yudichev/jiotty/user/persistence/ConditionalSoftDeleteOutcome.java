@@ -9,6 +9,6 @@ public enum ConditionalSoftDeleteOutcome {
     ALREADY_SOFT_DELETED,
     /// The user was last active at or after the cutoff, so they were left alone.
     STILL_ACTIVE,
-    /// No user row exists.
+    /// No user with the given id exists.
     ABSENT
 }

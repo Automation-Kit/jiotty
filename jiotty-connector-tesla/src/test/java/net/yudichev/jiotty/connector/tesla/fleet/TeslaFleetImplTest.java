@@ -146,8 +146,8 @@ class TeslaFleetImplTest {
         verify(tokenManager, never()).invalidate(any(), any());
     }
 
-    /// A retrying caller cancels the future it was handed once it gives up. The call is already in flight, so its verdict still has to be acted on — which it
-    /// is only because the hook rides the call's own future rather than a stage derived from it.
+    /// A retrying caller cancels the returned future when it gives up, while the API call is in flight. A rejection of the access token that arrives after
+    /// the cancellation invalidates the token.
     @Test
     void rejectionArrivingAfterTheCallerCancelled_stillInvalidates() {
         CompletableFuture<?> result = teslaFleet.listVehicles();

@@ -176,18 +176,18 @@ public abstract class BindingSpec<T> {
         return map(fromType, toType, literally(mappingFunction));
     }
 
-    /// Starts a builder style chain that allows to create the target binding.
+    /// Starts a builder chain that creates the target binding.
     ///
     /// @param type the type literal of the target binding
-    /// @return the binding method choice stage
+    /// @return a builder that chooses the binding's annotation, its scope and how it is installed
     public final AnnotatedBindingMethodChoice<T> bind(TypeLiteral<T> type) {
         return new DefaultBindingMethodChoice(type);
     }
 
-    /// Starts 0 builder style chain that allows to create the target binding.
+    /// Starts a builder chain that creates the target binding.
     ///
     /// @param type the type of the target binding
-    /// @return the binding method choice stage
+    /// @return a builder that chooses the binding's annotation, its scope and how it is installed
     public final AnnotatedBindingMethodChoice<T> bind(Class<T> type) {
         return bind(TypeLiteral.get(type));
     }
@@ -480,7 +480,7 @@ public abstract class BindingSpec<T> {
     private final class DefaultBindingMethodChoice implements AnnotatedBindingMethodChoice<T> {
         private final TypeLiteral<T> type;
         private SpecifiedAnnotation targetSpecifiedAnnotation = SpecifiedAnnotation.forNoAnnotation();
-        private Consumer<ScopedBindingBuilder> scopeSpecifier = scopedBindingBuilder -> {};
+        private Consumer<ScopedBindingBuilder> scopeSpecifier = _ -> {};
 
         private DefaultBindingMethodChoice(TypeLiteral<T> type) {
             this.type = checkNotNull(type);

@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.AbstractModule;
+import com.google.inject.Binding;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.Module;
@@ -35,7 +36,6 @@ import java.util.logging.Level;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static net.yudichev.jiotty.common.lang.Locks.inLock;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
@@ -115,11 +115,11 @@ public final class Application extends BaseIdempotentCloseable implements String
         Injector newInjector = parentInjector == null ? Guice.createInjector(applicationSupportModule, mainModule)
                                                       : parentInjector.createChildInjector(applicationSupportModule, mainModule);
         logger.info("[{}] Initialising components", name);
-        List<LifecycleComponent> allComponents = newInjector
-                .findBindingsByType(new TypeLiteral<LifecycleComponent>() {})
-                .stream()
-                .map(lifecycleComponentBinding -> lifecycleComponentBinding.getProvider().get())
-                .collect(toImmutableList());
+        List<Binding<LifecycleComponent>> lifecycleComponentBindings = newInjector.findBindingsByType(new TypeLiteral<>() {});
+        var allComponents = new ArrayList<LifecycleComponent>(lifecycleComponentBindings.size());
+        for (Binding<LifecycleComponent> lifecycleComponentBinding : lifecycleComponentBindings) {
+            allComponents.add(lifecycleComponentBinding.getProvider().get());
+        }
 
         logger.info("[{}] Starting components", name);
         for (LifecycleComponent component : allComponents) {

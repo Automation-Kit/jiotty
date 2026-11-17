@@ -9,14 +9,12 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.user.ui.sse.SseChannel.MAX_PENDING_FRAMES_PER_CLIENT;
 
 /// One client's frames offered and not yet taken for writing. Any thread offers, and the thread writing to the client takes them all at once, so the frames
-/// are a linked stack whose top is swapped by compare-and-set; each node counts its depth, which bounds the stack at [#CAPACITY] frames.
+/// are a linked stack whose top is swapped by compare-and-set; each node counts its depth, which bounds the stack at
+/// [SseChannel#MAX_PENDING_FRAMES_PER_CLIENT] frames.
 final class PendingFrames {
-    /// Frames offered since the last [#takeAll()] that a client may fall behind by before it is dropped: well above a full initial image of a user's
-    /// displayables and options.
-    public static final int CAPACITY = 64;
-
     /// The newest pending frame; `null` when none is pending. Frames are offered by the thread opening the stream, by the [SseChannel]'s executor as it
     /// broadcasts and pings, and by any thread sending through the client's [SseChannel.SseStream]; the container thread writing to the client takes them.
     private final AtomicReference<@Nullable Node> top = new AtomicReference<>();
@@ -25,7 +23,7 @@ final class PendingFrames {
         while (true) {
             Node current = top.get();
             int depth = current == null ? 1 : current.depth + 1;
-            if (depth > CAPACITY) {
+            if (depth > MAX_PENDING_FRAMES_PER_CLIENT) {
                 return Offer.OVERFLOWED;
             }
             if (top.compareAndSet(current, new Node(frame, current, depth))) {
@@ -57,7 +55,7 @@ final class PendingFrames {
         return Collections.unmodifiableList(Arrays.asList(keptFrames).subList(firstKeptIndex, keptFrames.length));
     }
 
-    /// A linear scan, because a batch is at most [#CAPACITY] frames and nearly always a handful.
+    /// A linear scan, because a batch is at most [SseChannel#MAX_PENDING_FRAMES_PER_CLIENT] frames and nearly always a handful.
     private static boolean isSupersededBy(SseFrame frame, SseFrame[] keptFrames, int firstKeptIndex) {
         for (int i = firstKeptIndex; i < keptFrames.length; i++) {
             if (keptFrames[i].supersedes(frame)) {
@@ -69,7 +67,7 @@ final class PendingFrames {
 
     public enum Offer {
         ACCEPTED,
-        /// The client has fallen [#CAPACITY] frames behind, and the frame was not added.
+        /// The client has fallen [SseChannel#MAX_PENDING_FRAMES_PER_CLIENT] frames behind, and the frame was not added.
         OVERFLOWED
     }
 

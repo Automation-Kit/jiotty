@@ -22,6 +22,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig.DOMAIN_PREFIX_PLACEHOLDER;
 import static net.yudichev.jiotty.persistence.domain.PersistenceDomainModule.Dependency;
 
 // LoggingSimilarMessage — every SQL-execution helper logs the resolved statement with the same "Executing" debug line by convention
@@ -141,7 +142,7 @@ public final class PersistenceDomainServiceImpl extends BaseLifecycleComponent i
 
     private static String expandSql(PersistenceDomainConfig config, String sql) {
         return sql.replace("%DOMAIN%", config.domain().name())
-                  .replace("%DOMAIN_PREFIX%", config.domain().prefix());
+                  .replace(DOMAIN_PREFIX_PLACEHOLDER, config.domain().prefix());
     }
 
     private static void execute(Connection connection, String sql) throws SQLException {

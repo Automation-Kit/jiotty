@@ -10,6 +10,7 @@ import java.util.Set;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
+/// A key-value store.
 public interface VarStore {
     void saveValue(String key, Object value);
 

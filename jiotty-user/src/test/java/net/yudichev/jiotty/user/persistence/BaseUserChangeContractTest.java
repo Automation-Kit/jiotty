@@ -1,6 +1,5 @@
 package net.yudichev.jiotty.user.persistence;
 
-import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.user.persistence.RecordingUserStateListener.Changed;
 import net.yudichev.jiotty.user.persistence.RecordingUserStateListener.Removed;
@@ -17,14 +16,10 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
-import static java.time.ZoneOffset.UTC;
 import static java.util.concurrent.CompletableFuture.failedFuture;
-import static java.util.concurrent.TimeUnit.SECONDS;
-import static net.yudichev.jiotty.common.lang.MoreThrowables.getAsUnchecked;
 import static net.yudichev.jiotty.user.persistence.UserPersistenceTestTimeouts.DELIVERY_TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
@@ -33,20 +28,11 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /// The subscription contract every [UserPersistence] honours, run against each implementation by a subclass. It is shared rather than written twice because a
 /// test double that announces different changes from the real store makes every test built on that double prove something production does not do.
-public abstract class BaseUserChangeContractTest {
-    protected static final UserIdentity IDENTITY = new UserIdentity("firebase", "uid-1");
-    protected static final UserIdentity OTHER_IDENTITY = new UserIdentity("google.com", "uid-g");
-    /// Where every implementation's clock starts, so a subclass need not invent one.
-    protected static final Instant START = Instant.parse("2026-03-01T10:00:00Z");
+public abstract class BaseUserChangeContractTest extends BaseUserPersistenceContractTest {
     /// Any interval a grace period could plausibly span; the point is only that the restore lands at a different instant from the soft delete.
     private static final Duration RESTORE_DELAY = Duration.ofDays(3);
-    /// The clock both implementations are built on, so a test can move time and assert an exact stamp rather than an inequality that holds either way.
-    protected final ProgrammableClock clock = new ProgrammableClock();
 
     private RecordingUserStateListener stateListener;
-
-    /// The started store under test, built afresh for each test by the subclass on [#clock].
-    protected abstract UserPersistence userPersistence();
 
     @BeforeEach
     final void setUpContract() {
@@ -89,7 +75,7 @@ public abstract class BaseUserChangeContractTest {
         UserProfile createdProfile = createUser(IDENTITY, "Alex");
         subscribe();
 
-        await(userPersistence().updateProfile(createdProfile.id(), profileInput("Alexandra")));
+        await(userPersistence().updateProfile(createdProfile.id(), createProfileInput("Alexandra")));
         await(userPersistence().updateAllIdentities(createdProfile.id(), List.of(IDENTITY, OTHER_IDENTITY)));
         await(userPersistence().softDelete(createdProfile.id()));
         await(userPersistence().restore(createdProfile.id()));
@@ -243,7 +229,7 @@ public abstract class BaseUserChangeContractTest {
         var removalDelivered = new CompletableFuture<String>();
         userPersistence().subscribe(new RecordingUserStateListener() {
             @Override
-            public CompletionStage<?> onRemoved(String userId) {
+            public CompletableFuture<?> onRemoved(String userId) {
                 removalDelivered.complete(userId);
                 return removalApplied;
             }
@@ -263,7 +249,7 @@ public abstract class BaseUserChangeContractTest {
         UserProfile createdProfile = createUser(IDENTITY, "Alex");
         userPersistence().subscribe(new RecordingUserStateListener() {
             @Override
-            public CompletionStage<?> onRemoved(String userId) {
+            public CompletableFuture<?> onRemoved(String userId) {
                 return failedFuture(new RuntimeException("could not apply the removal"));
             }
         });
@@ -295,7 +281,7 @@ public abstract class BaseUserChangeContractTest {
 
         UserProfile createdProfile = createUser(IDENTITY, "Alex");
         assertLastResolutionMatchesResolveByIdentity(IDENTITY, identityListener);
-        await(userPersistence().updateProfile(createdProfile.id(), profileInput("Alexandra")));
+        await(userPersistence().updateProfile(createdProfile.id(), createProfileInput("Alexandra")));
         assertLastResolutionMatchesResolveByIdentity(IDENTITY, identityListener);
         await(userPersistence().softDelete(createdProfile.id()));
         assertLastResolutionMatchesResolveByIdentity(IDENTITY, identityListener);
@@ -357,7 +343,7 @@ public abstract class BaseUserChangeContractTest {
 
         await(userPersistence().updateAllIdentities(createdProfile.id(), List.of(IDENTITY, OTHER_IDENTITY)));
         await(userPersistence().restore(createdProfile.id()));
-        await(userPersistence().updateProfile(createdProfile.id(), profileInput("Alexandra")));
+        await(userPersistence().updateProfile(createdProfile.id(), createProfileInput("Alexandra")));
 
         assertThat(identityListener.resolutions()).containsExactly(new IdentityResolution.Active(createdProfile),
                                                                    new IdentityResolution.Active(profileNow(createdProfile.id())));
@@ -390,17 +376,6 @@ public abstract class BaseUserChangeContractTest {
         assertThat(event).isInstanceOfSatisfying(Changed.class, changed -> userRequirements.accept(changed.user()));
     }
 
-    private UserProfile createUser(UserIdentity identity, String displayName) {
-        return createUser(identity, displayName, "user@example.com");
-    }
-
-    private UserProfile createUser(UserIdentity identity, String displayName, String email) {
-        return switch (await(userPersistence().getOrCreateByIdentity(identity, new UserProfileInput(email, Optional.of(displayName), UTC)))) {
-            case UserPersistence.UserCreationResult.Resolved(var profile, _) -> profile;
-            case UserPersistence.UserCreationResult.EmailAlreadyInUse _ -> throw new AssertionError("expected Resolved, got EmailAlreadyInUse");
-        };
-    }
-
     /// The user as the store holds them now, whatever their deletion state; fails the test if the store no longer knows them.
     private UserProfile profileNow(String userId) {
         return await(userPersistence().getByIdIgnoringDeletion(userId)).orElseThrow(() -> new AssertionError("user " + userId + " is gone"));
@@ -412,16 +387,6 @@ public abstract class BaseUserChangeContractTest {
                                                                          .filter(user -> user.profile().id().equals(userId))
                                                                          .findFirst()
                                                                          .orElseThrow(() -> new AssertionError("user " + userId + " is gone"));
-    }
-
-    /// Blocks on a store call. The bound is a deadlock safety net: a fake completes its futures before returning, and the real store completes them on its own
-    /// executor within milliseconds.
-    private static <T> T await(CompletableFuture<T> future) {
-        return getAsUnchecked(() -> future.get(DELIVERY_TIMEOUT.toSeconds(), SECONDS));
-    }
-
-    private static UserProfileInput profileInput(String displayName) {
-        return new UserProfileInput("user@example.com", Optional.of(displayName), UTC);
     }
 
     private interface RepeatableCall {

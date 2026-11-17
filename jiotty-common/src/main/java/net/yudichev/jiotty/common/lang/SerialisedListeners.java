@@ -5,6 +5,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
@@ -14,9 +15,11 @@ import java.util.function.Consumer;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessageFormattable;
 
-/// Listeners that each receive an image of their owner's state from [#add], then every [#notify] after it; [#add], [#notify] and [#size] must be called on
-/// one thread, or under one lock. [#newSubscription] may be called on any thread, and closing a subscription runs its removal through the executor passed to
-/// the constructor.
+/// Listeners that each receive an image of their owner's state from [#add], then every [#notify] after that image. [#add], [#notify], [#removeAll] and
+/// [#size] must be called on one thread, or under one lock. [#newSubscription] may be called on any thread. Closing a subscription runs its removal through
+/// the executor passed to the constructor.
+///
+/// @param <L> the type of the listeners
 public final class SerialisedListeners<L> {
     private static final Logger logger = LogManager.getLogger(SerialisedListeners.class);
 
@@ -64,10 +67,34 @@ public final class SerialisedListeners<L> {
                 try {
                     notification.accept(subscription.listener);
                 } catch (RejectedExecutionException e) {
-                    logger.debug("A listener missed a notification: {}", humanReadableMessageFormattable(e));
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("A listener missed a notification: {}", humanReadableMessageFormattable(e));
+                    }
                 } catch (RuntimeException e) {
                     subscriptions.remove(subscription);
                     failureHandler.accept(subscription.listener, e);
+                }
+            }
+        }
+    }
+
+    /// Removes every added subscription, and delivers `lastNotification` to the listener of each subscription that is open. If a listener throws an exception
+    /// on its last notification, the exception is logged, and the delivery continues to the listeners of the remaining open subscriptions.
+    public void removeAll(Consumer<? super L> lastNotification) {
+        // The loop iterates over a copy of `subscriptions`, and `subscriptions` is cleared before the first delivery. While a listener is notified, it may
+        // therefore close its own subscription, and a new subscription may be added.
+        List<Subscription> removedSubscriptions = ImmutableList.copyOf(subscriptions);
+        subscriptions.clear();
+        for (Subscription subscription : removedSubscriptions) {
+            if (!subscription.isClosed()) {
+                try {
+                    lastNotification.accept(subscription.listener);
+                } catch (RejectedExecutionException e) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Unsubscribed a listener whose last notification was rejected: {}", humanReadableMessageFormattable(e));
+                    }
+                } catch (RuntimeException e) {
+                    logger.info("A listener failed on its last notification", e);
                 }
             }
         }

@@ -145,13 +145,14 @@ public final class PushDevicesHandler extends BaseLifecycleComponent implements 
     }
 
     private void register(AsyncExchange exchange, PushDeviceRegisterRequest body) {
-        var builder = PushDeviceRecord.builder()
-                                      .setDeviceId(body.deviceId())
-                                      .setToken(body.token())
-                                      .setRegisteredAt(currentDateTimeProvider.currentInstant());
-        body.platform().ifPresent(builder::setPlatform);
-        body.appVersion().ifPresent(builder::setAppVersion);
-        pushDeviceStore.upsert(builder.build())
+        PushDeviceRecord record = PushDeviceRecord.builder()
+                                                  .setDeviceId(body.deviceId())
+                                                  .setToken(body.token())
+                                                  .setPlatform(body.platform())
+                                                  .setAppVersion(body.appVersion())
+                                                  .setRegisteredAt(currentDateTimeProvider.currentInstant())
+                                                  .build();
+        pushDeviceStore.upsert(record)
                        .whenCompleteAsync((_, throwable) -> completeResponse(exchange, throwable), executor);
     }
 

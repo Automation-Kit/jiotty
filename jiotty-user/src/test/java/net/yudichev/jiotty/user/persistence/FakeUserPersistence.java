@@ -1,23 +1,23 @@
-package net.yudichev.jiotty.user.persistence.testing;
+package net.yudichev.jiotty.user.persistence;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Maps;
+import com.google.common.collect.SetMultimap;
 import com.google.common.collect.Sets;
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.common.lang.SerialisedListeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
-import net.yudichev.jiotty.user.persistence.ConditionalSoftDeleteOutcome;
-import net.yudichev.jiotty.user.persistence.UserIdentity;
-import net.yudichev.jiotty.user.persistence.UserIdentityRecord;
-import net.yudichev.jiotty.user.persistence.UserPersistence;
-import net.yudichev.jiotty.user.persistence.UserProfile;
-import net.yudichev.jiotty.user.persistence.UserProfileInput;
-import net.yudichev.jiotty.user.persistence.UserProfileWithDeletion;
-import net.yudichev.jiotty.user.persistence.UserStatePublisher;
 import net.yudichev.jiotty.user.persistence.UserStatePublisher.IdentitySubscription;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -60,8 +60,9 @@ public final class FakeUserPersistence implements UserPersistence {
         synchronized (lock) {
             checkNotNull(identity, "identity");
             checkNotNull(profile, "profile");
-            // Mirrors UserPersistenceImpl's unique-constraint handling, including which state maps to which outcome: both of the real store's constraints span
-            // soft-deleted rows, so a soft-deleted user holding this identity blocks creation and is not an email conflict.
+            // This switch returns the same outcome for each `IdentityResolution` as the unique-constraint handling of `UserPersistenceImpl`. Both unique
+            // constraints of `UserPersistenceImpl` cover soft-deleted rows, so creation fails when a soft-deleted user holds this identity, and the failure is
+            // not an email conflict.
             switch (resolveByIdentityLocked(identity)) {
                 case IdentityResolution.Active(UserProfile existingProfile) -> {
                     return completedFuture(new UserCreationResult.Resolved(existingProfile, false));
@@ -71,7 +72,8 @@ public final class FakeUserPersistence implements UserPersistence {
                 case IdentityResolution.Absent _ -> {
                 }
             }
-            // A taken address is an outcome the caller branches on, not a failure — the real store's unique-violation path returns the same value.
+            // An email address that a user already holds is an outcome on which the caller branches. This fake returns `EmailAlreadyInUse` for it, as
+            // `UserPersistenceImpl` does when its unique constraint rejects the email.
             if (isEmailTaken(profile.email(), null)) {
                 return completedFuture(UserCreationResult.EmailAlreadyInUse.INSTANCE);
             }
@@ -166,7 +168,8 @@ public final class FakeUserPersistence implements UserPersistence {
             checkNotNull(userId, "userId");
             checkNotNull(activeAt, "activeAt");
             StoredUser storedUser = usersById.get(userId);
-            // Soft-deleted users are touched too, mirroring UserPersistenceImpl, so a restored row carries what was recorded while it was deleted.
+            // As in `UserPersistenceImpl`, this method updates a soft-deleted user, so a restored user has the last-active time recorded while the user was
+            // soft-deleted.
             if (storedUser == null || !storedUser.lastActiveAt().isBefore(activeAt)) {
                 return completedFuture(false);
             }
@@ -176,13 +179,94 @@ public final class FakeUserPersistence implements UserPersistence {
     }
 
     @Override
+    public CompletableFuture<ActivityRecordOutcome> recordActivity(String userId, String kind, LocalDate day) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            checkNotNull(kind, "kind");
+            checkNotNull(day, "day");
+            StoredUser storedUser = usersById.get(userId);
+            if (storedUser == null) {
+                return completedFuture(ActivityRecordOutcome.ABSENT);
+            }
+            Instant startOfDay = day.atStartOfDay(ZoneOffset.UTC).toInstant();
+            if (storedUser.lastActiveAt().isBefore(startOfDay)) {
+                storedUser.touchLastActive(startOfDay);
+            }
+            if (storedUser.activityHistoryDisabled()) {
+                return completedFuture(ActivityRecordOutcome.HISTORY_OFF);
+            }
+            if (storedUser.addActivityDay(kind, day)) {
+                announceRecordChanged(storedUser);
+            }
+            return completedFuture(ActivityRecordOutcome.RECORDED);
+        }
+    }
+
+    @Override
+    public CompletableFuture<Boolean> setActivityHistoryDisabled(String userId, boolean disabled) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            StoredUser storedUser = usersById.get(userId);
+            if (storedUser == null) {
+                return completedFuture(false);
+            }
+            if (storedUser.setActivityHistoryDisabled(disabled)) {
+                announceRecordChanged(storedUser);
+            }
+            return completedFuture(true);
+        }
+    }
+
+    /// Stores the attachment as parsed JSON, as the `jsonb` column of [UserPersistenceImpl] does. When `json` equals the stored value apart from whitespace
+    /// and key order, the fake delivers no record change. [#readRecord] returns the stored value serialised again.
+    @Override
+    public CompletableFuture<Boolean> putAttachment(String userId, String name, String json) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            checkNotNull(name, "name");
+            UserPersistence.checkAttachmentLength(name, json);
+            StoredUser storedUser = usersById.get(userId);
+            if (storedUser == null) {
+                return completedFuture(false);
+            }
+            if (storedUser.putAttachment(name, Json.parse(json))) {
+                announceRecordChanged(storedUser);
+            }
+            return completedFuture(true);
+        }
+    }
+
+    @Override
+    public CompletableFuture<Integer> purgeActivityDaysBefore(LocalDate day) {
+        synchronized (lock) {
+            checkNotNull(day, "day");
+            int purgedDayCount = 0;
+            for (StoredUser storedUser : usersById.values()) {
+                purgedDayCount += storedUser.purgeActivityDaysBefore(day);
+            }
+            if (purgedDayCount > 0) {
+                publisher.publishDaysPurged(day);
+            }
+            return completedFuture(purgedDayCount);
+        }
+    }
+
+    @Override
+    public CompletableFuture<Optional<UserRecord>> readRecord(String userId) {
+        synchronized (lock) {
+            checkNotNull(userId, "userId");
+            return completedFuture(Optional.ofNullable(usersById.get(userId)).map(StoredUser::createRecord));
+        }
+    }
+
+    @Override
     public CompletableFuture<List<UserProfile>> listInactiveSince(Instant cutoff, int limit) {
         synchronized (lock) {
             checkNotNull(cutoff, "cutoff");
             checkArgument(limit > 0, "limit must be positive, got %s", limit);
             var profiles = ImmutableList.<UserProfile>builder();
-            // Least recently active first and capped, as the interface declares — a fake that returned insertion order, or everything, would pass tests the
-            // real store fails.
+            // The interface declares the profiles ordered least recently active first, and at most `limit` of them. A fake that returned the profiles in
+            // insertion order, or all of them, would pass tests that fail against `UserPersistenceImpl`.
             usersById.values().stream()
                      .filter(user -> user.active() && user.lastActiveAt().isBefore(cutoff))
                      .sorted(Comparator.comparing(StoredUser::lastActiveAt))
@@ -249,8 +333,8 @@ public final class FakeUserPersistence implements UserPersistence {
                 String ownerUserId = activeUserIdsByIdentity.get(identity);
                 checkState(ownerUserId == null || ownerUserId.equals(userId), "Identity %s is already linked to another user", identity);
             }
-            // The real store writes an identity row where one is new, changed or dropped, and announces nothing when none of those applies. It looks each
-            // provider up on its own, so the order the caller supplies them in makes no difference — hence the set comparison.
+            // `UserPersistenceImpl` writes the row of each identity that is new, changed or dropped, and publishes a change only when it writes a row. It looks
+            // up each provider separately, so the order of `identities` has no effect, and this fake therefore compares the identities as sets.
             Set<UserIdentity> previousIdentities = ImmutableSet.copyOf(storedUser.activeIdentities());
             Set<UserIdentity> newIdentities = ImmutableSet.copyOf(identitiesByProvider.values());
             for (UserIdentity oldIdentity : previousIdentities) {
@@ -261,7 +345,8 @@ public final class FakeUserPersistence implements UserPersistence {
             storedUser.replaceActiveIdentities(newIdentities, timestamp);
             newIdentities.forEach(identity -> activeUserIdsByIdentity.put(identity, userId));
             if (!previousIdentities.equals(newIdentities)) {
-                // This fake forgets a dropped identity outright, so it resolves to nobody here.
+                // This fake deletes a dropped identity, so a dropped identity resolves to no user and is announced as unlinked. In `UserPersistenceImpl`, a
+                // dropped identity resolves to this user.
                 announceChanged(storedUser, Sets.difference(newIdentities, previousIdentities), Sets.difference(previousIdentities, newIdentities));
             }
             return completedFuture(null);
@@ -370,6 +455,18 @@ public final class FakeUserPersistence implements UserPersistence {
         }
     }
 
+    /// Delivers the image of the records in the same way as [#subscribe(UserStateListener)] delivers the image of the users.
+    @Override
+    public Closeable subscribe(LocalDate earliestDay, UserRecordListener listener) {
+        synchronized (lock) {
+            SerialisedListeners<UserRecordListener>.Subscription subscription = publisher.newSubscription(earliestDay, listener);
+            var records = ImmutableList.<UserRecord>builderWithExpectedSize(usersById.size());
+            usersById.values().forEach(user -> records.add(user.createRecord().withoutDaysBefore(earliestDay)));
+            publisher.activateRecords(subscription, records.build());
+            return subscription;
+        }
+    }
+
     /// Makes every later identity subscription fail with `failure`, as the real implementation's does when it cannot read the first resolution.
     public void failIdentitySubscriptionsWith(RuntimeException failure) {
         synchronized (lock) {
@@ -406,6 +503,11 @@ public final class FakeUserPersistence implements UserPersistence {
         publisher.publishChanged(storedUser.createProfileWithDeletion(), linkedIdentities, unlinkedIdentities);
     }
 
+    /// Delivers the record of `storedUser` to the record subscribers, as the record stands after a write that changed it.
+    private void announceRecordChanged(StoredUser storedUser) {
+        publisher.publishRecordChanged(storedUser.createRecord());
+    }
+
     public Optional<UserProfile> findActiveProfileByIdentity(UserIdentity identity) {
         synchronized (lock) {
             return findActiveProfileByIdentityLocked(identity);
@@ -420,8 +522,9 @@ public final class FakeUserPersistence implements UserPersistence {
         }
     }
 
-    /// Whether `email` already belongs to a user other than `ignoredUserId`. Soft-deleted users count: the real store holds one email per user until the row is
-    /// hard-deleted, so exempting them here would let the fake create a second user for an address the real store rejects — and hide exactly that regression.
+    /// Whether `email` already belongs to a user other than `ignoredUserId`, soft-deleted users included. [UserPersistenceImpl] keeps an email unique across
+    /// users until the user's row is hard-deleted, so counting soft-deleted users makes the fake reject a second user for each address that
+    /// [UserPersistenceImpl] rejects.
     ///
     /// @param ignoredUserId the user permitted to already hold the address; null exempts nobody
     private boolean isEmailTaken(String email, @Nullable String ignoredUserId) {
@@ -459,14 +562,18 @@ public final class FakeUserPersistence implements UserPersistence {
     private static final class StoredUser {
         private final Map<String, UserIdentityRecord> activeIdentityRecordsByProvider = new LinkedHashMap<>();
 
+        private final SetMultimap<String, LocalDate> activityDaysByKind = HashMultimap.create();
+        private final Map<String, JsonNode> attachmentsByName = new HashMap<>();
+
         private UserProfile profile;
         private Instant lastActiveAt;
         private @Nullable Instant deletedAt;
+        private boolean activityHistoryDisabled;
 
         private StoredUser(UserProfile profile) {
             this.profile = checkNotNull(profile, "profile");
-            // Creating the account is the first activity, matching the value UserPersistenceImpl's insert writes.
-            lastActiveAt = profile.createdAt();
+            // Creating the account counts as the user's first activity, truncated to the day, as in `UserPersistenceImpl`.
+            lastActiveAt = profile.createdAt().truncatedTo(ChronoUnit.DAYS);
         }
 
         public Instant lastActiveAt() {
@@ -491,6 +598,46 @@ public final class FakeUserPersistence implements UserPersistence {
 
         public UserProfileWithDeletion createProfileWithDeletion() {
             return new UserProfileWithDeletion(profile, deletedAt());
+        }
+
+        public boolean activityHistoryDisabled() {
+            return activityHistoryDisabled;
+        }
+
+        /// @return `true` if this call added `day` under `kind`; `false` if the user already held `day` under `kind`
+        public boolean addActivityDay(String kind, LocalDate day) {
+            return activityDaysByKind.put(kind, day);
+        }
+
+        /// Sets [#activityHistoryDisabled()] to `disabled`. Disabling the history deletes the recorded days, as [UserPersistenceImpl] does.
+        ///
+        /// @return whether [#activityHistoryDisabled()] changed
+        public boolean setActivityHistoryDisabled(boolean disabled) {
+            if (activityHistoryDisabled == disabled) {
+                return false;
+            }
+            activityHistoryDisabled = disabled;
+            if (disabled) {
+                activityDaysByKind.clear();
+            }
+            return true;
+        }
+
+        /// @return whether this call changed the attachment held under `name`
+        public boolean putAttachment(String name, JsonNode value) {
+            return !value.equals(attachmentsByName.put(name, value));
+        }
+
+        /// @return the number of days deleted
+        public int purgeActivityDaysBefore(LocalDate day) {
+            int dayCountBefore = activityDaysByKind.size();
+            activityDaysByKind.values().removeIf(activityDay -> activityDay.isBefore(day));
+            return dayCountBefore - activityDaysByKind.size();
+        }
+
+        public UserRecord createRecord() {
+            // noinspection DataFlowIssue — the map holds no null value, which the function's nullable parameter type cannot express
+            return new UserRecord(profile.id(), activityDaysByKind, activityHistoryDisabled, Maps.transformValues(attachmentsByName, JsonNode::toString));
         }
 
         public List<UserIdentity> activeIdentities() {
@@ -521,7 +668,8 @@ public final class FakeUserPersistence implements UserPersistence {
         }
 
         public void softDelete(Instant deletedAt) {
-            // Keep the identity records (marked inactive via the deletion timestamp) so restore() can revive them, mirroring UserPersistenceImpl.
+            // `activeIdentityRecordsByProvider` keeps the user's identity records while `deletedAt` is set, so `restore` can make the identities resolve to
+            // the user again, as in `UserPersistenceImpl`.
             this.deletedAt = deletedAt;
             profile = new UserProfile(profile.id(), profile.email(), profile.displayName(), profile.timezone(), profile.createdAt(), deletedAt);
         }

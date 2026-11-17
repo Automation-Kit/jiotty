@@ -169,25 +169,26 @@ public final class SseServiceImpl extends BaseLifecycleComponent implements SseS
     }
 
     private CompletableFuture<?> sendOptionSnapshotTo(SseSink target) {
-        return ImmutableList.copyOf(optionRegistry.all()).stream()
-                            .map(Option::toDto)
-                            .collect(toFutureOfList())
-                            .whenCompleteAsync((allOptionDtos, throwable) -> {
-                                if (throwable == null) {
-                                    var optionsByTabNameBuilder = ImmutableListMultimap.<String, OptionDto>builderWithExpectedKeys(allOptionDtos.size());
-                                    for (OptionDto optionDto : allOptionDtos) {
-                                        optionsByTabNameBuilder.put(optionDto.tabName(), optionDto);
-                                    }
-                                    ImmutableListMultimap<String, OptionDto> optionsByTabName = optionsByTabNameBuilder.build();
-                                    var tabsBuilder = ImmutableList.<OptionsTab>builderWithExpectedSize(optionsByTabName.keySet().size());
-                                    optionsByTabName.asMap()
-                                                    .forEach((tabName, tabDtos) -> tabsBuilder.add(new OptionsTab(toDomId(tabName), tabName, tabDtos)));
-                                    target.send(OPTIONS_UPDATE_EVENT, new OptionsUpdateFrame(tabsBuilder.build()));
-                                } else {
-                                    // A defect in this server, and it leaves the user's options tab stale, so it goes to an operator.
-                                    alertService.raise(ERROR, "Failed to generate options DTOs", logger, throwable);
-                                }
-                            }, executor);
+        return optionRegistry.all().stream()
+                             .map(Option::toDto)
+                             .collect(toFutureOfList())
+                             .whenCompleteAsync((allOptionDtos, throwable) -> {
+                                 if (throwable == null) {
+                                     var optionsByTabNameBuilder = ImmutableListMultimap.<String, OptionDto>builderWithExpectedKeys(allOptionDtos.size());
+                                     for (OptionDto optionDto : allOptionDtos) {
+                                         optionsByTabNameBuilder.put(optionDto.tabName(), optionDto);
+                                     }
+                                     ImmutableListMultimap<String, OptionDto> optionsByTabName = optionsByTabNameBuilder.build();
+                                     var tabsBuilder = ImmutableList.<OptionsTab>builderWithExpectedSize(optionsByTabName.keySet().size());
+                                     optionsByTabName.asMap()
+                                                     .forEach((tabName, tabDtos) -> tabsBuilder.add(new OptionsTab(toDomId(tabName), tabName, tabDtos)));
+                                     target.send(OPTIONS_UPDATE_EVENT, new OptionsUpdateFrame(tabsBuilder.build()));
+                                 } else {
+                                     // A failure here is a defect in this server and leaves the user's options tab stale, so an operator receives an ERROR
+                                     // admin alert.
+                                     alertService.raise(ERROR, "Failed to generate options DTOs", logger, throwable);
+                                 }
+                             }, executor);
     }
 
     private CompletableFuture<Void> sendDisplayablesSnapshotTo(SseSink target) {

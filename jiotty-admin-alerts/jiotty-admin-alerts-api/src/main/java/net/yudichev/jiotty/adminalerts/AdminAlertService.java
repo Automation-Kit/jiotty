@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.adminalerts;
 
+import net.yudichev.jiotty.common.lang.CompletableFutures;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
@@ -65,8 +66,8 @@ public interface AdminAlertService {
                                    .build());
     }
 
-    /// Returns a [BiConsumer] for [CompletableFuture#whenComplete] that raises an alert (and logs) when the stage completed exceptionally, and does nothing on
-    /// success. Alert-raising counterpart to `CompletableFutures.logErrorOnFailure`.
+    /// Returns a [BiConsumer] for [CompletableFuture#whenComplete] that logs the failure at the level matching `severity` and raises an alert when the future
+    /// completes exceptionally, and does nothing when the future completes normally. [CompletableFutures#logErrorOnFailure] is the form that only logs.
     default <T> BiConsumer<T, Throwable> alertOnFailure(AdminAlertSeverity severity, String title, Logger logger) {
         return alertOnFailure(severity, title, logger, null);
     }

@@ -1,10 +1,9 @@
-package net.yudichev.jiotty.user.persistence.testing;
+package net.yudichev.jiotty.user.persistence;
 
-import net.yudichev.jiotty.user.persistence.BaseUserChangeContractTest;
-import net.yudichev.jiotty.user.persistence.UserPersistence;
 import org.junit.jupiter.api.BeforeEach;
 
-/// Runs the shared change-stream contract against [FakeUserPersistence], so the double cannot drift from the store every other test trusts it to imitate.
+/// Runs [BaseUserChangeContractTest] against [FakeUserPersistence], which tests of other code use in place of [UserPersistenceImpl].
+/// [UserPersistenceImplChangeContractTest] runs the same tests against [UserPersistenceImpl].
 class FakeUserChangeContractTest extends BaseUserChangeContractTest {
     private FakeUserPersistence userPersistence;
 

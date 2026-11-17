@@ -31,7 +31,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.function.IntConsumer;
-import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -90,10 +89,10 @@ final class GooglePhotosClientImpl extends BaseLifecycleComponent implements Goo
                 checkStarted();
                 logger.debug("Create media items in album {}, items {}", albumId, newMediaItems);
 
-                Stream<com.google.photos.library.v1.proto.NewMediaItem> newItems = newMediaItems.stream().map(BaseNewMediaItem::asGoogleMediaItem);
-
-                BatchCreateMediaItemsRequest.Builder requestBuilder =
-                        BatchCreateMediaItemsRequest.newBuilder().addAllNewMediaItems(newItems.collect(toImmutableList()));
+                BatchCreateMediaItemsRequest.Builder requestBuilder = BatchCreateMediaItemsRequest.newBuilder();
+                for (NewMediaItem newMediaItem : newMediaItems) {
+                    requestBuilder.addNewMediaItems(newMediaItem.asGoogleMediaItem());
+                }
                 albumId.ifPresent(requestBuilder::setAlbumId);
                 List<NewMediaItemResult> newMediaItemResultsList = callClient(theClient.batchCreateMediaItemsCallable(), requestBuilder.build())
                         .getNewMediaItemResultsList();

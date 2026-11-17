@@ -6,7 +6,8 @@ import net.yudichev.jiotty.user.ui.options.Option;
 import java.util.Collection;
 import java.util.Optional;
 
-/// Per-[UIServer] registry of user-facing [Option]s. Holds the current set of registered options and notifies subscribers when the snapshot changes.
+/// Per-[UIServer] registry of user-facing [Option]s. Holds the current set of registered options, saves each one when it is registered and after each change
+/// to it, and notifies subscribers when the snapshot changes.
 public interface OptionRegistry {
     /// Registers an option. Throws if an option with the same key is already registered.
     Closeable register(Option<?> option);

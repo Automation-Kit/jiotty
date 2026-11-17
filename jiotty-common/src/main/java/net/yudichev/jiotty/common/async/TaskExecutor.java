@@ -5,7 +5,6 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BiFunction;
@@ -66,11 +65,11 @@ public interface TaskExecutor extends Executor {
     default <T, U> CompletableFuture<U> handleWhile(BooleanSupplier condition,
                                                     CompletableFuture<T> source,
                                                     String taskName,
-                                                    BiFunction<? super T, ? super Throwable, ? extends CompletionStage<U>> continuation) {
-        return source.<CompletionStage<U>>handleAsync((value, failure) -> condition.getAsBoolean()
-                                                                          ? continuation.apply(value, failure)
-                                                                          : new CompletableFuture<>(),
-                                                      command -> tryExecute(taskName, command))
+                                                    BiFunction<? super T, ? super Throwable, ? extends CompletableFuture<U>> continuation) {
+        return source.<CompletableFuture<U>>handleAsync((value, failure) -> condition.getAsBoolean()
+                                                                            ? continuation.apply(value, failure)
+                                                                            : new CompletableFuture<>(),
+                                                        command -> tryExecute(taskName, command))
                      .thenCompose(Function.identity());
     }
 

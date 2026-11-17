@@ -8,7 +8,6 @@ public final class SseInternals {
     public static final Duration HEARTBEAT_PERIOD = SseChannel.HEARTBEAT_PERIOD;
     public static final String DROPPED_COUNTER = SseAdmissionImpl.DROPPED_COUNTER;
     public static final String ACTIVE_CLIENTS_GAUGE = SseAdmissionImpl.ACTIVE_CLIENTS_GAUGE;
-    public static final int PENDING_FRAMES_CAPACITY = PendingFrames.CAPACITY;
 
     private SseInternals() {
     }

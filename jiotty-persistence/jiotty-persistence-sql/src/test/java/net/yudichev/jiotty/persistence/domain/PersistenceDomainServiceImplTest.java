@@ -20,13 +20,14 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import static net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig.DOMAIN_PREFIX_PLACEHOLDER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @UsingEmbeddedPostgres
 class PersistenceDomainServiceImplTest {
-    private static final String CREATE_SAMPLE_TABLE_SQL = "CREATE TABLE IF NOT EXISTS %DOMAIN_PREFIX%sample (id integer);";
-    private static final String ADD_SAMPLE_NAME_COLUMN_SQL = "ALTER TABLE %DOMAIN_PREFIX%sample ADD COLUMN name text;";
+    private static final String CREATE_SAMPLE_TABLE_SQL = "CREATE TABLE IF NOT EXISTS " + DOMAIN_PREFIX_PLACEHOLDER + "sample (id integer);";
+    private static final String ADD_SAMPLE_NAME_COLUMN_SQL = "ALTER TABLE " + DOMAIN_PREFIX_PLACEHOLDER + "sample ADD COLUMN name text;";
     private static final String DELETE_META_ROW_SQL = "DELETE FROM domain_meta WHERE domain_name='%DOMAIN%';";
     private static final String SELECT_SCHEMA_VERSION_SQL = "SELECT schema_version FROM domain_meta WHERE domain_name=?";
     private static final String SELECT_TABLE_EXISTS_SQL =

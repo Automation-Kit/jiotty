@@ -5,7 +5,6 @@ import net.yudichev.jiotty.common.async.TaskExecutor;
 
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -20,16 +19,21 @@ public final class Listeners<T> {
         return Closeable.idempotent(() -> listeners.remove(consumer));
     }
 
-    /// Adds `consumer` from `executor`'s thread and delivers every notification on it, `imageSupplier`'s value first when it has one. Closing the returned
-    /// handle removes the listener on the same executor and tolerates that executor already being closed, as [Observable#subscribe(TaskExecutor, Consumer)]
-    /// does — see there for why.
+    /// Adds `consumer` in a task on `executor`, and in the same task delivers to `consumer` the value that `imageSupplier` supplies, if present. Closing the
+    /// returned handle removes `consumer` in a task on the same executor, and does nothing if that executor is already closed, as
+    /// [Observable#subscribe(TaskExecutor, Consumer)] does; that method's doc gives the reason. An exception reaches the failure handler of `executor` when:
+    ///
+    /// - `imageSupplier` throws it, and then `consumer` is not added;
+    /// - `consumer` throws it on the image, and then `consumer` stays added and receives every later [#notify], as it does after throwing on any of them.
     public Closeable addListener(TaskExecutor executor, Supplier<Optional<T>> imageSupplier, Consumer<? super T> consumer) {
-        CompletableFuture<Closeable> handleFuture = executor.submit(() -> {
-            Closeable result = addListener(consumer);
-            imageSupplier.get().ifPresent(consumer);
-            return result;
+        // Only tasks on `executor` write and read `handle`.
+        var handle = new MutableReference<Closeable>();
+        executor.execute("addListener", () -> {
+            Optional<T> image = imageSupplier.get();
+            handle.set(addListener(consumer));
+            image.ifPresent(consumer);
         });
-        return Closeable.idempotent(() -> executor.tryExecute("removeListener", () -> handleFuture.thenAccept(Closeable::close)));
+        return Closeable.idempotent(() -> executor.tryExecute("removeListener", () -> Closeable.closeIfNotNull(handle.get())));
     }
 
     public void notify(T value) {

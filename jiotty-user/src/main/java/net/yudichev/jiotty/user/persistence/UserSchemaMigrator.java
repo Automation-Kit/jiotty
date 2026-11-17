@@ -15,17 +15,24 @@ import static com.google.common.base.Preconditions.checkArgument;
 /// here for a version this knows, and answer for its own.
 public final class UserSchemaMigrator implements PersistenceDomainMigrator {
     /// Version of the schema [UserPersistenceImpl]'s init statements create. An app supplying a lower number gets a store this code cannot read.
-    public static final int BASE_SCHEMA_VERSION = 3;
+    public static final int BASE_SCHEMA_VERSION = 4;
 
-    /// v2 requires the address, failing on a store holding a row without one rather than inventing a value for it. v3 adds `last_active_at`, defaulted only
-    /// long enough to date the rows already there — to the day, as every writer of that column is — because every insert supplies it from the app's own
-    /// clock and a lingering default would silently substitute the database's.
+    private static final String ALTER_USER_TABLE = "ALTER TABLE " + UserPersistenceImpl.USER_TABLE_TEMPLATE + ' ';
+
+    /// - v2 makes the email address required, and fails on a store that holds a row without one.
+    /// - v3 adds `last_active_at`. A default of the start of the current day, the resolution that every writer of the column uses, dates the rows already
+    ///   there and is then dropped. Every insert supplies the value from the app's own clock, and a default left in place would silently replace that clock
+    ///   with the database's.
+    /// - v4 adds {@value UserPersistenceImpl#ACTIVITY_HISTORY_DISABLED_COLUMN}, false for every row already there, and the
+    ///   {@value UserPersistenceImpl#ACTIVITY_DAY_TABLE} and {@value UserPersistenceImpl#ATTACHMENT_TABLE} tables.
     private static final Map<Integer, List<String>> STATEMENTS_BY_VERSION = ImmutableMap.of(
-            2, ImmutableList.of("ALTER TABLE %DOMAIN_PREFIX%user ALTER COLUMN email SET NOT NULL;"),
-            3, ImmutableList.of("ALTER TABLE %DOMAIN_PREFIX%user ADD COLUMN IF NOT EXISTS last_active_at timestamptz NOT NULL "
-                                + "DEFAULT date_trunc('day', now());",
-                                "ALTER TABLE %DOMAIN_PREFIX%user ALTER COLUMN last_active_at DROP DEFAULT;",
-                                UserPersistenceImpl.LAST_ACTIVE_AT_INDEX_DDL));
+            2, ImmutableList.of(ALTER_USER_TABLE + "ALTER COLUMN email SET NOT NULL;"),
+            3, ImmutableList.of(ALTER_USER_TABLE + "ADD COLUMN IF NOT EXISTS last_active_at timestamptz NOT NULL DEFAULT date_trunc('day', now());",
+                                ALTER_USER_TABLE + "ALTER COLUMN last_active_at DROP DEFAULT;",
+                                UserPersistenceImpl.LAST_ACTIVE_AT_INDEX_DDL),
+            4, ImmutableList.of(ALTER_USER_TABLE + "ADD COLUMN IF NOT EXISTS " + UserPersistenceImpl.ACTIVITY_HISTORY_DISABLED_COLUMN_DDL + ';',
+                                UserPersistenceImpl.ACTIVITY_DAY_TABLE_DDL,
+                                UserPersistenceImpl.ATTACHMENT_TABLE_DDL));
 
     @Override
     public List<String> getMigrationStatements(int toVersion) {

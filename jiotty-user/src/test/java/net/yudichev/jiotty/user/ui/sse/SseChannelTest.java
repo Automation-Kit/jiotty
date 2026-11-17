@@ -80,7 +80,7 @@ class SseChannelTest {
     void setUp() {
         clock = new ProgrammableClock();
         executor = new RejectingSchedulingExecutor(clock.createSingleThreadedSchedulingExecutor("test"));
-        channel = createChannel(SseChannel.UNBOUNDED);
+        channel = started(new SseChannel("test", executor, clock, WRITER, alertService, SseAdmission.unlimited(), SseChannel.UNBOUNDED));
         clock.tick();
     }
 
@@ -230,7 +230,7 @@ class SseChannelTest {
         var meterRegistry = new SimpleMeterRegistry();
         StalledClient client = openClientHoldingAWrite(meterRegistry);
 
-        for (int i = 0; i <= PendingFrames.CAPACITY + 1; i++) {
+        for (int i = 0; i <= SseChannel.MAX_PENDING_FRAMES_PER_CLIENT + 1; i++) {
             client.stream().sendUnsuperseded("update", i);
         }
         clock.tick();
@@ -737,10 +737,6 @@ class SseChannelTest {
     }
 
     // region helpers
-
-    private SseChannel createChannel(int maxClients) {
-        return started(new SseChannel("test", executor, clock, WRITER, alertService, SseAdmission.unlimited(), maxClients));
-    }
 
     private void recreateChannel(int maxClients, SseAdmission admission) {
         channel.close();

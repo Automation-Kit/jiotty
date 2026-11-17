@@ -111,15 +111,4 @@ class OptionPersistenceImplTest {
                                                       .setSensitive(true)
                                                       .build());
     }
-
-    private static final class TestTextOption extends TextOption {
-        TestTextOption(SchedulingExecutor executor, OptionMeta<String> meta) {
-            super(executor, meta);
-        }
-
-        @Override
-        public String onChanged() {
-            return value();
-        }
-    }
 }

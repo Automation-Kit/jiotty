@@ -1,13 +1,15 @@
 package net.yudichev.jiotty.user.persistence;
 
 import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.persistence.varstore.VarStore;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 /// Persistence gateway for user profiles and identities.
@@ -17,6 +19,9 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /// - Supports multiple provider identities per user.
 /// - Publishes its state as an image followed by each committed change, in commit order and serialised with its writes.
 public interface UserPersistence {
+    /// The maximum length, in characters, of a JSON document that [#putAttachment] stores.
+    int MAX_ATTACHMENT_LENGTH = 8192;
+
     /// Returns an existing user for `identity`, or creates a new user atomically with `profile`.
     ///
     /// If concurrent creation results in a uniqueness conflict on the identity, the existing user for it is returned.
@@ -68,12 +73,65 @@ public interface UserPersistence {
     /// @return `true` if the stored instant moved, `false` if it was already at or past `activeAt`, or the user is absent
     CompletableFuture<Boolean> touchLastActive(String userId, Instant activeAt);
 
+    /// Records `day` as a day on which the user had activity of kind `kind`, unless [#setActivityHistoryDisabled] has disabled the user's activity history.
+    /// In the same transaction, advances the user's last-active instant ([#touchLastActive]) to the start of `day` in UTC, if that instant is earlier. The
+    /// user's deletion state makes no difference.
+    ///
+    /// @param userId internal user id
+    /// @param kind   the kind of activity, an arbitrary name
+    /// @param day    the UTC day on which the activity happened
+    CompletableFuture<ActivityRecordOutcome> recordActivity(String userId, String kind, LocalDate day);
+
+    /// Switches the recording of the user's activity days ([#recordActivity]) off or on. Switching it off deletes the days already recorded, in the same
+    /// transaction.
+    ///
+    /// @param userId   internal user id
+    /// @param disabled `true` to stop recording activity days, `false` to resume
+    /// @return `true` if the switch is stored, or `false` if no user with id `userId` exists. A soft-deleted user exists until [#hardDelete] removes it.
+    CompletableFuture<Boolean> setActivityHistoryDisabled(String userId, boolean disabled);
+
+    /// Stores `json` as the user's attachment called `name`, replacing the value already under that name. A read returns equivalent JSON, which can differ
+    /// from `json` in whitespace and key order.
+    ///
+    /// Every subscriber to [#subscribe(LocalDate, UserRecordListener)] receives every user's attachments and each change to them. If no subscriber needs the
+    /// value, use [VarStore#saveValue] instead. If the value is a secret, use [VarStore#saveValueEncrypted] instead.
+    ///
+    /// @param userId internal user id
+    /// @param name   the attachment's name, an arbitrary string that identifies it among the user's attachments
+    /// @param json   a JSON document
+    /// @return `true` if the attachment is stored, or `false` if no user with id `userId` exists. A soft-deleted user exists until [#hardDelete] removes it.
+    /// @throws IllegalArgumentException if `json` is longer than [#MAX_ATTACHMENT_LENGTH] characters
+    CompletableFuture<Boolean> putAttachment(String userId, String name, String json);
+
+    /// Checks `json` against the length limit of [#putAttachment].
+    ///
+    /// @param name the attachment's name, which the exception's message carries
+    /// @throws IllegalArgumentException if `json` is longer than [#MAX_ATTACHMENT_LENGTH] characters
+    static void checkAttachmentLength(String name, String json) {
+        checkArgument(json.length() <= MAX_ATTACHMENT_LENGTH,
+                      "attachment %s is %s characters long, over the %s allowed",
+                      name,
+                      json.length(),
+                      MAX_ATTACHMENT_LENGTH);
+    }
+
+    /// Deletes every user's activity days before `day`.
+    ///
+    /// @return the number of days deleted
+    CompletableFuture<Integer> purgeActivityDaysBefore(LocalDate day);
+
+    /// Reads the user's [UserRecord], including every activity day recorded for the user.
+    ///
+    /// @param userId internal user id
+    /// @return the user's record, or empty if no user with id `userId` exists. A soft-deleted user exists until [#hardDelete] removes it.
+    CompletableFuture<Optional<UserRecord>> readRecord(String userId);
+
     /// Lists the active users whose last recorded activity ([#touchLastActive]) is strictly before `cutoff`, **least recently active first**, at most `limit`
     /// of them; soft-deleted users are excluded. The ordering is part of the contract: the instant it sorts by is not exposed on [UserProfile], so the result
     /// cannot be re-ordered by it afterwards, and the limit is only meaningful alongside it.
     ///
     /// @param cutoff the instant a user must have been active at or after to be left out of the result
-    /// @param limit  the most rows to return, so a cutoff that matches everybody costs a bounded read rather than the whole table
+    /// @param limit  the most users to return, which bounds the read when `cutoff` matches every user
     /// @throws IllegalArgumentException if `limit` is not positive
     CompletableFuture<List<UserProfile>> listInactiveSince(Instant cutoff, int limit);
 
@@ -85,7 +143,7 @@ public interface UserPersistence {
     /// @return which of the four outcomes occurred; only [ConditionalSoftDeleteOutcome#STILL_ACTIVE] says the user's own activity spared them
     CompletableFuture<ConditionalSoftDeleteOutcome> softDeleteIfInactiveSince(String userId, Instant cutoff);
 
-    /// Reports whether a user row exists for `userId`, regardless of soft-delete state; `false` once the user is hard-deleted.
+    /// Reports whether a user with id `userId` exists, soft-deleted or not; `false` once [#hardDelete] has removed the user.
     ///
     /// @param userId internal user id
     CompletableFuture<Boolean> existsIgnoringDeletion(String userId);
@@ -122,11 +180,12 @@ public interface UserPersistence {
     /// @param userId internal user id
     CompletableFuture<Void> softDelete(String userId);
 
-    /// Permanently removes the user and all their identity rows in one transaction. Intended for the erasure cascade after the grace period. Idempotent:
-    /// completes normally even if the rows are already gone, and delivers the removal to subscribers again.
+    /// Permanently removes the user with all their identities, activity days and attachments in one transaction. Idempotent: completes normally even if
+    /// the user is already removed, and delivers the removal to subscribers again.
     ///
     /// @param userId internal user id
-    /// @return completes once the rows are gone and every [UserStateListener] registered at the commit has applied the removal
+    /// @return a future that completes once the user is removed and every [UserStateListener] and [UserRecordListener] subscribed at the commit has applied the
+    ///         removal. It completes exceptionally if one of those listeners fails to apply the removal.
     CompletableFuture<Void> hardDelete(String userId);
 
     /// Reverses [#softDelete]: clears the deletion mark on the user and on the identities that were soft-deleted together with it (matched by the shared
@@ -148,7 +207,42 @@ public interface UserPersistence {
     /// @return a handle that unsubscribes the listener
     Closeable subscribe(UserIdentity identity, IdentityResolutionListener listener);
 
-    /// Receives [#subscribe(UserStateListener)]'s deliveries.
+    /// Delivers every user's [UserRecord], then each committed change to a user's record, one delivery at a time and in commit order. A write that leaves a
+    /// record unchanged delivers nothing. **A listener must return without blocking**, as for [#subscribe(UserStateListener)].
+    ///
+    /// @param earliestDay a delivered record holds no activity day before this day
+    /// @return a handle that unsubscribes the listener
+    Closeable subscribe(LocalDate earliestDay, UserRecordListener listener);
+
+    /// A listener for [#subscribe(LocalDate, UserRecordListener)]'s deliveries.
+    interface UserRecordListener {
+        /// Invoked once, before any other delivery, with every user's record as it was when the subscription started, soft-deleted users included.
+        void onImage(List<UserRecord> records);
+
+        /// Invoked with the whole record of one user after a committed write changed it.
+        void onChanged(UserRecord record);
+
+        /// Invoked after a committed write deleted every user's activity days before `day`.
+        void onDaysPurged(LocalDate day);
+
+        /// Invoked after a committed [#hardDelete] of the user `userId`, including a repeated one for a user who is already gone.
+        ///
+        /// @return a future that the future returned by [#hardDelete] waits for: that future completes only after this one completes, and completes
+        ///         exceptionally if this one does
+        /// @implSpec The returned future must complete once the removal has been applied.
+        CompletableFuture<?> onRemoved(String userId);
+
+        /// Invoked when the subscription ends, after which this listener receives no further delivery. A new subscription delivers a current image. The
+        /// subscription ends when:
+        ///
+        /// - the image could not be read;
+        /// - this listener threw on a delivery, and so missed a change;
+        /// - the commit of [#purgeActivityDaysBefore] reported a failure;
+        /// - the commit of another write reported a failure, and the user's record could not be read after it.
+        void onSubscriptionFailed(Throwable failure);
+    }
+
+    /// A listener for [#subscribe(UserStateListener)]'s deliveries.
     interface UserStateListener {
         /// Every user when the subscription started, delivered once and before any change.
         void onImage(List<UserProfileWithDeletion> users);
@@ -157,17 +251,18 @@ public interface UserPersistence {
         /// found unchanged, so the same state can arrive twice.
         void onChanged(UserProfileWithDeletion user);
 
-        /// A user hard-deleted, including by a repeated [#hardDelete] of a user already gone.
+        /// Invoked after a committed [#hardDelete] of the user `userId`, including a repeated one for a user who is already gone.
         ///
-        /// @return the stage [#hardDelete] waits for
-        /// @implSpec The returned stage must complete once the removal has been applied.
-        CompletionStage<?> onRemoved(String userId);
+        /// @return a future that the future returned by [#hardDelete] waits for: that future completes only after this one completes, and completes
+        ///         exceptionally if this one does
+        /// @implSpec The returned future must complete once the removal has been applied.
+        CompletableFuture<?> onRemoved(String userId);
 
         /// The subscription has ended, and nothing further arrives: the image could not be read, or this listener threw on a delivery and so missed a change.
         void onSubscriptionFailed(Throwable failure);
     }
 
-    /// Receives [#subscribe(UserIdentity, IdentityResolutionListener)]'s deliveries.
+    /// A listener for [#subscribe(UserIdentity, IdentityResolutionListener)]'s deliveries.
     interface IdentityResolutionListener {
         /// What the identity resolves to: first its resolution when the subscription started, then each different one after it.
         void onResolution(IdentityResolution resolution);

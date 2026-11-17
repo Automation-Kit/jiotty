@@ -72,6 +72,10 @@ public final class SseChannel extends BaseIdempotentCloseable {
     public static final int UNBOUNDED = Integer.MAX_VALUE;
     /// The most concurrent streams one user's channel accepts: one per device the user is signed in on.
     public static final int MAX_CLIENTS_PER_USER = 5;
+    /// The maximum number of frames waiting for one client: frames sent or broadcast to the client and not yet taken for writing. A further frame for a client
+    /// that already has this many waiting closes the client's stream as a slow reader. The value is well above the number of frames in a full initial image of
+    /// a user's displayables and options.
+    public static final int MAX_PENDING_FRAMES_PER_CLIENT = 64;
     /// The error code of a 503 refusing a stream because the user's channel is full.
     @VisibleForTesting
     static final String CHANNEL_FULL_ERROR = "USER_AT_CAPACITY";
@@ -487,7 +491,7 @@ public final class SseChannel extends BaseIdempotentCloseable {
                 output.sourceReady();
             } else if (droppedForFallingBehind.compareAndSet(false, true)) {
                 if (logger.isDebugEnabled()) {
-                    logger.debug("[SSE {}] dropped: {} frames behind", clientId, PendingFrames.CAPACITY);
+                    logger.debug("[SSE {}] dropped: {} frames behind", clientId, MAX_PENDING_FRAMES_PER_CLIENT);
                 }
                 admission.recordSlowReaderDropped();
                 output.close();

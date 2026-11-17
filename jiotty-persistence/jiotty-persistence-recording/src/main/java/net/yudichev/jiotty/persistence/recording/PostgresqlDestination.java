@@ -71,9 +71,10 @@ public interface PostgresqlDestination extends Destination {
         }
     }
 
-    /// @param postInitStatements SQL statements executed after the recorder table is created, on a freshly-initialised domain only. These can reference
-    /// These can reference `%TABLE_NAME%`, `%DOMAIN%`, `%DOMAIN_PREFIX%`. Intended for DDL that references the recorder table, e.g. `CREATE INDEX ... ON
-    /// %TABLE_NAME%`. Not re-executed on migrations — evolving post-table state for existing installations is the migrator's responsibility.
+    /// @param postInitStatements SQL statements executed after the recorder table is created, on a freshly initialised domain only. They can reference the
+    ///                           `%TABLE_NAME%`, `%DOMAIN%` and {@value PersistenceDomainConfig#DOMAIN_PREFIX_PLACEHOLDER} placeholders, and suit DDL that
+    ///                           references the recorder table, such as `CREATE INDEX ... ON %TABLE_NAME%`. A migration does not execute them again, so the
+    ///                           migrator must make any change to what they created in an existing installation.
     record PsqlConfig<R>(Class<R> recordType,
                          String typeId,
                          PersistenceDomainConfig domainConfig,

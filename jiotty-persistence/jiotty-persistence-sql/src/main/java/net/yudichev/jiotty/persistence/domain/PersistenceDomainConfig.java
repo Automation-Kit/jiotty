@@ -11,12 +11,15 @@ import static com.google.common.base.Preconditions.checkNotNull;
 ///
 /// @param domain         domain describing the persistence entities
 /// @param schemaVersion  target schema version
-/// @param initStatements SQL statements used for initialisation; statements may include `%DOMAIN%` and `%DOMAIN_PREFIX%` placeholders
+/// @param initStatements SQL statements used for initialisation; statements may include `%DOMAIN%` and {@value #DOMAIN_PREFIX_PLACEHOLDER} placeholders
 /// @param migrator       provides migration statements between versions
 public record PersistenceDomainConfig(PersistenceDomain domain,
                                       int schemaVersion,
                                       List<String> initStatements,
                                       PersistenceDomainMigrator migrator) {
+    /// The placeholder in a statement that stands for the domain's [PersistenceDomain#prefix()].
+    public static final String DOMAIN_PREFIX_PLACEHOLDER = "%DOMAIN_PREFIX%";
+
     public PersistenceDomainConfig {
         checkNotNull(domain, "domain");
         checkArgument(schemaVersion > 0, "schemaVersion must be > 0, was %s", schemaVersion);

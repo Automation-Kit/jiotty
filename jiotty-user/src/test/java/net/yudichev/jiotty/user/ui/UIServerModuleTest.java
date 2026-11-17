@@ -107,11 +107,33 @@ class UIServerModuleTest {
     void capsTheDisplayablesStreamWithTheLimitsItIsGiven() {
         SseAdmission admission = SseAdmission.unlimited();
         Injector limitedInjector = injectorWith(moduleBuilder().withSseLimits(literally(admission), literally(3)));
-        // Both bindings are private to the module, so they are read from its private injector, reached through the exposed UIServer binding.
-        Injector moduleInjector = ((ExposedBinding<?>) limitedInjector.getBinding(UIServer.class)).getPrivateElements().getInjector();
+        Injector moduleInjector = moduleInjectorOf(limitedInjector);
 
         assertThat(moduleInjector.getInstance(Key.get(SseAdmission.class, UIServerModule.Dependency.class))).isSameAs(admission);
         assertThat(moduleInjector.getInstance(Key.get(Integer.class, SseServiceImpl.MaxStreams.class))).isEqualTo(3);
+    }
+
+    @Test
+    void bindsTheNoOpOptionSaveListenerWhenNoneIsNamed() {
+        assertThat(optionSaveListenerOf(injector)).isSameAs(OptionSaveListener.NO_OP);
+    }
+
+    @Test
+    void bindsTheOptionSaveListenerItIsGiven() {
+        OptionSaveListener saveListener = _ -> {};
+        Injector listeningInjector = injectorWith(moduleBuilder().withOptionSaveListener(literally(saveListener)));
+
+        assertThat(optionSaveListenerOf(listeningInjector)).isSameAs(saveListener);
+    }
+
+    private static OptionSaveListener optionSaveListenerOf(Injector injector) {
+        return moduleInjectorOf(injector).getInstance(Key.get(OptionSaveListener.class, UIServerModule.Dependency.class));
+    }
+
+    private static Injector moduleInjectorOf(Injector injector) {
+        // The bindings that these tests read are private to `UIServerModule`, so this method gets the module's private injector from the private elements of
+        // the exposed `UIServer` binding.
+        return ((ExposedBinding<?>) injector.getBinding(UIServer.class)).getPrivateElements().getInjector();
     }
 
     private static UIServerModule.Builder moduleBuilder() {

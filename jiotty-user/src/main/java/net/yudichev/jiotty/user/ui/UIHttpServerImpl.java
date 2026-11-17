@@ -94,7 +94,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
     private final ServerConnector connector;
 
     @Inject
-    UIHttpServerImpl(@ListenPort int listenPort, Set<ServletMount> servletMounts, MeterRegistry meterRegistry) {
+    public UIHttpServerImpl(@ListenPort int listenPort, Set<ServletMount> servletMounts, MeterRegistry meterRegistry) {
         this(listenPort, servletMounts, meterRegistry, IDLE_TIMEOUT);
     }
 
@@ -229,7 +229,7 @@ final class UIHttpServerImpl extends BaseLifecycleComponent implements UIHttpSer
         ///   1. the [UIHttpServer#ROUTE_NAME_ATTRIBUTE] attribute, set by the dispatching app code (e.g. [UIServerImpl] for [ApiPathHandler] routes);
         ///   2. the first URL path segment of the request when that segment is one of the registered top-level segments (the first segment of each
         ///      [ServletMount] context path — e.g. a mount at `/ui/api` contributes `/ui`). [EventsHandler#onResponseBegin] fires before the wrapped chain
-        ///      attaches the matched servlet context to the [Request], so the URL segment is the identifier available at this stage.
+        ///      attaches the matched servlet context to the [Request], so the URL segment is the identifier available at this point.
         ///   3. `"unmatched"` for any other request path (browser auto-requests like `/favicon.ico`, probes, typos) so per-file paths cannot blow up the
         ///      `path` tag's cardinality.
         ///   4. `/` for the root path or anything that does not parse to a segment.

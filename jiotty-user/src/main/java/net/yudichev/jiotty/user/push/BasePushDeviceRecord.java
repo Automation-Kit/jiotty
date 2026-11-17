@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.push;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
+import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
 
 import java.time.Instant;
@@ -21,8 +22,11 @@ public interface BasePushDeviceRecord {
     /// Current Expo push token (`ExponentPushToken[...]`).
     String token();
 
-    /// `ios` / `android` label for diagnostics; optional because pre-registration flows may not know it.
-    Optional<String> platform();
+    /// The platform that the device reported, or [DevicePlatform#UNKNOWN] when the device reported none.
+    @Value.Default
+    default DevicePlatform platform() {
+        return DevicePlatform.UNKNOWN;
+    }
 
     /// App version string for diagnostics.
     Optional<String> appVersion();

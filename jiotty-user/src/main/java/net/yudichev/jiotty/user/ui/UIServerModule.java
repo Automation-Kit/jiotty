@@ -62,6 +62,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
     private final BindingSpec<UIServer> uiServerSpec;
     private final BindingSpec<SseAdmission> sseAdmissionSpec;
     private final BindingSpec<Integer> maxSseStreamsSpec;
+    private final BindingSpec<OptionSaveListener> optionSaveListenerSpec;
     private final List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs;
 
     private UIServerModule(BindingSpec<String> threadNameSuffixSpec,
@@ -71,6 +72,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                            BindingSpec<UIServer> uiServerSpec,
                            BindingSpec<SseAdmission> sseAdmissionSpec,
                            BindingSpec<Integer> maxSseStreamsSpec,
+                           BindingSpec<OptionSaveListener> optionSaveListenerSpec,
                            List<BindingSpec<ApiPathHandler>> apiPathHandlerSpecs) {
         this.threadNameSuffixSpec = checkNotNull(threadNameSuffixSpec);
         this.optionsThrottlingPeriodSpec = checkNotNull(optionsThrottlingPeriodSpec);
@@ -79,6 +81,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         this.uiServerSpec = checkNotNull(uiServerSpec);
         this.sseAdmissionSpec = checkNotNull(sseAdmissionSpec);
         this.maxSseStreamsSpec = checkNotNull(maxSseStreamsSpec);
+        this.optionSaveListenerSpec = checkNotNull(optionSaveListenerSpec);
         this.apiPathHandlerSpecs = ImmutableList.copyOf(apiPathHandlerSpecs);
     }
 
@@ -128,6 +131,9 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                                    .annotatedWith(SseServiceImpl.OptionsThrottlingPeriod.class)
                                    .installedBy(this::installLifecycleComponentModule);
 
+        optionSaveListenerSpec.bind(OptionSaveListener.class)
+                              .annotatedWith(Dependency.class)
+                              .installedBy(this::installLifecycleComponentModule);
         bind(OptionRegistry.class).to(registerLifecycleComponent(OptionRegistryImpl.class));
         expose(OptionRegistry.class);
         bind(DisplayableRegistry.class).to(registerLifecycleComponent(DisplayableRegistryImpl.class));
@@ -191,6 +197,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
         private BindingSpec<UIServer> uiServerSpec = boundTo(UIServerImpl.class);
         private BindingSpec<SseAdmission> sseAdmissionSpec = literally(SseAdmission.unlimited());
         private BindingSpec<Integer> maxSseStreamsSpec = literally(SseChannel.UNBOUNDED);
+        private BindingSpec<OptionSaveListener> optionSaveListenerSpec = literally(OptionSaveListener.NO_OP);
 
         private Builder() {
         }
@@ -229,6 +236,12 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
             return this;
         }
 
+        /// Binds the [OptionSaveListener] that is invoked with each option that the [OptionRegistry] saves. The default is [OptionSaveListener#NO_OP].
+        public Builder withOptionSaveListener(BindingSpec<OptionSaveListener> optionSaveListenerSpec) {
+            this.optionSaveListenerSpec = checkNotNull(optionSaveListenerSpec);
+            return this;
+        }
+
         /// Register an additional handler.
         public Builder addApiPathHandler(BindingSpec<ApiPathHandler> apiPathHandlerSpec) {
             apiPathHandlerSpecs.add(checkNotNull(apiPathHandlerSpec));
@@ -244,6 +257,7 @@ public final class UIServerModule extends BaseLifecycleComponentModule {
                                       uiServerSpec,
                                       sseAdmissionSpec,
                                       maxSseStreamsSpec,
+                                      optionSaveListenerSpec,
                                       apiPathHandlerSpecs);
         }
     }

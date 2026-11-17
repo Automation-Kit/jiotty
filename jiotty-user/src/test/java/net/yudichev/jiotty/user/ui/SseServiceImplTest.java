@@ -14,7 +14,6 @@ import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.SingleThreadedSchedulingExecutor;
-import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.MutableReference;
 import net.yudichev.jiotty.user.ui.io.testing.FakeAsyncContext;
@@ -23,7 +22,7 @@ import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionDto;
 import net.yudichev.jiotty.user.ui.options.OptionMeta;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
-import net.yudichev.jiotty.user.ui.options.TextOption;
+import net.yudichev.jiotty.user.ui.options.TestTextOption;
 import net.yudichev.jiotty.user.ui.sse.SseChannel;
 import net.yudichev.jiotty.user.ui.sse.SseInternals;
 import net.yudichev.jiotty.user.ui.sse.testing.CapturingServletOutputStream;
@@ -89,7 +88,7 @@ class SseServiceImplTest {
     void setUp() {
         clock = new ProgrammableClock();
         Provider<SchedulingExecutor> executorProvider = () -> clock.createSingleThreadedSchedulingExecutor("test");
-        optionRegistry = new OptionRegistryImpl(persistence);
+        optionRegistry = new OptionRegistryImpl(persistence, OptionSaveListener.NO_OP);
         displayableRegistry = new DisplayableRegistryImpl(executorProvider);
         meterRegistry = new SimpleMeterRegistry();
         sseService = newService(executorProvider, optionRegistry, MAX_STREAMS);
@@ -804,7 +803,7 @@ class SseServiceImplTest {
         final Semaphore arrivals = new Semaphore(0);
         final Semaphore departures = new Semaphore(0);
         final SingleThreadedSchedulingExecutor executor = new SingleThreadedSchedulingExecutor("sse-teardown-race");
-        final OptionRegistryImpl registry = new OptionRegistryImpl(persistence);
+        final OptionRegistryImpl registry = new OptionRegistryImpl(persistence, OptionSaveListener.NO_OP);
         final SseServiceImpl service = newService(() -> executor, registry, MAX_STREAMS);
 
         TeardownRace(Option<String> parkingOption, OptionDto parkingOptionDto) {
@@ -826,17 +825,6 @@ class SseServiceImplTest {
             service.stop();
             registry.stop();
             executor.close();
-        }
-    }
-
-    private static final class TestTextOption extends TextOption {
-        TestTextOption(TaskExecutor executor, OptionMeta<String> meta) {
-            super(executor, meta);
-        }
-
-        @Override
-        public String onChanged() {
-            return getValue().orElse(null);
         }
     }
 

@@ -3,6 +3,7 @@ package net.yudichev.jiotty.user.push;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
+import org.immutables.value.Value;
 import org.immutables.value.Value.Immutable;
 
 import java.util.Optional;
@@ -17,7 +18,11 @@ public interface BasePushDeviceRegisterRequest {
 
     String token();
 
-    Optional<String> platform();
+    /// The platform that the request names, or [DevicePlatform#UNKNOWN] when the request names none.
+    @Value.Default
+    default DevicePlatform platform() {
+        return DevicePlatform.UNKNOWN;
+    }
 
     Optional<String> appVersion();
 }

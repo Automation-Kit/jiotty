@@ -25,11 +25,13 @@ import java.io.StringReader;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -229,7 +231,7 @@ final class CalDavClient {
             if (name.equals(HREF)) {
                 href = reader.getElementText().strip();
             } else if (name.equals(PROPSTAT)) {
-                readPropstat(reader, propertiesByNameBuilder);
+                readPropstat(reader, propertiesByNameBuilder::put);
             } else {
                 skipElement(reader);
             }
@@ -238,14 +240,15 @@ final class CalDavClient {
         return new DavResponse(href, propertiesByNameBuilder.buildKeepingLast());
     }
 
-    private static void readPropstat(XMLStreamReader reader, ImmutableMap.Builder<QName, DavProperty> propertiesByNameBuilder) throws XMLStreamException {
-        // a propstat's status may follow its prop, so propstatPropertiesByName holds the properties until isOk has read the status
-        Map<QName, DavProperty> propstatPropertiesByName = ImmutableMap.of();
+    private static void readPropstat(XMLStreamReader reader, BiConsumer<? super QName, ? super DavProperty> propertyConsumer) throws XMLStreamException {
+        // A propstat's status element may follow its prop element, so `propstatProperties` holds the properties until `isOk` has read the status. A propstat
+        // holds some of the properties that its request names, and no request in this class names more than two.
+        var propstatProperties = new ArrayList<Map.Entry<QName, DavProperty>>(2);
         boolean ok = false;
         while (reader.nextTag() == START_ELEMENT) {
             QName name = reader.getName();
             if (name.equals(PROP)) {
-                propstatPropertiesByName = readProp(reader);
+                readProp(reader, propstatProperties::add);
             } else if (name.equals(STATUS)) {
                 ok = isOk(reader.getElementText());
             } else {
@@ -253,16 +256,16 @@ final class CalDavClient {
             }
         }
         if (ok) {
-            propertiesByNameBuilder.putAll(propstatPropertiesByName);
+            for (Map.Entry<QName, DavProperty> property : propstatProperties) {
+                propertyConsumer.accept(property.getKey(), property.getValue());
+            }
         }
     }
 
-    private static Map<QName, DavProperty> readProp(XMLStreamReader reader) throws XMLStreamException {
-        var propertiesByNameBuilder = ImmutableMap.<QName, DavProperty>builder();
+    private static void readProp(XMLStreamReader reader, Consumer<? super Map.Entry<QName, DavProperty>> propertyConsumer) throws XMLStreamException {
         while (reader.nextTag() == START_ELEMENT) {
-            propertiesByNameBuilder.put(reader.getName(), readProperty(reader));
+            propertyConsumer.accept(Map.entry(reader.getName(), readProperty(reader)));
         }
-        return propertiesByNameBuilder.buildKeepingLast();
     }
 
     /// Reads the property the reader is at the start of, up to and including its end.

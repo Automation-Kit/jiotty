@@ -148,8 +148,9 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
         return new TeslaVehicleImpl(vin);
     }
 
-    /// Runs `code` with the current access token, and invalidates that token if the API answers that it will not accept it. The hook rides the call's own
-    /// future while the caller is handed a copy: a retrying caller cancels what it was given, and a cancelled stage never sees the rejection arriving after.
+    /// Runs `code` with the current access token, and invalidates that token if the API rejects it. The invalidation is attached to the future that `code`
+    /// returns, and the caller receives a copy of that future. A retrying caller may cancel its copy, and the invalidation still runs when the rejection
+    /// arrives after that cancellation.
     private <T> CompletableFuture<T> withValidTokenOrFail(Function<String, CompletableFuture<T>> code) {
         return whenStartedAndNotLifecycling(() -> switch (accessTokenObservable.get()) {
             case AuthState.Success success -> {
@@ -161,7 +162,7 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
                             // A response arriving during teardown finds this component stopped, and invalidate() would then throw.
                             ifNotStopped(() -> tokenManager.invalidate(accessToken, "Tesla Fleet API rejected the credential"));
                         } catch (RuntimeException e) {
-                            // Nothing consumes this hook's stage, so an exception raised here would otherwise go nowhere.
+                            // The future that `whenComplete` returns is discarded, so the exception is logged here.
                             logger.info("Failed to invalidate the rejected credential", e);
                         }
                     }

@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.user.persistence;
 
+import com.google.common.collect.ImmutableSetMultimap;
 import net.yudichev.jiotty.common.lang.SerialisedListeners;
 import net.yudichev.jiotty.user.persistence.RecordingUserStateListener.Changed;
 import net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolution;
@@ -9,10 +10,12 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 
 import static java.time.ZoneOffset.UTC;
@@ -25,6 +28,8 @@ class UserStatePublisherTest {
     private static final UserProfile PROFILE = new UserProfile("u1", "user@example.com", Optional.of("Alex"), UTC, CREATED_AT, CREATED_AT);
     private static final UserProfileWithDeletion ACTIVE_USER = new UserProfileWithDeletion(PROFILE, Optional.empty());
     private static final UserProfileWithDeletion SOFT_DELETED_USER = new UserProfileWithDeletion(PROFILE, Optional.of(CREATED_AT));
+    private static final LocalDate DAY = LocalDate.ofInstant(CREATED_AT, UTC);
+    private static final UserRecord RECORD = createRecordWithDays(DAY);
 
     private final UserStatePublisher publisher = new UserStatePublisher(Runnable::run);
 
@@ -154,7 +159,7 @@ class UserStatePublisherTest {
     void aRemovalAListenerThrowsOnFailsTheAcknowledgementAndEndsTheSubscription() {
         var stateListener = new FailureRecordingStateListener() {
             @Override
-            public CompletionStage<?> onRemoved(String userId) {
+            public CompletableFuture<?> onRemoved(String userId) {
                 throw new RuntimeException("removal boom");
             }
         };
@@ -171,7 +176,7 @@ class UserStatePublisherTest {
     void aRemovalAListenersExecutorRejectsFailsTheAcknowledgementAndKeepsTheSubscription() {
         var stateListener = new FailureRecordingStateListener() {
             @Override
-            public CompletionStage<?> onRemoved(String userId) {
+            public CompletableFuture<?> onRemoved(String userId) {
                 throw new RejectedExecutionException("queue full");
             }
         };
@@ -244,6 +249,100 @@ class UserStatePublisherTest {
 
         assertThat(identityListener.resolutions()).containsExactly(new IdentityResolution.Active(PROFILE), IdentityResolution.Absent.INSTANCE);
         assertThat(publisher.subscribedIdentities(PROFILE.id(), List.of())).isEmpty();
+    }
+
+    @Test
+    void deliversRecordChangesPurgesAndRemovalsToARecordSubscriberAfterItsImage() {
+        var recordListener = new RecordingUserRecordListener();
+        publisher.activateRecords(publisher.newSubscription(DAY, recordListener), List.of(RECORD));
+        UserRecord changedRecord = createRecordWithDays(DAY, DAY.plusDays(1));
+
+        publisher.publishRecordChanged(changedRecord);
+        publisher.publishDaysPurged(DAY);
+        publisher.publishRemoved(PROFILE.id());
+
+        assertThat(recordListener.image()).isCompletedWithValue(List.of(RECORD));
+        assertThat(recordListener.changes()).containsExactly(new RecordingUserRecordListener.Changed(changedRecord),
+                                                             new RecordingUserRecordListener.DaysPurged(DAY),
+                                                             new RecordingUserRecordListener.Removed(PROFILE.id()));
+    }
+
+    @Test
+    void aChangedRecordReachesEachSubscriberCutAtItsOwnEarliestDay() {
+        var earlierListener = new RecordingUserRecordListener();
+        var laterListener = new RecordingUserRecordListener();
+        publisher.activateRecords(publisher.newSubscription(DAY.minusDays(1), earlierListener), List.of());
+        publisher.activateRecords(publisher.newSubscription(DAY.plusDays(1), laterListener), List.of());
+        UserRecord changedRecord = createRecordWithDays(DAY.minusDays(1), DAY, DAY.plusDays(1));
+
+        publisher.publishRecordChanged(changedRecord);
+
+        assertThat(earlierListener.changes()).containsExactly(new RecordingUserRecordListener.Changed(changedRecord));
+        assertThat(laterListener.changes()).containsExactly(new RecordingUserRecordListener.Changed(createRecordWithDays(DAY.plusDays(1))));
+    }
+
+    @Test
+    void aRemovalIsAcknowledgedOnlyOnceBothAStateAndARecordSubscriberHaveAppliedIt() {
+        var stateRemovalCompletion = new CompletableFuture<Void>();
+        var recordRemovalCompletion = new CompletableFuture<Void>();
+        publisher.activate(publisher.newSubscription(new RecordingUserStateListener() {
+            @Override
+            public CompletableFuture<?> onRemoved(String userId) {
+                return stateRemovalCompletion;
+            }
+        }), List.of(ACTIVE_USER));
+        publisher.activateRecords(publisher.newSubscription(DAY, new RecordingUserRecordListener() {
+            @Override
+            public CompletableFuture<?> onRemoved(String userId) {
+                return recordRemovalCompletion;
+            }
+        }), List.of(RECORD));
+
+        CompletableFuture<Void> acknowledgement = publisher.publishRemoved(PROFILE.id());
+
+        assertThat(acknowledgement).isNotDone();
+        stateRemovalCompletion.complete(null);
+        assertThat(acknowledgement).isNotDone();
+        recordRemovalCompletion.complete(null);
+        assertThat(acknowledgement).succeedsWithin(Duration.ZERO);
+    }
+
+    @Test
+    void aRemovalARecordListenerThrowsOnFailsTheAcknowledgementAndEndsTheSubscription() {
+        var recordListener = new RecordingUserRecordListener() {
+            @Override
+            public CompletableFuture<?> onRemoved(String userId) {
+                throw new RuntimeException("removal boom");
+            }
+        };
+        publisher.activateRecords(publisher.newSubscription(DAY, recordListener), List.of(RECORD));
+
+        assertThat(publisher.publishRemoved(PROFILE.id())).failsWithin(Duration.ZERO);
+        publisher.publishRecordChanged(RECORD);
+
+        assertThat(recordListener.failure()).succeedsWithin(Duration.ZERO).extracting(Throwable::getMessage).isEqualTo("removal boom");
+        assertThat(recordListener.changes()).isEmpty();
+    }
+
+    @Test
+    void failingTheRecordSubscriptionsTellsEachSubscriberAndDeliversNothingAfterwards() {
+        var recordListener = new RecordingUserRecordListener();
+        var stateListener = new RecordingUserStateListener();
+        publisher.activateRecords(publisher.newSubscription(DAY, recordListener), List.of(RECORD));
+        publisher.activate(publisher.newSubscription(stateListener), List.of(ACTIVE_USER));
+        var failure = new RuntimeException("read-back boom");
+
+        publisher.failRecordSubscriptions(failure);
+        publisher.publishRecordChanged(RECORD);
+        publisher.publishChanged(SOFT_DELETED_USER, List.of(), List.of());
+
+        assertThat(recordListener.failure()).isCompletedWithValue(failure);
+        assertThat(recordListener.changes()).isEmpty();
+        assertThat(stateListener.changes()).containsExactly(new Changed(SOFT_DELETED_USER));
+    }
+
+    private static UserRecord createRecordWithDays(LocalDate... days) {
+        return new UserRecord(PROFILE.id(), ImmutableSetMultimap.<String, LocalDate>builder().putAll("CHARGE_STARTED", days).build(), false, Map.of());
     }
 
     /// Records the changes and the subscription failure a state listener receives, synchronously.

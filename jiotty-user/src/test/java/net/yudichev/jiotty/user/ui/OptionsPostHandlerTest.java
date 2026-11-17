@@ -77,7 +77,7 @@ class OptionsPostHandlerTest {
     @BeforeEach
     void setUp() {
         clock = new ProgrammableClock();
-        registry = new OptionRegistryImpl(persistence);
+        registry = new OptionRegistryImpl(persistence, OptionSaveListener.NO_OP);
         registry.start();
         Provider<SchedulingExecutor> executorProvider = () -> clock.createSingleThreadedSchedulingExecutor("test");
         handler = new OptionsPostHandler(registry, alertService, executorProvider, "user-1");

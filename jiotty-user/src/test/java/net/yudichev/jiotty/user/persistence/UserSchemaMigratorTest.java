@@ -15,7 +15,7 @@ class UserSchemaMigratorTest {
     void makesTheAddressRequiredAtVersion2() {
         assertThat(migrator.getMigrationStatements(2)).singleElement()
                                                       .asString()
-                                                      .contains("%DOMAIN_PREFIX%user")
+                                                      .contains(UserPersistenceImpl.USER_TABLE_TEMPLATE)
                                                       .contains("email SET NOT NULL");
     }
 
@@ -25,10 +25,21 @@ class UserSchemaMigratorTest {
     void addsLastActiveAtAndDropsItsBackfillDefaultAtVersion3() {
         assertThat(migrator.getMigrationStatements(3)).satisfiesExactly(
                 // Dated to the day, like every other writer of the column: the backfill must not put a time of day into rows that predate it.
-                addColumn -> assertThat(addColumn).contains("%DOMAIN_PREFIX%user")
-                                                  .contains("last_active_at timestamptz NOT NULL DEFAULT date_trunc('day', now())"),
-                dropDefault -> assertThat(dropDefault).contains("last_active_at").contains("DROP DEFAULT"),
+                addColumnStatement -> assertThat(addColumnStatement).contains(UserPersistenceImpl.USER_TABLE_TEMPLATE)
+                                                                    .contains("last_active_at timestamptz NOT NULL DEFAULT date_trunc('day', now())"),
+                dropDefaultStatement -> assertThat(dropDefaultStatement).contains("last_active_at").contains("DROP DEFAULT"),
                 index -> assertThat(index).contains("last_active_at").contains("deleted_at IS NULL"));
+    }
+
+    /// The version 4 migration uses the same column definition and table statements as the creation of a new store, so a migrated store and a new store have
+    /// the same column and tables.
+    @Test
+    void addsTheActivityHistorySwitchAndTheActivityDayAndAttachmentTablesAtVersion4() {
+        assertThat(migrator.getMigrationStatements(4)).satisfiesExactly(
+                addColumnStatement -> assertThat(addColumnStatement).contains(UserPersistenceImpl.USER_TABLE_TEMPLATE)
+                                                                    .contains(UserPersistenceImpl.ACTIVITY_HISTORY_DISABLED_COLUMN_DDL),
+                activityDayTableStatement -> assertThat(activityDayTableStatement).isEqualTo(UserPersistenceImpl.ACTIVITY_DAY_TABLE_DDL),
+                attachmentTableStatement -> assertThat(attachmentTableStatement).isEqualTo(UserPersistenceImpl.ATTACHMENT_TABLE_DDL));
     }
 
     /// Every version up to [UserSchemaMigrator#BASE_SCHEMA_VERSION] must be reachable, or an app on an older store cannot be migrated forward at all — which
