@@ -24,6 +24,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -34,6 +36,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -54,10 +57,14 @@ import static net.yudichev.jiotty.connector.icloud.calendar.CalDavFixtures.HOME;
 import static net.yudichev.jiotty.connector.icloud.calendar.CalDavFixtures.HOME_RESPONSE;
 import static net.yudichev.jiotty.connector.icloud.calendar.CalDavFixtures.createErrorResponse;
 import static net.yudichev.jiotty.connector.icloud.calendar.CalDavFixtures.createMultiStatusResponse;
+import static net.yudichev.jiotty.connector.icloud.calendar.IcloudCalendarService.AUTHENTICATION_RETRY_TASK;
 import static net.yudichev.jiotty.connector.icloud.calendar.IcloudCalendarService.AUTH_STATE_DELIVERY_TASK;
+import static net.yudichev.jiotty.connector.icloud.calendar.IcloudCalendarService.UNAUTHORISED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
+import static org.junit.jupiter.api.Named.named;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 @ExtendWith(MockitoExtension.class)
 class IcloudCalendarServiceTest {
@@ -87,10 +94,9 @@ class IcloudCalendarServiceTest {
                                                     </d:response>
                                                   </d:multistatus>""".formatted(CALENDAR_HREF);
     /// [#EVENTS_RESPONSE] with a second entry, a copy of its first whose `VEVENT` is never closed.
-    private static final String EVENTS_WITH_UNREADABLE_ENTRY_RESPONSE = EVENTS_RESPONSE.replace(
-            "</d:multistatus>",
-            EVENTS_RESPONSE.substring(EVENTS_RESPONSE.indexOf("<d:response>"), EVENTS_RESPONSE.indexOf("</d:multistatus>")).replace("END:VEVENT\n", "")
-            + "</d:multistatus>");
+    private static final String EVENTS_WITH_UNREADABLE_ENTRY_RESPONSE = createEventsResponseWithASecondEntryLacking("END:VEVENT\n");
+    /// [#EVENTS_RESPONSE] with a second entry, a copy of its first with no `DTEND`.
+    private static final String EVENTS_WITH_ENTRY_WITHOUT_END_RESPONSE = createEventsResponseWithASecondEntryLacking("DTEND:20260620T110000Z\n");
     /// iCloud folds a long line onto the next one, which starts with a space, and the XML the data travels in delivers its line breaks as bare `\n`.
     private static final String FOLDED_LINE_EVENTS_RESPONSE = EVENTS_RESPONSE.replace("LOCATION:12 Harley Street\n", "LOCATION:12 Harley\n  Street\n");
     private static final Instant FROM = Instant.parse("2026-06-20T00:00:00Z");
@@ -143,35 +149,38 @@ class IcloudCalendarServiceTest {
     /// An unchanged calendar keeps its instance across retrievals, so a consumer comparing calendars by identity sees a change only when one happens.
     @Test
     void retrieveCalendars_again_returnsTheSameInstanceOfAnUnchangedCalendar() {
-        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
-        service.start();
-        Calendar calendar = retrieveCalendars().getFirst();
+        Calendar calendar = startAndRetrieveTheCalendar();
 
         assertThat(retrieveCalendars()).singleElement().isSameAs(calendar);
     }
 
     @Test
     void retrieveCalendars_calendarRenamed_returnsANewInstance() {
-        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
-        service.start();
-        Calendar calendar = retrieveCalendars().getFirst();
-        answerWith(request -> WELL_KNOWN_CALDAV_URL.encodedPath().equals(request.url().encodedPath())
-                              ? createMultiStatusResponse(request, HOME_RESPONSE)
-                              : createMultiStatusResponse(request, CALENDARS_RESPONSE.replace(CALENDAR_TITLE, "Renamed")));
+        Calendar calendar = startAndRetrieveTheCalendar();
+        answerWith(request -> respondAfterDiscovery(request,
+                                                    listingRequest -> createMultiStatusResponse(listingRequest,
+                                                                                                CALENDARS_RESPONSE.replace(CALENDAR_TITLE, "Renamed"))));
 
         assertThat(retrieveCalendars()).singleElement().isNotSameAs(calendar).returns("Renamed", Calendar::name);
     }
 
-    /// The credentials passed discovery, so a failing listing is a transient fault of the listing alone.
+    /// The discovery request succeeds and the listing request fails, and the retrieval publishes no [AuthState.Success].
     @Test
     void retrieveCalendars_listingFails_failsWithTheStatus() {
-        answerWith(request -> WELL_KNOWN_CALDAV_URL.encodedPath().equals(request.url().encodedPath())
-                              ? createMultiStatusResponse(request, HOME_RESPONSE)
-                              : createErrorResponse(request, SERVICE_UNAVAILABLE_503));
+        answerWith(request -> respondToListingWith(request, SERVICE_UNAVAILABLE_503));
         service.start();
 
         assertFailsWithStatus(retrieveCalendarsFuture(), SERVICE_UNAVAILABLE_503);
-        assertThat(authStates).last().isInstanceOf(AuthState.Success.class);
+        assertThat(authStates).noneMatch(AuthState.Success.class::isInstance).last().isInstanceOf(AuthState.TransientFailure.class);
+    }
+
+    @Test
+    void retrieveCalendars_listingRejected_failsAsARejection() {
+        answerWith(request -> respondToListingWith(request, UNAUTHORIZED_401));
+        service.start();
+
+        assertFailsAsRejection(retrieveCalendarsFuture());
+        assertThat(authStates).noneMatch(AuthState.Success.class::isInstance).last().isInstanceOf(AuthState.PermanentFailure.class);
     }
 
     @Test
@@ -179,14 +188,227 @@ class IcloudCalendarServiceTest {
         answerWith(request -> createErrorResponse(request, UNAUTHORIZED_401));
         service.start();
 
-        assertThat(retrieveCalendarsFuture()).failsWithin(Duration.ZERO)
-                                             .withThrowableThat()
-                                             .havingCause()
-                                             .isInstanceOf(CalendarAuthorisationException.class)
-                                             .havingCause()
-                                             .isInstanceOfSatisfying(HttpResponseException.class,
-                                                                     httpFailure -> assertThat(httpFailure.statusCode()).isEqualTo(UNAUTHORIZED_401));
+        assertFailsAsRejection(retrieveCalendarsFuture());
         assertThat(authStates).last().isInstanceOf(AuthState.PermanentFailure.class);
+    }
+
+    @Test
+    void fetchEvents_rejected_failsAsARejectionAndPublishesIt() {
+        Calendar calendar = startAndRetrieveTheCalendar();
+        answerWith(request -> createErrorResponse(request, UNAUTHORIZED_401));
+
+        CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
+        clock.tick();
+
+        assertFailsAsRejection(events);
+        assertThat(authStates).last().isInstanceOf(AuthState.PermanentFailure.class);
+    }
+
+    /// Two reads in flight are both rejected: the first suspends the service, and the second fails as a rejection and publishes no second [AuthState].
+    @Test
+    void fetchEvents_rejectedWhileTheServiceIsAlreadySuspended_publishesNoSecondRejection() {
+        Calendar calendar = startAndRetrieveTheCalendar();
+        List<PendingCall> pendingCalls = stubDeferredCalls(httpClient);
+        CompletableFuture<List<CalendarEvent>> firstEvents = calendar.fetchEvents(FROM, TO);
+        CompletableFuture<List<CalendarEvent>> secondEvents = calendar.fetchEvents(FROM, TO);
+        clock.tick();
+        assertThat(pendingCalls).hasSize(2);
+        PendingCall firstReportCall = pendingCalls.removeFirst();
+        firstReportCall.respond(createErrorResponse(firstReportCall.request(), UNAUTHORIZED_401));
+        clock.tick();
+        int authStateCountWhenSuspended = authStates.size();
+
+        PendingCall secondReportCall = takeOnlyPendingCall(pendingCalls);
+        secondReportCall.respond(createErrorResponse(secondReportCall.request(), UNAUTHORIZED_401));
+        clock.tick();
+
+        assertFailsAsRejection(firstEvents);
+        assertFailsAsRejection(secondEvents);
+        assertThat(authStates).hasSize(authStateCountWhenSuspended).last().isInstanceOf(AuthState.PermanentFailure.class);
+    }
+
+    /// After a rejection the service sends nothing: each call fails at once with the rejection that suspended it.
+    @Test
+    void afterARejection_retrievalsAndEventReadsFailWithoutARequest() {
+        Calendar calendar = startAndSuspend();
+        int requestCountWhenSuspended = requests.size();
+        int authStateCountWhenSuspended = authStates.size();
+
+        CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
+        clock.tick();
+
+        assertFailsAsRejection(events);
+        assertFailsAsRejection(retrieveCalendarsFuture());
+        assertThat(requests).hasSize(requestCountWhenSuspended);
+        assertThat(authStates).hasSize(authStateCountWhenSuspended);
+    }
+
+    @Test
+    void retryAuthentication_accepted_publishesSuccessAndTheServiceSendsRequestsAgain() {
+        Calendar calendar = startAndSuspend();
+        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
+
+        service.retryAuthentication();
+        clock.tick();
+
+        assertThat(authStates).last().isInstanceOf(AuthState.Success.class);
+        assertThat(requests).extracting(request -> request.url().host()).containsExactly(WELL_KNOWN_CALDAV_URL.host(), HOME.host());
+        CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
+        clock.tick();
+        assertThat(events).succeedsWithin(Duration.ZERO);
+        assertThat(retrieveCalendars()).singleElement().isSameAs(calendar);
+    }
+
+    /// @param responder     creates the response to each request of the retry
+    /// @param expectedState the [AuthState] that the retry publishes
+    @ParameterizedTest
+    @MethodSource
+    void retryAuthentication_failing_publishesTheFailureAndStaysSuspended(Function<Request, Response> responder, AuthState expectedState) {
+        startAndSuspend();
+        answerWith(responder);
+        int authStateCountBeforeRetry = authStates.size();
+
+        service.retryAuthentication();
+        clock.tick();
+
+        assertThat(authStates).hasSize(authStateCountBeforeRetry + 1).last().isEqualTo(expectedState);
+        int requestCountAfterRetry = requests.size();
+        assertFailsAsRejection(retrieveCalendarsFuture());
+        assertThat(requests).hasSize(requestCountAfterRetry);
+    }
+
+    static Stream<Arguments> retryAuthentication_failing_publishesTheFailureAndStaysSuspended() {
+        Function<Request, Response> listingRejectionResponder = request -> respondToListingWith(request, UNAUTHORIZED_401);
+        Function<Request, Response> serverErrorResponder = request -> createErrorResponse(request, SERVICE_UNAVAILABLE_503);
+        return Stream.of(arguments(named("the retry's discovery succeeds and its listing is rejected", listingRejectionResponder), UNAUTHORISED),
+                         arguments(named("a server error", serverErrorResponder), new AuthState.TransientFailure("HTTP " + SERVICE_UNAVAILABLE_503)));
+    }
+
+    /// @param discoveryCompletion completes the retry's discovery call
+    @ParameterizedTest
+    @MethodSource
+    void retryAuthentication_discoveryWithoutAUsableResponse_publishesATransientFailure(Consumer<PendingCall> discoveryCompletion) {
+        startAndSuspend();
+        List<String> failedTaskDescriptions = collectFailedTaskDescriptions();
+        List<PendingCall> pendingCalls = stubDeferredCalls(httpClient);
+        int authStateCountBeforeRetry = authStates.size();
+
+        service.retryAuthentication();
+        clock.tick();
+        discoveryCompletion.accept(takeOnlyPendingCall(pendingCalls));
+        clock.tick();
+
+        assertThat(authStates).hasSize(authStateCountBeforeRetry + 1).last().isInstanceOf(AuthState.TransientFailure.class);
+        assertThat(failedTaskDescriptions).isEmpty();
+    }
+
+    static Stream<Arguments> retryAuthentication_discoveryWithoutAUsableResponse_publishesATransientFailure() {
+        Consumer<PendingCall> transportFailureCompletion = discoveryCall -> discoveryCall.fail(new IOException("connection reset"));
+        Consumer<PendingCall> unparseableResponseCompletion =
+                discoveryCall -> discoveryCall.respond(createMultiStatusResponse(discoveryCall.request(), "<multistatus xmlns=\"DAV:\"/>"));
+        return Stream.of(arguments(named("a transport failure", transportFailureCompletion)),
+                         arguments(named("a response that cannot be parsed", unparseableResponseCompletion)));
+    }
+
+    @Test
+    void retryAuthentication_failingBeforeARequestIsSent_publishesATransientFailureAndReportsIt() {
+        startAndSuspend();
+        List<String> failedTaskDescriptions = collectFailedTaskDescriptions();
+        answerWith(_ -> {
+            throw new IllegalStateException("the client is unusable");
+        });
+        int authStateCountBeforeRetry = authStates.size();
+
+        service.retryAuthentication();
+        clock.tick();
+
+        assertThat(authStates).hasSize(authStateCountBeforeRetry + 1).last().isInstanceOf(AuthState.TransientFailure.class);
+        assertThat(failedTaskDescriptions).containsExactly(AUTHENTICATION_RETRY_TASK);
+    }
+
+    @Test
+    void retryAuthentication_acceptedWhileNotSuspended_publishesSuccess() {
+        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
+        service.start();
+
+        service.retryAuthentication();
+        clock.tick();
+
+        assertThat(authStates).last().isInstanceOf(AuthState.Success.class);
+    }
+
+    @Test
+    void retryAuthentication_afterTheServiceStopped_sendsNothing() {
+        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
+        service.start();
+        service.stop();
+
+        service.retryAuthentication();
+        clock.tick();
+
+        assertThat(requests).isEmpty();
+    }
+
+    /// An events read is rejected while a retrieval is in flight. The retrieval then fails as that rejection and publishes no [AuthState].
+    ///
+    /// @param retrievalResponder creates the response to each request of the retrieval
+    @ParameterizedTest
+    @MethodSource
+    void retrieveCalendars_completingAfterAnEventsReadWasRejectedInFlight_failsAsThatRejection(Function<Request, Response> retrievalResponder) {
+        Calendar calendar = startAndRetrieveTheCalendar();
+        List<PendingCall> pendingCalls = stubDeferredCalls(httpClient);
+        CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
+        clock.tick();
+        PendingCall reportCall = takeOnlyPendingCall(pendingCalls);
+        CompletableFuture<CalendarsResult> retrieval = retrieveCalendarsFuture();
+        PendingCall discoveryCall = takeOnlyPendingCall(pendingCalls);
+        reportCall.respond(createErrorResponse(reportCall.request(), UNAUTHORIZED_401));
+        clock.tick();
+        assertFailsAsRejection(events);
+        int authStateCountWhenSuspended = authStates.size();
+
+        discoveryCall.respond(retrievalResponder.apply(discoveryCall.request()));
+        clock.tick();
+        pendingCalls.forEach(listingCall -> listingCall.respond(retrievalResponder.apply(listingCall.request())));
+        clock.tick();
+
+        assertFailsAsRejection(retrieval);
+        assertThat(authStates).hasSize(authStateCountWhenSuspended);
+    }
+
+    static Stream<Arguments> retrieveCalendars_completingAfterAnEventsReadWasRejectedInFlight_failsAsThatRejection() {
+        Function<Request, Response> listingResponder = IcloudCalendarServiceTest::respondAsIcloud;
+        Function<Request, Response> discoveryFailureResponder = request -> createErrorResponse(request, SERVICE_UNAVAILABLE_503);
+        return Stream.of(arguments(named("the server lists the calendars", listingResponder)),
+                         arguments(named("the server fails the discovery", discoveryFailureResponder)));
+    }
+
+    /// An events read is sent, and the service is then suspended and resumes. The rejection of that read, arriving afterwards, publishes no [AuthState]
+    /// and leaves the service sending requests.
+    @Test
+    void fetchEvents_rejectedAfterALaterSuspensionEnded_leavesTheServiceAuthenticated() {
+        Calendar calendar = startAndRetrieveTheCalendar();
+        List<PendingCall> pendingCalls = stubDeferredCalls(httpClient);
+        CompletableFuture<List<CalendarEvent>> staleEvents = calendar.fetchEvents(FROM, TO);
+        clock.tick();
+        PendingCall staleReportCall = takeOnlyPendingCall(pendingCalls);
+        CompletableFuture<CalendarsResult> rejectedRetrieval = retrieveCalendarsFuture();
+        PendingCall rejectedDiscoveryCall = takeOnlyPendingCall(pendingCalls);
+        rejectedDiscoveryCall.respond(createErrorResponse(rejectedDiscoveryCall.request(), UNAUTHORIZED_401));
+        clock.tick();
+        assertFailsAsRejection(rejectedRetrieval);
+        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
+        service.retryAuthentication();
+        clock.tick();
+        assertThat(authStates).last().isInstanceOf(AuthState.Success.class);
+        int authStateCountAfterRetry = authStates.size();
+
+        staleReportCall.respond(createErrorResponse(staleReportCall.request(), UNAUTHORIZED_401));
+        clock.tick();
+
+        assertFailsAsRejection(staleEvents);
+        assertThat(authStates).hasSize(authStateCountAfterRetry);
+        assertThat(retrieveCalendars()).singleElement().isSameAs(calendar);
     }
 
     /// The status reaches the caller as an [HttpResponseException], which [SharedUpstreamOutage#indicatesSharedOutage] classifies as a shared outage when it
@@ -244,10 +466,9 @@ class IcloudCalendarServiceTest {
 
     @Test
     void fetchEvents_readsEachEventOfTheRange() {
-        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
-        service.start();
+        Calendar calendar = startAndRetrieveTheCalendar();
 
-        CompletableFuture<List<CalendarEvent>> events = retrieveCalendars().getFirst().fetchEvents(FROM, TO);
+        CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
         clock.tick();
 
         assertThat(events).succeedsWithin(Duration.ZERO)
@@ -290,11 +511,13 @@ class IcloudCalendarServiceTest {
                           .satisfies(event -> assertThat(event.location()).hasValue("12 Harley Street"));
     }
 
-    /// An entry the parser cannot read costs only that entry, and the log line naming it quotes none of its data.
-    @Test
-    void fetchEvents_unreadableEntry_skipsItAndReadsTheRest() {
+    /// An entry that the parser cannot read, or one with neither an end nor a duration, is skipped and the other entries are returned; the log line reporting
+    /// it quotes none of the entry's data.
+    @ParameterizedTest
+    @MethodSource
+    void fetchEvents_entryThatCannotBeRead_skipsItAndReadsTheRest(String eventsResponse, String expectedLogText) {
         answerWith(request -> REPORT.equals(request.method())
-                              ? createMultiStatusResponse(request, EVENTS_WITH_UNREADABLE_ENTRY_RESPONSE)
+                              ? createMultiStatusResponse(request, eventsResponse)
                               : respondAsIcloud(request));
         service.start();
         Calendar calendar = retrieveCalendars().getFirst();
@@ -312,8 +535,13 @@ class IcloudCalendarServiceTest {
                           .singleElement()
                           .satisfies(event -> assertThat(event.id()).isEqualTo("dentist-uid"));
         assertThat(lines).flatMap(line -> line.text().toList())
-                         .anySatisfy(text -> assertThat(text).contains("unreadable at line"))
+                         .anySatisfy(text -> assertThat(text).contains(expectedLogText))
                          .noneMatch(text -> Stream.of(CALENDAR_TITLE, "Dentist", "Harley Street").anyMatch(text::contains));
+    }
+
+    static Stream<Arguments> fetchEvents_entryThatCannotBeRead_skipsItAndReadsTheRest() {
+        return Stream.of(arguments(EVENTS_WITH_UNREADABLE_ENTRY_RESPONSE, "unreadable at line"),
+                         arguments(EVENTS_WITH_ENTRY_WITHOUT_END_RESPONSE, "neither an end nor a duration"));
     }
 
     @Test
@@ -329,8 +557,7 @@ class IcloudCalendarServiceTest {
 
     @Test
     void retrieveCalendars_authStateSubscriberThrowing_reportsTheTaskFailure() {
-        List<String> failedTaskDescriptions = new ArrayList<>();
-        taskFailureRegistry.addExceptionHandler((taskDescription, _) -> failedTaskDescriptions.add(taskDescription));
+        List<String> failedTaskDescriptions = collectFailedTaskDescriptions();
         service.subscribeToAuthState(_ -> {
             throw new IllegalStateException("subscriber failure");
         });
@@ -344,9 +571,7 @@ class IcloudCalendarServiceTest {
     /// The failure an operator reads names whose calendar failed, but never its href, which opens with the account id.
     @Test
     void fetchEvents_transportFailure_namesTheSubjectAndTheRedactedCalendar() {
-        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
-        service.start();
-        Calendar calendar = retrieveCalendars().getFirst();
+        Calendar calendar = startAndRetrieveTheCalendar();
         List<PendingCall> pendingCalls = stubDeferredCalls(httpClient);
 
         CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
@@ -373,6 +598,13 @@ class IcloudCalendarServiceTest {
         assertGivesUpAfter(client, timeout);
     }
 
+    @Test
+    void createHttpClient_installsTheCredentialRejectionAndServerErrorLoggingInterceptor() {
+        OkHttpClient client = createUnstubbedHttpClient(Duration.ofSeconds(30));
+
+        assertThat(client.interceptors()).hasAtLeastOneElementOfType(CredentialRejectionAndServerErrorLoggingInterceptor.class);
+    }
+
     /// A zero timeout would turn every timeout off, and a call that hangs would then hold up every later retrieval.
     @ParameterizedTest
     @ValueSource(longs = {0, -1})
@@ -382,17 +614,15 @@ class IcloudCalendarServiceTest {
 
     @Test
     void fetchEvents_afterTheServiceStopped_neverCompletes() {
-        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
-        service.start();
-        Calendar calendar = retrieveCalendars().getFirst();
-        int requestsBeforeStop = requests.size();
+        Calendar calendar = startAndRetrieveTheCalendar();
+        int requestCountBeforeStop = requests.size();
         service.stop();
 
         CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
         clock.tick();
 
         assertThat(events).isNotDone();
-        assertThat(requests).hasSize(requestsBeforeStop);
+        assertThat(requests).hasSize(requestCountBeforeStop);
     }
 
     @Test
@@ -497,9 +727,7 @@ class IcloudCalendarServiceTest {
     /// Stopping fails the requests in flight, and that failure reaches no caller.
     @Test
     void fetchEvents_inFlightWhenTheServiceStops_neverCompletes() {
-        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
-        service.start();
-        Calendar calendar = retrieveCalendars().getFirst();
+        Calendar calendar = startAndRetrieveTheCalendar();
         List<PendingCall> pendingCalls = stubDeferredCalls(httpClient);
         CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
         clock.tick();
@@ -515,9 +743,7 @@ class IcloudCalendarServiceTest {
     /// A report answered just before the stop is read on the executor after it. The service is found stopped there, so the caller's future never completes.
     @Test
     void fetchEvents_answeredJustBeforeTheServiceStops_neverCompletes() {
-        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
-        service.start();
-        Calendar calendar = retrieveCalendars().getFirst();
+        Calendar calendar = startAndRetrieveTheCalendar();
         List<PendingCall> pendingCalls = stubDeferredCalls(httpClient);
         CompletableFuture<List<CalendarEvent>> events = calendar.fetchEvents(FROM, TO);
         clock.tick();
@@ -553,13 +779,10 @@ class IcloudCalendarServiceTest {
     }
 
     private static Response respondAsIcloud(Request request) {
-        String path = request.url().encodedPath();
-        if (WELL_KNOWN_CALDAV_URL.encodedPath().equals(path)) {
-            return createMultiStatusResponse(request, HOME_RESPONSE);
-        }
-        return path.equals(CALENDAR_HREF) && REPORT.equals(request.method())
-               ? createMultiStatusResponse(request, EVENTS_RESPONSE)
-               : createMultiStatusResponse(request, CALENDARS_RESPONSE);
+        return respondAfterDiscovery(request,
+                                     laterRequest -> laterRequest.url().encodedPath().equals(CALENDAR_HREF) && REPORT.equals(laterRequest.method())
+                                                     ? createMultiStatusResponse(laterRequest, EVENTS_RESPONSE)
+                                                     : createMultiStatusResponse(laterRequest, CALENDARS_RESPONSE));
     }
 
     private OkHttpClient createUnstubbedHttpClient(Duration timeout) {
@@ -568,6 +791,56 @@ class IcloudCalendarServiceTest {
 
     private IcloudCalendarService newUnstubbedService(Duration timeout) {
         return new IcloudCalendarService(() -> executor, USERNAME, PASSWORD, timeout, LOG_SUBJECT_ID, new ListenerBackedTaskExceptionHandlerRegistry());
+    }
+
+    /// @return the response of an account whose discovery succeeds and whose calendar listing fails with the status `listingStatus`
+    private static Response respondToListingWith(Request request, int listingStatus) {
+        return respondAfterDiscovery(request, listingRequest -> createErrorResponse(listingRequest, listingStatus));
+    }
+
+    /// @param laterResponder creates the response to every request other than the discovery request
+    /// @return a successful discovery response to the discovery request, and the response that `laterResponder` creates to any other request
+    private static Response respondAfterDiscovery(Request request, Function<Request, Response> laterResponder) {
+        return WELL_KNOWN_CALDAV_URL.encodedPath().equals(request.url().encodedPath())
+               ? createMultiStatusResponse(request, HOME_RESPONSE)
+               : laterResponder.apply(request);
+    }
+
+    /// @return the calendar of the service, which is started and then suspended by a rejected retrieval
+    private Calendar startAndSuspend() {
+        Calendar calendar = startAndRetrieveTheCalendar();
+        answerWith(request -> createErrorResponse(request, UNAUTHORIZED_401));
+        assertFailsAsRejection(retrieveCalendarsFuture());
+        return calendar;
+    }
+
+    private Calendar startAndRetrieveTheCalendar() {
+        answerWith(IcloudCalendarServiceTest::respondAsIcloud);
+        service.start();
+        return retrieveCalendars().getFirst();
+    }
+
+    /// @return the descriptions of the tasks whose failure the service reports from now on
+    private List<String> collectFailedTaskDescriptions() {
+        List<String> failedTaskDescriptions = new ArrayList<>();
+        taskFailureRegistry.addExceptionHandler((taskDescription, _) -> failedTaskDescriptions.add(taskDescription));
+        return failedTaskDescriptions;
+    }
+
+    /// @return [#EVENTS_RESPONSE] with a second entry: a copy of the first entry that lacks the line `removedLine`
+    private static String createEventsResponseWithASecondEntryLacking(String removedLine) {
+        String firstEntry = EVENTS_RESPONSE.substring(EVENTS_RESPONSE.indexOf("<d:response>"), EVENTS_RESPONSE.indexOf("</d:multistatus>"));
+        return EVENTS_RESPONSE.replace("</d:multistatus>", firstEntry.replace(removedLine, "") + "</d:multistatus>");
+    }
+
+    private static void assertFailsAsRejection(CompletableFuture<?> future) {
+        assertThat(future).failsWithin(Duration.ZERO)
+                          .withThrowableThat()
+                          .havingCause()
+                          .isInstanceOf(CalendarAuthorisationException.class)
+                          .havingCause()
+                          .isInstanceOfSatisfying(HttpResponseException.class,
+                                                  httpFailure -> assertThat(httpFailure.statusCode()).isEqualTo(UNAUTHORIZED_401));
     }
 
     private static void assertFailsWithStatus(CompletableFuture<?> future, int expectedStatus) {

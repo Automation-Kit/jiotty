@@ -12,11 +12,18 @@ public interface CalendarService {
     /// Retrieves the calendars available to the configured account.
     ///
     /// @return a future completing with [CalendarsResult.Calendars] holding the account's calendar list, or with [CalendarsResult.NotYetAuthenticated] while
-    ///         the provider's authentication is still in progress. Completes exceptionally with [CalendarAuthorisationException] when the provider rejects the
-    ///         configured credentials — a permanent failure the caller must surface for re-authentication rather than retry.
+    ///         the provider's authentication is still in progress
     CompletableFuture<CalendarsResult> retrieveCalendars();
 
     Closeable subscribeToAuthState(Consumer<AuthState> consumer);
+
+    /// Submits the configured credentials to the provider once more, after the provider has rejected them. The outcome is delivered to the
+    /// [#subscribeToAuthState] subscribers as one [AuthState].
+    ///
+    /// @implSpec The default does nothing, which suits a service that keeps calling the provider after a rejection. A service that stops calling the provider
+    ///           after a rejection must override this method, and must then resume calling the provider on an [AuthState.Success].
+    default void retryAuthentication() {
+    }
 
     /// Deletes every credential this service stored outside its configuration and withdraws the access the provider granted it. The service authenticates
     /// nothing afterwards.

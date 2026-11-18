@@ -13,6 +13,8 @@ final class CalDavFixtures {
     static final String ACCOUNT_ID = "1051121623";
     static final String CALENDAR_HREF = "/" + ACCOUNT_ID + "/calendars/27A6139E-FFFD-4C0F-9DCC-B914B9CB04E7/";
     static final String CALENDAR_TITLE = "Family Holidays";
+    /// The body of every [#createErrorResponse] response.
+    static final String ERROR_BODY = "<error/>";
     /// The listing of a home holding the one calendar [#CALENDAR_HREF] titled [#CALENDAR_TITLE], with CalDAV's namespace declared as the default one.
     static final String CALENDARS_RESPONSE = """
                                              <multistatus xmlns="DAV:">
@@ -54,6 +56,6 @@ final class CalDavFixtures {
     }
 
     static Response createErrorResponse(Request request, int statusCode) {
-        return response(request, statusCode, XML, "<error/>");
+        return response(request, statusCode, XML, ERROR_BODY);
     }
 }

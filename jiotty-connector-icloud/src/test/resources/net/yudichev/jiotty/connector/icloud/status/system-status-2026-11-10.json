@@ -1,0 +1,88 @@
+{
+  "drMessage": null,
+  "services": [
+    {
+      "serviceName": "Apple Account",
+      "redirectUrl": null,
+      "events": []
+    },
+    {
+      "serviceName": "Apple Music",
+      "redirectUrl": null,
+      "events": [
+        {
+          "messageId": "1000005963",
+          "statusType": "Performance",
+          "message": "Users may have experienced intermittent issues with this service.",
+          "datePosted": "11/11/2026 00:01 UTC",
+          "startDate": "11/09/2026 13:00 UTC",
+          "endDate": "11/09/2026 18:00 UTC",
+          "epochStartDate": 1794229200000,
+          "epochEndDate": 1794247200000,
+          "usersAffected": "Some users were affected",
+          "affectedServices": [
+            "Apple Music",
+            "Podcasts"
+          ],
+          "eventStatus": "resolved"
+        }
+      ]
+    },
+    {
+      "serviceName": "Find My",
+      "redirectUrl": null,
+      "events": [
+        {
+          "messageId": "2000005780",
+          "statusType": "Issue",
+          "message": "This service may be slow or unavailable.",
+          "datePosted": "11/11/2026 00:01 UTC",
+          "startDate": "11/10/2026 22:50 UTC",
+          "endDate": null,
+          "epochStartDate": 1794351000000,
+          "epochEndDate": null,
+          "usersAffected": "Some users are affected",
+          "affectedServices": null,
+          "eventStatus": "ongoing"
+        }
+      ]
+    },
+    {
+      "serviceName": "iCloud Account & Sign In",
+      "redirectUrl": null,
+      "events": []
+    },
+    {
+      "serviceName": "iCloud Calendar",
+      "redirectUrl": null,
+      "events": [
+        {
+          "messageId": "1000005965",
+          "statusType": "Outage",
+          "message": "Some users may be experiencing issues with this service. ",
+          "datePosted": "11/11/2026 00:01 UTC",
+          "startDate": "11/10/2026 22:49 UTC",
+          "endDate": null,
+          "epochStartDate": 1794350940000,
+          "epochEndDate": null,
+          "usersAffected": "Some users are affected",
+          "affectedServices": [
+            "Game Center",
+            "Photos",
+            "iCloud Calendar",
+            "iCloud Contacts",
+            "iCloud Mail",
+            "iWork for iCloud"
+          ],
+          "eventStatus": "ongoing"
+        }
+      ]
+    },
+    {
+      "serviceName": "iCloud Notes",
+      "redirectUrl": null,
+      "events": []
+    }
+  ],
+  "drpost": false
+}

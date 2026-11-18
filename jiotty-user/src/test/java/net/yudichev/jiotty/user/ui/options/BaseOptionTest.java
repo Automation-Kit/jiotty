@@ -152,32 +152,42 @@ class BaseOptionTest {
 
     @Test
     void settingAValueWithoutApplyingNotifiesListenersButSkipsValidationAndOnChanged() {
-        List<String> heard = listenToChanges();
+        List<String> heardValues = listenToChanges();
         option.refuse = true;
 
         option.setValueWithoutApplying("applied");
 
         assertThat(option.getValue()).contains("applied");
-        assertThat(heard).containsExactly("applied");
+        assertThat(heardValues).containsExactly("applied");
         assertThat(option.changes).containsExactly("accepted-before");
     }
 
     @Test
     void settingTheCurrentValueWithoutApplyingNotifiesNoListener() {
-        List<String> heard = listenToChanges();
+        List<String> heardValues = listenToChanges();
 
         option.setValueWithoutApplying("accepted-before");
 
-        assertThat(heard).isEmpty();
+        assertThat(heardValues).isEmpty();
+    }
+
+    @Test
+    void notifyingThatTheDtoChangedNotifiesListenersWithTheCurrentValueAndSkipsOnChanged() {
+        List<String> heardValues = listenToChanges();
+
+        option.notifyDtoChanged();
+
+        assertThat(heardValues).containsExactly("accepted-before");
+        assertThat(option.changes).containsExactly("accepted-before");
     }
 
     /// @return the values a newly added change listener receives, excluding the current value it receives when added
     private List<String> listenToChanges() {
-        List<String> heard = new ArrayList<>();
-        option.addChangeListener(changed -> heard.add(changed.value()));
+        List<String> heardValues = new ArrayList<>();
+        option.addChangeListener(changedOption -> heardValues.add(changedOption.value()));
         clock.tick();
-        heard.clear();
-        return heard;
+        heardValues.clear();
+        return heardValues;
     }
 
     @Test

@@ -171,6 +171,12 @@ public abstract class BaseOption<T> implements Option<T>, StringFormattable {
         }
     }
 
+    /// Notifies the change listeners with this option's current value, for a change to what [#toDtoUnsafe()] renders besides the value. Call this method
+    /// on this option's executor.
+    protected final void notifyDtoChanged() {
+        changeListeners.notify(this);
+    }
+
     /// Stores a value [#validate(T)] has already accepted, enriching it through [#onChanged()] and putting the previous value back if that fails.
     ///
     /// @return the value as submitted, which is what a caller asked to store — [#value()] holds the enriched one

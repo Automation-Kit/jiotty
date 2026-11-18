@@ -9,7 +9,9 @@ import net.fortuna.ical4j.model.Component;
 import net.fortuna.ical4j.model.Content;
 import net.fortuna.ical4j.model.Property;
 import net.fortuna.ical4j.model.component.VEvent;
-import net.yudichev.jiotty.common.async.TaskExecutor;
+import net.fortuna.ical4j.model.property.DtEnd;
+import net.fortuna.ical4j.model.property.DtStart;
+import net.fortuna.ical4j.model.property.Summary;
 import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.time.calendar.Calendar;
@@ -23,15 +25,13 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.time.Instant;
+import java.time.temporal.Temporal;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static java.util.concurrent.CompletableFuture.completedFuture;
-import static java.util.concurrent.CompletableFuture.failedFuture;
 import static net.yudichev.jiotty.common.security.LogRedaction.redact;
 import static net.yudichev.jiotty.common.time.calendar.CalendarEventIds.createContentDerivedId;
 
@@ -45,30 +45,16 @@ final class IcloudCalendar implements Calendar, StringFormattable {
     /// Redacted form of [#id], computed once for the same reason: a CalDAV href starts with the iCloud account id.
     private final String redactedId;
     private final HttpUrl url;
-    private final Supplier<CompletableFuture<CalDavClient>> calDavClientSupplier;
-    private final TaskExecutor ownerExecutor;
-    private final BooleanSupplier ownerStartedCheck;
+    private final CalendarDataReader calendarDataReader;
     private final String logSubjectId;
     private final StringFormattable eventsLoggableUrl;
 
-    /// @param href                 the href the server names the calendar by, which serves as its id
-    /// @param calDavClientSupplier supplies the client to read events through; once the owning service has stopped, must return a future that never
-    ///                             completes
-    /// @param ownerExecutor        the owning service's executor, on which each request's outcome is read
-    /// @param ownerStartedCheck    whether the owning service is still started, read on `ownerExecutor` as each request's outcome is
-    public IcloudCalendar(String href,
-                          HttpUrl url,
-                          String name,
-                          Supplier<CompletableFuture<CalDavClient>> calDavClientSupplier,
-                          TaskExecutor ownerExecutor,
-                          BooleanSupplier ownerStartedCheck,
-                          String logSubjectId) {
+    /// @param href the calendar's href on the server, which is also its id
+    public IcloudCalendar(String href, HttpUrl url, String name, CalendarDataReader calendarDataReader, String logSubjectId) {
         id = checkNotNull(href);
         this.url = checkNotNull(url);
         this.name = checkNotNull(name);
-        this.calDavClientSupplier = checkNotNull(calDavClientSupplier);
-        this.ownerExecutor = checkNotNull(ownerExecutor);
-        this.ownerStartedCheck = checkNotNull(ownerStartedCheck);
+        this.calendarDataReader = checkNotNull(calendarDataReader);
         this.logSubjectId = checkNotNull(logSubjectId);
         redactedName = redact(name);
         redactedId = redact(id);
@@ -85,15 +71,10 @@ final class IcloudCalendar implements Calendar, StringFormattable {
         return name;
     }
 
-    /// Never completes once the owning service has stopped, even for a request that was already in flight when it stopped.
     @Override
     public CompletableFuture<List<CalendarEvent>> fetchEvents(Instant from, Instant to) {
         logger.debug("[{}] Calendar {}: fetching events for {}...{}", logSubjectId, redactedName, from, to);
-        return calDavClientSupplier.get().thenCompose(client -> ownerExecutor.handleWhile(
-                ownerStartedCheck,
-                client.fetchCalendarData(url, eventsLoggableUrl, from, to),
-                "Reading the iCloud calendar events",
-                (calendarData, failure) -> failure == null ? completedFuture(toCalendarEvents(calendarData)) : failedFuture(failure)));
+        return calendarDataReader.read(url, eventsLoggableUrl, from, to, this::toCalendarEvents);
     }
 
     private List<CalendarEvent> toCalendarEvents(List<String> calendarData) {
@@ -104,7 +85,12 @@ final class IcloudCalendar implements Calendar, StringFormattable {
                 // Relaxed, because the XML the data arrives in turns each CRLF into a bare LF, so a folded line continues after a bare LF.
                 var calendar = calendarBuilder.build(new UnfoldingReader(new StringReader(iCalendar), true));
                 for (VEvent event : calendar.<VEvent>getComponents(Component.VEVENT)) {
-                    resultBuilder.add(toCalendarEvent(event));
+                    Optional<CalendarEvent> calendarEvent = toCalendarEvent(event);
+                    if (calendarEvent.isPresent()) {
+                        resultBuilder.add(calendarEvent.get());
+                    } else {
+                        logger.info("[{}] Calendar {}: skipping an entry with no start, or with neither an end nor a duration", logSubjectId, redactedName);
+                    }
                 }
             } catch (ParserException e) {
                 // The parser's message can quote the data, which holds the user's own words, so the log line keeps only its line number.
@@ -120,18 +106,36 @@ final class IcloudCalendar implements Calendar, StringFormattable {
         return result;
     }
 
+    /// @return the event, or empty when `event` has no {@value Property#DTSTART}, or neither a {@value Property#DTEND} nor a
+    ///         {@value Property#DURATION}. The event has:
+    ///
+    ///         - an empty summary when `event` has none
+    ///         - an end at its {@value Property#DTSTART} plus its {@value Property#DURATION} when `event` has no {@value Property#DTEND}
     @VisibleForTesting
-    static CalendarEvent toCalendarEvent(VEvent event) {
-        String summary = event.getSummary().getValue();
+    static Optional<CalendarEvent> toCalendarEvent(VEvent event) {
+        DtStart<Temporal> start = event.getDateTimeStart();
+        if (start == null) {
+            return Optional.empty();
+        }
+        Optional<DtEnd<Temporal>> end = event.getEndDate(false);
+        if (end.isEmpty()) {
+            // getEndDate(true) derives an end from RFC 5545's default duration for an entry that declares no DURATION.
+            if (event.getDuration() == null) {
+                return Optional.empty();
+            }
+            end = event.getEndDate(true);
+        }
+        Summary summaryProperty = event.getSummary();
+        String summary = summaryProperty == null ? "" : summaryProperty.getValue();
         Optional<String> location = event.getProperty(Property.LOCATION).map(Content::getValue);
-        return CalendarEvent.builder()
-                            .setId(createId(event, summary, location.orElse(null)))
-                            .setStart(event.getDateTimeStart().getDate())
-                            .setEnd(event.getDateTimeEnd().getDate())
-                            .setSummary(summary)
-                            .setDescription(event.getProperty(Property.DESCRIPTION).map(Content::getValue))
-                            .setLocation(location)
-                            .build();
+        return Optional.of(CalendarEvent.builder()
+                                        .setId(createId(event, summary, location.orElse(null)))
+                                        .setStart(start.getDate())
+                                        .setEnd(end.orElseThrow().getDate())
+                                        .setSummary(summary)
+                                        .setDescription(event.getProperty(Property.DESCRIPTION).map(Content::getValue))
+                                        .setLocation(location)
+                                        .build());
     }
 
     /// Identifies one occurrence: an expanded instance of a recurring entry carries the series' `UID` and its own `RECURRENCE-ID`, so the two together are
@@ -158,5 +162,19 @@ final class IcloudCalendar implements Calendar, StringFormattable {
         Append.to(appendable, "', name='");
         Append.to(appendable, redactedName);
         Append.to(appendable, "'}");
+    }
+
+    public interface CalendarDataReader {
+        /// @param <T>         the type of the read's value
+        /// @param loggableUrl the form of `calendarUrl` that log lines and failure messages may show
+        /// @param parser      turns the iCalendar text of each event overlapping `[from, to)` into the read's value
+        /// @return a future completing with the value that `parser` returns for the events overlapping `[from, to)`
+        /// @implSpec An implementation backed by a component that stops must return a future that never completes once that component has stopped, even
+        ///           for a request that was in flight when it stopped.
+        <T> CompletableFuture<T> read(HttpUrl calendarUrl,
+                                      StringFormattable loggableUrl,
+                                      Instant from,
+                                      Instant to,
+                                      Function<? super List<String>, ? extends T> parser);
     }
 }

@@ -123,7 +123,7 @@ final class CalDavClient {
 
     /// @return the account's calendar home, which may be on another iCloud host than the one asked
     public CompletableFuture<HttpUrl> discoverCalendarHome() {
-        return call(PROPFIND, WELL_KNOWN_CALDAV_URL, 0, CALENDAR_HOME_REQUEST_BODY, calendarHomeLoggableUrl, body -> {
+        return call(Exchange.CALENDAR_HOME, PROPFIND, WELL_KNOWN_CALDAV_URL, 0, CALENDAR_HOME_REQUEST_BODY, calendarHomeLoggableUrl, body -> {
             MutableReference<@Nullable DavResponse> firstResponse = new MutableReference<>();
             parseMultistatus(body, response -> {
                 if (firstResponse.get() == null) {
@@ -141,7 +141,7 @@ final class CalDavClient {
 
     /// @return the calendars in `calendarHome`, in the order the server lists them
     public CompletableFuture<List<CalendarCollection>> listCalendars(HttpUrl calendarHome) {
-        return call(PROPFIND, calendarHome, 1, CALENDARS_REQUEST_BODY, calendarListLoggableUrl, body -> {
+        return call(Exchange.CALENDAR_LIST, PROPFIND, calendarHome, 1, CALENDARS_REQUEST_BODY, calendarListLoggableUrl, body -> {
             var calendars = ImmutableList.<CalendarCollection>builder();
             parseMultistatus(body, response -> {
                 DavProperty displayName = response.propertiesByName().get(DISPLAY_NAME);
@@ -170,7 +170,7 @@ final class CalDavClient {
                                                          </c:comp-filter>
                                                        </c:filter>
                                                      </c:calendar-query>""".formatted(PREFIX_DECLARATIONS, start, end, start, end), XML);
-        return call(REPORT, calendarUrl, 1, requestBody, loggableUrl, body -> {
+        return call(Exchange.EVENTS, REPORT, calendarUrl, 1, requestBody, loggableUrl, body -> {
             var calendarData = ImmutableList.<String>builder();
             parseMultistatus(body, response -> {
                 DavProperty data = response.propertiesByName().get(CALENDAR_DATA);
@@ -182,7 +182,8 @@ final class CalDavClient {
         });
     }
 
-    private <T> CompletableFuture<T> call(String method,
+    private <T> CompletableFuture<T> call(Exchange exchange,
+                                          String method,
                                           HttpUrl url,
                                           int depth,
                                           RequestBody requestBody,
@@ -192,6 +193,7 @@ final class CalDavClient {
                                                .header(AUTHORIZATION, authorisation)
                                                .header(DEPTH_HEADER, Integer.toString(depth))
                                                .method(method, requestBody)
+                                               .tag(Exchange.class, exchange)
                                                .build();
         // the callers retry the whole exchange
         return callSuppressingResponseBody(httpClient.newCall(request), parser, 0, loggableUrl, UnsuccessfulResponseDetailExtractor.NONE);
@@ -324,6 +326,13 @@ final class CalDavClient {
         factory.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
         factory.setProperty(XMLInputFactory.IS_COALESCING, true);
         return factory;
+    }
+
+    /// One of the three exchanges that this client makes. Every request carries its exchange as an OkHttp tag.
+    public enum Exchange {
+        CALENDAR_HOME,
+        CALENDAR_LIST,
+        EVENTS
     }
 
     /// A calendar in the account's calendar home.

@@ -11,6 +11,9 @@ import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 import okio.Buffer;
+import okio.ForwardingSource;
+import okio.Okio;
+import okio.Source;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -94,12 +97,30 @@ public final class OkHttpStubs {
     }
 
     public static Response response(Request request, int status, MediaType contentType, String body) {
+        return response(request, status, ResponseBody.create(body, contentType));
+    }
+
+    /// The response's body is typed as JSON and declares no length.
+    public static Response createResponseWithUnreadableBody(Request request, int status, IOException failure) {
+        return response(request, status, ResponseBody.create(Okio.buffer(createSourceFailingEveryRead(failure)), APPLICATION_JSON, -1));
+    }
+
+    public static Source createSourceFailingEveryRead(IOException failure) {
+        return new ForwardingSource(new Buffer()) {
+            @Override
+            public long read(Buffer sink, long byteCount) throws IOException {
+                throw failure;
+            }
+        };
+    }
+
+    public static Response response(Request request, int status, ResponseBody body) {
         return new Response.Builder()
                 .request(request)
                 .protocol(Protocol.HTTP_1_1)
                 .code(status)
                 .message(status == OK_200 ? "OK" : "Error")
-                .body(ResponseBody.create(body, contentType))
+                .body(body)
                 .build();
     }
 

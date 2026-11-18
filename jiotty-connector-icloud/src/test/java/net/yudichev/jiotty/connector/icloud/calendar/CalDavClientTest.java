@@ -6,6 +6,7 @@ import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.connector.icloud.calendar.CalDavClient.CalendarCollection;
 import net.yudichev.jiotty.connector.icloud.calendar.CalDavClient.DavProperty;
 import net.yudichev.jiotty.connector.icloud.calendar.CalDavClient.DavResponse;
+import net.yudichev.jiotty.connector.icloud.calendar.CalDavClient.Exchange;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -82,6 +83,7 @@ class CalDavClientTest {
             assertThat(request.header(DEPTH_HEADER)).isEqualTo("0");
             assertThat(request.header(AUTHORIZATION)).isEqualTo(BASIC_AUTHORISATION);
             assertThat(bodyOf(request)).contains("calendar-home-set");
+            assertThat(request.tag(Exchange.class)).isEqualTo(Exchange.CALENDAR_HOME);
         });
     }
 
@@ -142,6 +144,7 @@ class CalDavClientTest {
             assertThat(request.method()).isEqualTo(PROPFIND);
             assertThat(request.url()).isEqualTo(HOME);
             assertThat(request.header(DEPTH_HEADER)).isEqualTo("1");
+            assertThat(request.tag(Exchange.class)).isEqualTo(Exchange.CALENDAR_LIST);
         });
     }
 
@@ -181,6 +184,7 @@ class CalDavClientTest {
             assertThat(request.method()).isEqualTo(REPORT);
             assertThat(request.url()).isEqualTo(calendarUrl);
             assertThat(request.header(DEPTH_HEADER)).isEqualTo("1");
+            assertThat(request.tag(Exchange.class)).isEqualTo(Exchange.EVENTS);
             assertThat(bodyOf(request)).contains("<c:expand start=\"20260620T000000Z\" end=\"20260622T000000Z\"/>")
                                        .contains("<c:time-range start=\"20260620T000000Z\" end=\"20260622T000000Z\"/>");
         });

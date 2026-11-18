@@ -29,6 +29,8 @@ import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.huma
 public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     @VisibleForTesting
     static final Duration INITIAL_REINIT_DELAY = Duration.ofMillis(500);
+    /// The interval to which the delay before re-initialising a panicked graph grows. Each delay is randomised by up to half of its interval either side.
+    private static final Duration MAX_REINIT_INTERVAL = Duration.ofSeconds(30);
     /// How long a created graph must go without panicking before the re-init delay drops back to [#INITIAL_REINIT_DELAY]; a panic sooner, in a wave or
     /// outside one, takes the next, longer delay.
     @VisibleForTesting
@@ -58,7 +60,7 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
         reinitBackoff = new ExponentialBackOff.Builder()
                 .setInitialIntervalMillis(INITIAL_REINIT_DELAY.toMillis())
                 .setMultiplier(1.5)
-                .setMaxIntervalMillis(30_000)
+                .setMaxIntervalMillis(MAX_REINIT_INTERVAL.toMillis())
                 .setMaxElapsedTimeMillis(MAX_PANICKING_PERIOD_MILLIS)
                 .setNanoClock(timeProvider)
                 .setRng(backoffRng)
