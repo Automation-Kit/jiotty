@@ -4,6 +4,7 @@ import net.yudichev.jiotty.common.lang.Json;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -126,6 +127,60 @@ class OctopusJacksonRoundTripTest {
 
         assertThat(charge.validFrom()).isEqualTo(Instant.parse("2024-09-30T23:00:00Z"));
         assertThat(charge.validTo()).isEmpty();
+    }
+
+    @Test
+    void tariff_openEndedValidToIsEmptyOptional() {
+        // Octopus lists the variable tariff that follows a fixed-term agreement with `"valid_to": null`.
+        Tariff tariff = Json.parse("""
+                                   {"tariff_code": "E-1R-VAR-22-11-01-A", "valid_from": "2026-11-21T00:00:00Z", "valid_to": null}
+                                   """, Tariff.class);
+
+        assertThat(tariff.validFrom()).isEqualTo(Instant.parse("2026-11-21T00:00:00Z"));
+        assertThat(tariff.validTo()).isEmpty();
+    }
+
+    @Test
+    void standardUnitRate_openEndedValidToIsEmptyOptional() {
+        // The rate in force on a variable tariff has no end date yet.
+        StandardUnitRate rate = Json.parse("""
+                                           {"value_exc_vat": 23.1, "value_inc_vat": 24.255, "valid_from": "2026-10-01T00:00:00Z", "valid_to": null}
+                                           """, StandardUnitRate.class);
+
+        assertThat(rate.validFrom()).isEqualTo(Instant.parse("2026-10-01T00:00:00Z"));
+        assertThat(rate.validTo()).isEmpty();
+    }
+
+    @Test
+    void accountData_parsesAnAccountWhoseLastAgreementIsOpenEnded() {
+        OctopusAccountData account = Json.parse("""
+                                                {
+                                                  "number": "A-AAAAAAAA",
+                                                  "properties": [{
+                                                    "id": 1,
+                                                    "moved_in_at": "2025-06-18T00:00:00+01:00",
+                                                    "moved_out_at": null,
+                                                    "address_line_1": "1 EXAMPLE STREET",
+                                                    "town": "EXAMPLETON",
+                                                    "postcode": "ZZ99 9ZZ",
+                                                    "electricity_meter_points": [{
+                                                      "mpan": "9999999999999",
+                                                      "meters": [{"serial_number": "99XXX99999"}],
+                                                      "agreements": [
+                                                        {"tariff_code": "E-1R-AGILE-24-10-01-A",
+                                                         "valid_from": "2025-11-21T00:00:00Z", "valid_to": "2026-11-21T00:00:00Z"},
+                                                        {"tariff_code": "E-1R-VAR-22-11-01-A", "valid_from": "2026-11-21T00:00:00Z", "valid_to": null}
+                                                      ],
+                                                      "is_export": false
+                                                    }],
+                                                    "gas_meter_points": []
+                                                  }]
+                                                }
+                                                """, OctopusAccountData.class);
+
+        assertThat(account.properties().getFirst().electricityMeterPoints().getFirst().tariffs())
+                .extracting(Tariff::validTo)
+                .containsExactly(Optional.of(Instant.parse("2026-11-21T00:00:00Z")), Optional.empty());
     }
 
     @Test

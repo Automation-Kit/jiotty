@@ -1,5 +1,7 @@
 package net.yudichev.jiotty.common.misc;
 
+import com.fasterxml.jackson.databind.exc.ValueInstantiationException;
+import com.fasterxml.jackson.databind.type.TypeFactory;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -39,6 +41,12 @@ class SharedUpstreamOutageTest {
                 arguments(new HttpResponseException(UNAUTHORIZED_401, "Unauthorized"), false),
                 arguments(new SQLIntegrityConstraintViolationException("duplicate key"), false),
                 arguments(new SQLSyntaxErrorException("no such column"), false),
+                // a response that arrived but could not be parsed is about the payload, although Jackson's exceptions are IOExceptions
+                arguments(new RuntimeException("Failed parsing response of 910 chars",
+                                               ValueInstantiationException.from(null,
+                                                                                "Cannot build Tariff, some of required attributes are not set [validTo]",
+                                                                                TypeFactory.defaultInstance().constructType(Object.class))),
+                          false),
                 arguments(new RuntimeException("account response unparseable"), false));
     }
 

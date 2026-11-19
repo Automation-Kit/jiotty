@@ -45,7 +45,7 @@ public final class OctopusStreams {
     // Cache schema versions for the Octopus connector DTOs cached by these streams. The DTOs live in jiotty-connector-octopusenergy, which must not depend on
     // the cache module to carry a @CacheSchemaVersion, so the version is declared here at stream-definition. Bump the relevant one when that DTO's serialized
     // shape changes (a renamed/removed/retyped field) so the old cached rows recompute instead of mis-decoding. They version independently.
-    private static final int RATES_SCHEMA_VERSION = 1;
+    private static final int RATES_SCHEMA_VERSION = 2;
     private static final int STANDING_CHARGES_SCHEMA_VERSION = 1;
     private static final int CONSUMPTION_SCHEMA_VERSION = 1;
 
@@ -70,7 +70,7 @@ public final class OctopusStreams {
                 RATES_SCHEMA_VERSION,
                 slots -> regionService.getStandardUnitRates(productCode, tariffCode, slots.first(), slots.last().plus(HALF_HOUR))
                                       .thenApply(rates -> mapSlotsToCoveringWindow(
-                                              slots, rates, StandardUnitRate::validFrom, StandardUnitRate::validTo, false)));
+                                              slots, rates, StandardUnitRate::validFrom, rate -> rate.validTo().orElse(null), false)));
     }
 
     /// Returns a handle on the `octopus.standing:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandingCharges]. Each daily

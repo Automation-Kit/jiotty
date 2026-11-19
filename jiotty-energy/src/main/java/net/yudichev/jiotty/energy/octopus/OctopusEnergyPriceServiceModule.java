@@ -62,17 +62,19 @@ public final class OctopusEnergyPriceServiceModule extends BaseExposedKeyModule<
     protected void configure() {
         executorSpec.bind(SchedulingExecutor.class).annotatedWith(ExecutorProvider.class).installedBy(this::installLifecycleComponentModule);
         // Retry the account fetch with exponential backoff capped at half the poll interval (≈6h) — long enough to ride out lengthy Octopus outages without
-        // leaving the user stuck for the full ACCOUNT_POLL_INTERVAL between polls. Predicate always returns true: permanent 401/403 failures surface via
-        // OctopusAccountService.subscribeToAuthState, so wasting one backoff window on those is acceptable. This deliberately layers over the Octopus
-        // connector's own shared-outage retry: the connector smooths transient blips over minutes, this window keeps the background poll alive over hours.
-        // The interactive query* calls rely on the connector's retry alone.
+        // leaving the user stuck for the full ACCOUNT_POLL_INTERVAL between polls. The predicate retries everything except a response that could not be
+        // parsed (see OctopusEnergyProviderService.isRetryablePollFailure): each attempt fetches the account again, and an unchanged payload fails the same
+        // way. Permanent 401/403 failures surface via OctopusAccountService.subscribeToAuthState, so wasting one backoff window on those is acceptable. This
+        // deliberately layers over the Octopus connector's own shared-outage retry: the connector smooths transient blips over minutes, this window keeps the
+        // background poll alive over hours. The interactive query* calls rely on the connector's retry alone.
         var backoffConfig = BackOffConfig.builder()
                                          .setInitialInterval(Duration.ofSeconds(5))
                                          .setMaxInterval(Duration.ofMinutes(30))
                                          .setMaxElapsedTime(Duration.ofHours(6))
                                          .build();
         var pollRetryHandler = exposedBy(BackingOffExceptionHandlerModule.builder()
-                                                                         .setRetryableExceptionPredicate(literally(_ -> true))
+                                                                         .setRetryableExceptionPredicate(literally(
+                                                                                 OctopusEnergyProviderService::isRetryablePollFailure))
                                                                          .withConfig(literally(backoffConfig))
                                                                          .build());
         installLifecycleComponentModule(RetryableOperationExecutorModule.builder()

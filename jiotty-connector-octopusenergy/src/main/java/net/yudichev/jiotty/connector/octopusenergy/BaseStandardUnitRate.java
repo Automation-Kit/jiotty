@@ -7,6 +7,7 @@ import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import org.immutables.value.Value.Immutable;
 
 import java.time.Instant;
+import java.util.Optional;
 
 @Immutable
 @PublicImmutablesStyle
@@ -22,6 +23,8 @@ interface BaseStandardUnitRate {
     @JsonProperty("valid_from")
     Instant validFrom();
 
+    /// The instant the rate ends, exclusive; empty when Octopus sends `"valid_to": null`, which it does for the rate in force on a variable tariff, whose end
+    /// date is not set yet. A half-hourly (Agile) rate always has one.
     @JsonProperty("valid_to")
-    Instant validTo();
+    Optional<Instant> validTo();
 }

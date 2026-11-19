@@ -7,10 +7,12 @@ import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
+import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ConcurrentDeduplicatingConsumer;
 import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import net.yudichev.jiotty.common.misc.UpstreamHealthReporting;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
@@ -46,7 +48,9 @@ import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.UNAUTHORIZED_401;
+import static net.yudichev.jiotty.common.rest.RestClients.DEFAULT_CALL_RETRY_COUNT;
 import static net.yudichev.jiotty.common.rest.RestClients.call;
+import static net.yudichev.jiotty.common.rest.RestClients.callSuppressingResponseBody;
 import static net.yudichev.jiotty.common.rest.RestClients.newClient;
 import static net.yudichev.jiotty.common.rest.RestClients.paginate;
 import static net.yudichev.jiotty.common.rest.RestClients.shutdown;
@@ -65,7 +69,10 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
     /// fails the whole fetch. Requesting the maximum collapses a year of consumption into a single request (~1 s) and a year of rates into ~12 pages (the rates
     /// endpoint caps each page at 1 500 regardless), so the request count — and the 502 exposure window — shrinks by ~100×. Pagination still follows `next`, so
     /// multi-year ranges beyond one page are handled normally.
-    private static final int MAX_PAGE_SIZE = 25_000;
+    @VisibleForTesting
+    static final int MAX_PAGE_SIZE = 25_000;
+    private static final TypeToken<OctopusAccountData> ACCOUNT_TYPE = new TypeToken<>() {};
+    private static final TypeToken<ConsumptionPage> CONSUMPTION_PAGE_TYPE = new TypeToken<>() {};
     private static final Logger logger = LogManager.getLogger(OctopusEnergyImpl.class);
 
     private final Map<Character, RegionServiceImpl> regionServices = new ConcurrentHashMap<>();
@@ -145,13 +152,32 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
     /// Builds a GET [Call] for an open (no-auth) Octopus endpoint. Suitable as the call-factory parameter for [RestClients#paginate] and for ad-hoc single-shot
     /// fetches that don't need auth headers.
     private Call openGetCall(String url) {
-        return loggedCall(new Request.Builder().url(url).get().build());
+        return loggedCall(new Request.Builder().url(url).get().build(), null);
     }
 
-    /// Wraps `client.newCall(request)` with a single trace-log line, so every code path that turns a built [Request] into a [Call] logs the same shape.
-    private Call loggedCall(Request request) {
-        logger.debug("Calling {}", request.url());
+    /// Turns `request` into a [Call] on this connector's HTTP client after one DEBUG log line, so every code path that builds a [Call] logs the same shape.
+    ///
+    /// @param loggableUrl what the log line shows in place of the request URL, or `null` to show the URL itself
+    private Call loggedCall(Request request, @Nullable StringFormattable loggableUrl) {
+        logger.debug("Calling {}", loggableUrl == null ? request.url() : loggableUrl);
         return client.newCall(request);
+    }
+
+    /// Returns a loggable stand-in for `url`, with `***` in place of every occurrence of each of `personalValues`. The replacement runs only when the
+    /// stand-in is written out.
+    private static StringFormattable maskPersonalValues(String url, String... personalValues) {
+        return appendable -> {
+            String maskedUrl = url;
+            for (String personalValue : personalValues) {
+                maskedUrl = maskedUrl.replace(personalValue, "***");
+            }
+            Append.to(appendable, maskedUrl);
+        };
+    }
+
+    @VisibleForTesting
+    static String accountUrl(String accountId) {
+        return BASE_URL + "/accounts/" + accountId;
     }
 
     private record AccountKey(String accountId, String apiKey) {
@@ -236,12 +262,13 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
         /// threads) safe.
         private final Consumer<AuthState> authStateUpdater = new ConcurrentDeduplicatingConsumer<>(
                 (previous, next) -> previous.getClass() == next.getClass(), authState);
-        private final CompletableFuture<OctopusAccountData> accountFuture;
+        private final String accountUrl;
+        private final StringFormattable loggableAccountUrl;
 
         AccountServiceImpl(AccountKey key) {
             this.key = key;
-            accountFuture = reportingHealth("get Octopus account", () -> call(authedGetCall(BASE_URL + "/accounts/" + key.accountId()), new TypeToken<>() {}));
-            accountFuture.whenComplete(this::updateAuthStateFromOutcome);
+            accountUrl = accountUrl(key.accountId());
+            loggableAccountUrl = maskPersonalValues(accountUrl, key.accountId());
         }
 
         @Override
@@ -251,12 +278,20 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
 
         @Override
         public CompletableFuture<OctopusAccountData> getAccount() {
-            return accountFuture;
+            // The account carries the customer's address and supply identifiers, so callSuppressingResponseBody omits the response body from every log line
+            // and failure message.
+            CompletableFuture<OctopusAccountData> future = reportingHealth("get Octopus account",
+                                                                           () -> callSuppressingResponseBody(authedGetCall(accountUrl, loggableAccountUrl),
+                                                                                                             ACCOUNT_TYPE,
+                                                                                                             DEFAULT_CALL_RETRY_COUNT,
+                                                                                                             loggableAccountUrl));
+            future.whenComplete(this::updateAuthStateFromOutcome);
+            return future;
         }
 
         @Override
         public CompletableFuture<List<MpanAndMeter>> getMpanAndMeter() {
-            return accountFuture.thenApply(OctopusEnergyImpl::extractMpanAndMeter);
+            return getAccount().thenApply(OctopusEnergyImpl::extractMpanAndMeter);
         }
 
         @Override
@@ -267,15 +302,20 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
                          + "?page_size=" + MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to;
             // Half-hour slots — one row per slot. Round up so the hint never undershoots.
             int expectedSlotCount = Math.toIntExact(Duration.between(from, to).plus(HALF_HOUR).dividedBy(HALF_HOUR));
+            // Consumption rows are personal data and the page URLs carry the MPAN and meter serial, so neither reaches a log line or a failure message.
             CompletableFuture<List<ConsumptionRow>> future = reportingHealth("get Octopus consumption",
-                                                                             () -> paginate(this::authedGetCall,
+                                                                             () -> paginate(pageUrl -> fetchConsumptionPage(pageUrl, mpan, meterSerial),
                                                                                             url,
                                                                                             expectedSlotCount,
-                                                                                            new TypeToken<>() {},
                                                                                             ConsumptionPage::results,
                                                                                             ConsumptionPage::nextUrl));
             future.whenComplete(this::updateAuthStateFromOutcome);
             return future;
+        }
+
+        private CompletableFuture<ConsumptionPage> fetchConsumptionPage(String pageUrl, String mpan, String meterSerial) {
+            StringFormattable loggablePageUrl = maskPersonalValues(pageUrl, mpan, meterSerial);
+            return callSuppressingResponseBody(authedGetCall(pageUrl, loggablePageUrl), CONSUMPTION_PAGE_TYPE, DEFAULT_CALL_RETRY_COUNT, loggablePageUrl);
         }
 
         /// Subscribed to every authenticated call's outcome. On a 401 or 403 anywhere in the cause chain (the bound api key is no longer valid), transitions
@@ -297,15 +337,18 @@ public class OctopusEnergyImpl extends BaseLifecycleComponent implements Octopus
             }
         }
 
-        /// Builds a GET [Call] for a URL that requires this account's Basic-auth credentials. Used both for the initial `/accounts/{id}` fetch and for
-        /// [#getConsumption] — every authenticated Octopus endpoint takes the same `Authorization: Basic …` header.
-        private Call authedGetCall(String url) {
+        /// Builds a GET [Call] for a URL that requires this account's Basic-auth credentials; every authenticated Octopus endpoint takes the same
+        /// `Authorization: Basic …` header.
+        ///
+        /// @param loggableUrl what the log line shows in place of `url`
+        private Call authedGetCall(String url, StringFormattable loggableUrl) {
             return loggedCall(new Request.Builder()
                                       .url(url)
                                       .header("Authorization",
                                               "Basic " + base64().encode(key.apiKey().getBytes(StandardCharsets.US_ASCII)))
                                       .get()
-                                      .build());
+                                      .build(),
+                              loggableUrl);
         }
 
         @Override

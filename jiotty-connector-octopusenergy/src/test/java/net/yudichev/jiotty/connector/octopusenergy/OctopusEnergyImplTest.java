@@ -4,10 +4,16 @@ import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegist
 import net.yudichev.jiotty.common.async.backoff.RecordingRetryableOperationExecutor;
 import net.yudichev.jiotty.common.misc.RecordingUpstreamHealthHandler;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
+import net.yudichev.jiotty.common.rest.RestClients;
 import net.yudichev.jiotty.common.security.AuthState;
+import net.yudichev.jiotty.common.testutil.LogCapture;
+import okhttp3.Call;
+import okhttp3.Callback;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import org.apache.logging.log4j.Level;
 import org.assertj.core.api.InstanceOfAssertFactories;
+import org.assertj.core.api.ListAssert;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,12 +22,16 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
+import static com.google.common.base.Throwables.getCausalChain;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.BAD_GATEWAY_502;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.FORBIDDEN_403;
 import static net.yudichev.jiotty.common.rest.HttpStatuses.OK_200;
@@ -31,10 +41,14 @@ import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.stubCalls;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
 @ExtendWith(MockitoExtension.class)
 class OctopusEnergyImplTest {
+    private static final String ACCOUNT_ID = "A-12345678";
+    private static final String ACCOUNT_URL = OctopusEnergyImpl.accountUrl(ACCOUNT_ID);
 
     private final Map<String, String> stubbedResponses = new HashMap<>();
     /// Overrides the default HTTP 200 for a given URL — populated by [#stubError]. Tests asserting non-2xx behaviour register the URL here and in
@@ -74,6 +88,39 @@ class OctopusEnergyImplTest {
     private void stubError(String url, int status, String body) {
         stubbedResponses.put(url, body);
         stubbedStatuses.put(url, status);
+    }
+
+    /// Replaces the error stubbed for the account with a successful empty account.
+    private void stubAccountRecovered() {
+        stubGet(ACCOUNT_URL, """
+                             {"properties": []}
+                             """);
+        stubbedStatuses.remove(ACCOUNT_URL);
+    }
+
+    /// Asserts that no [Throwable#toString()] in the causal chain of `failure` contains any of `values`, and returns those strings for further assertions.
+    private static ListAssert<String> assertCausalChainOmits(Throwable failure, String... values) {
+        return assertThat(getCausalChain(failure).stream().map(Throwable::toString).toList()).allSatisfy(message -> assertThat(message).doesNotContain(values));
+    }
+
+    /// Asserts that the two logs captured some text and that none of it contains any of `values`, and returns that text for further assertions.
+    private static ListAssert<String> assertLinesOmit(LogCapture connectorLog, LogCapture restLog, String... values) {
+        return assertThat(Stream.concat(connectorLog.lines().stream(), restLog.lines().stream()).flatMap(LogCapture.CapturedLine::text).toList())
+                .isNotEmpty()
+                .allSatisfy(text -> assertThat(text).doesNotContain(values));
+    }
+
+    /// A [Call] for `request` whose every attempt fails with an [IOException] before a response arrives, as a dropped connection does. Its clone is
+    /// itself, so a retry of it fails the same way.
+    private static Call createFailingCall(Request request) {
+        Call call = mock(Call.class);
+        lenient().when(call.request()).thenReturn(request);
+        lenient().when(call.clone()).thenReturn(call);
+        lenient().doAnswer(invocation -> {
+            invocation.<Callback>getArgument(0).onFailure(call, new IOException("connection reset"));
+            return null;
+        }).when(call).enqueue(any());
+        return call;
     }
 
     @AfterEach
@@ -338,7 +385,7 @@ class OctopusEnergyImplTest {
     @Test
     void getMpanAndMeter_drivenByAccountFutureCompletion_returnsCartesianFlatten() {
         // `account(...)` triggers the cached HTTP fetch immediately; the stub delivers the JSON synchronously so `accountFuture` completes inline.
-        stubGet(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678",
+        stubGet(ACCOUNT_URL,
                 """
                 {
                   "properties": [
@@ -363,7 +410,7 @@ class OctopusEnergyImplTest {
                 }
                 """);
 
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_test_key")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_test_key")) {
             List<MpanAndMeter> rows = account.getMpanAndMeter().join();
             assertThat(rows).containsExactly(
                     MpanAndMeter.of("1111111111111", "11AAA11111"),
@@ -388,7 +435,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-01T00:00:00Z");
         Instant to = Instant.parse("2024-12-31T23:59:59Z");
         stubGet(OctopusEnergyImpl.BASE_URL + "/products/AGILE-23-12-06/electricity-tariffs/E-1R-AGILE-23-12-06-A/standing-charges/"
-                + "?page_size=25000&period_from=" + from + "&period_to=" + to,
+                + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to,
                 """
                 {
                   "count": 1, "next": null, "previous": null,
@@ -424,7 +471,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T01:00:00Z");
         stubGet(OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                + "?page_size=25000&period_from=" + from + "&period_to=" + to,
+                + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to,
                 """
                 {
                   "count": 2, "next": null, "previous": null,
@@ -435,7 +482,7 @@ class OctopusEnergyImplTest {
                 }
                 """);
 
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_test_consumption")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_test_consumption")) {
             List<ConsumptionRow> rows = account.getConsumption("9999999999999", "99XXX99999", from, to).join();
             assertThat(rows).extracting(ConsumptionRow::consumption).containsExactly(0.345, 0.422);
         }
@@ -446,7 +493,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T02:00:00Z");
         String page1 = OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                       + "?page_size=25000&period_from=" + from + "&period_to=" + to;
+                       + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to;
         String page2 = "https://api.octopus.energy/v1/.../consumption/?page=2";
         stubGet(page1, """
                        {"count": 4, "next": "%s", "previous": null,
@@ -463,7 +510,7 @@ class OctopusEnergyImplTest {
                         ]}
                        """.formatted(page1));
 
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_test_consumption")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_test_consumption")) {
             List<ConsumptionRow> rows = account.getConsumption("9999999999999", "99XXX99999", from, to).join();
             assertThat(rows).extracting(ConsumptionRow::consumption).containsExactly(0.1, 0.2, 0.3, 0.4);
         }
@@ -475,28 +522,28 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T00:30:00Z");
         String url = OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                     + "?page_size=25000&period_from=" + from + "&period_to=" + to;
+                     + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to;
         stubGet(url, """
                      {"count": 0, "next": null, "previous": null, "results": []}
                      """);
 
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_test_authcheck")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_test_authcheck")) {
             account.getConsumption("9999999999999", "99XXX99999", from, to).join();
         }
 
-        // Find the consumption request among everything sent — there's also the eager /accounts/{id} fetch that fires from the AccountServiceImpl ctor.
+        // Find the consumption request among everything sent.
         Request consumptionRequest = requestLog.stream()
                                                .filter(r -> r.url().toString().startsWith(OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/"))
                                                .findFirst()
                                                .orElseThrow();
         assertThat(consumptionRequest.header("Authorization")).startsWith("Basic ");
         // The max page size is requested so a long range comes back in as few round-trips as possible (a year of half-hourly data in one page, not ~176).
-        assertThat(consumptionRequest.url().toString()).contains("page_size=25000");
+        assertThat(consumptionRequest.url().toString()).contains("page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE);
     }
 
     @Test
     void getConsumption_blankMpan_throws() {
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_test_key")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_test_key")) {
             assertThatThrownBy(() -> account.getConsumption("", "99XXX99999",
                                                             Instant.parse("2024-01-15T00:00:00Z"),
                                                             Instant.parse("2024-01-15T01:00:00Z")))
@@ -507,7 +554,7 @@ class OctopusEnergyImplTest {
 
     @Test
     void getConsumption_blankMeterSerial_throws() {
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_test_key")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_test_key")) {
             assertThatThrownBy(() -> account.getConsumption("9999999999999", "",
                                                             Instant.parse("2024-01-15T00:00:00Z"),
                                                             Instant.parse("2024-01-15T01:00:00Z")))
@@ -519,23 +566,25 @@ class OctopusEnergyImplTest {
     @ParameterizedTest
     @ValueSource(ints = {UNAUTHORIZED_401, FORBIDDEN_403})
     void accountFetch_4xxAuth_transitionsAuthStateToPermanentFailure(int status) {
-        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", status, "{\"detail\":\"unauthorised\"}");
+        stubError(ACCOUNT_URL, status, "{\"detail\":\"unauthorised\"}");
         List<AuthState> observed = new ArrayList<>();
 
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_bad")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_bad")) {
             account.subscribeToAuthState(observed::add);
+            assertThat(account.getAccount()).failsWithin(Duration.ZERO);
         }
 
-        // ObservableValue replays the latest value on subscribe; the ctor's account fetch has already completed-and-failed by the time we got here.
         assertThat(observed).last(InstanceOfAssertFactories.type(AuthState.PermanentFailure.class))
                             .satisfies(failure -> assertThat(failure.description()).contains("Response code " + status));
     }
 
     @Test
     void accountFetch_5xx_reportsUpstreamFailure() {
-        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
+        stubError(ACCOUNT_URL, SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
 
-        octopusEnergy.account("A-12345678", "sk_maybe_ok").close();
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_maybe_ok")) {
+            assertThat(account.getAccount()).failsWithin(Duration.ZERO);
+        }
 
         assertThat(healthHandler.failures()).singleElement().satisfies(f -> assertThat(f).contains("Response code 503"));
         assertThat(healthHandler.successCount()).isZero();
@@ -545,9 +594,11 @@ class OctopusEnergyImplTest {
     @ValueSource(ints = {UNAUTHORIZED_401, FORBIDDEN_403})
     void accountFetch_4xxAuth_reportsNoUpstreamFailure(int status) {
         // The API answered — these credentials are bad, which is this account's problem, not an outage every other account shares.
-        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", status, "{\"detail\":\"unauthorised\"}");
+        stubError(ACCOUNT_URL, status, "{\"detail\":\"unauthorised\"}");
 
-        octopusEnergy.account("A-12345678", "sk_bad").close();
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_bad")) {
+            assertThat(account.getAccount()).failsWithin(Duration.ZERO);
+        }
 
         assertThat(healthHandler.failures()).isEmpty();
     }
@@ -558,7 +609,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-01T00:00:00Z");
         Instant to = Instant.parse("2024-01-02T00:00:00Z");
         stubError(OctopusEnergyImpl.BASE_URL + "/products/AGILE-23-12-06/electricity-tariffs/E-1R-AGILE-23-12-06-A/standard-unit-rates/"
-                  + "?page_size=25000&period_from=" + from + "&period_to=" + to,
+                  + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to,
                   BAD_GATEWAY_502, "{\"detail\":\"bad gateway\"}");
 
         try (OctopusRegionService region = octopusEnergy.region('A')) {
@@ -574,7 +625,7 @@ class OctopusEnergyImplTest {
         Instant from = Instant.parse("2024-01-01T00:00:00Z");
         Instant to = Instant.parse("2024-01-02T00:00:00Z");
         stubGet(OctopusEnergyImpl.BASE_URL + "/products/AGILE-23-12-06/electricity-tariffs/E-1R-AGILE-23-12-06-A/standard-unit-rates/"
-                + "?page_size=25000&period_from=" + from + "&period_to=" + to,
+                + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to,
                 """
                 {"count": 0, "next": null, "previous": null, "results": []}
                 """);
@@ -611,11 +662,13 @@ class OctopusEnergyImplTest {
 
     @Test
     void accountFetch_success_reportsUpstreamHealthy() {
-        stubGet(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", """
-                                                                     {"properties": []}
-                                                                     """);
+        stubGet(ACCOUNT_URL, """
+                             {"properties": []}
+                             """);
 
-        octopusEnergy.account("A-12345678", "sk_ok").close();
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_ok")) {
+            assertThat(account.getAccount()).succeedsWithin(Duration.ZERO);
+        }
 
         assertThat(healthHandler.successCount()).isPositive();
         assertThat(healthHandler.failures()).isEmpty();
@@ -624,11 +677,12 @@ class OctopusEnergyImplTest {
     @Test
     void accountFetch_5xx_leavesAuthStateAsInitialisingTransientFailure() {
         // Server errors and network problems aren't proof that the api key is bad — the bound auth state should stay transient so a retry can recover.
-        stubError(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
+        stubError(ACCOUNT_URL, SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
         List<AuthState> observed = new ArrayList<>();
 
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_maybe_ok")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_maybe_ok")) {
             account.subscribeToAuthState(observed::add);
+            assertThat(account.getAccount()).failsWithin(Duration.ZERO);
         }
 
         assertThat(observed).last().isInstanceOf(AuthState.TransientFailure.class);
@@ -636,38 +690,126 @@ class OctopusEnergyImplTest {
 
     @Test
     void accountFetch_success_transitionsAuthStateToSuccess() {
-        stubGet(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", """
-                                                                     {"properties": []}
-                                                                     """);
+        stubGet(ACCOUNT_URL, """
+                             {"properties": []}
+                             """);
         List<AuthState> observed = new ArrayList<>();
 
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_good")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_good")) {
             account.subscribeToAuthState(observed::add);
+            assertThat(account.getAccount()).succeedsWithin(Duration.ZERO);
         }
 
         assertThat(observed).last().isInstanceOf(AuthState.Success.class);
     }
 
     @Test
+    void getAccount_afterACompletedFetch_fetchesTheAccountAgain() {
+        stubError(ACCOUNT_URL, SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
+
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_refetch")) {
+            assertThat(account.getAccount()).failsWithin(Duration.ZERO);
+            stubAccountRecovered();
+
+            assertThat(account.getAccount()).succeedsWithin(Duration.ZERO).satisfies(data -> assertThat(data.properties()).isEmpty());
+        }
+
+        assertThat(requestLog).filteredOn(request -> request.url().toString().equals(ACCOUNT_URL)).hasSize(2);
+    }
+
+    @Test
+    void getAccount_successAfterAFailedFirstFetch_movesAuthStateToSuccess() {
+        stubError(ACCOUNT_URL, SERVICE_UNAVAILABLE_503, "{\"detail\":\"service unavailable\"}");
+        List<AuthState> authStates = new ArrayList<>();
+
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_recovering")) {
+            account.subscribeToAuthState(authStates::add);
+            assertThat(account.getAccount()).failsWithin(Duration.ZERO);
+            stubAccountRecovered();
+            assertThat(account.getAccount()).succeedsWithin(Duration.ZERO);
+        }
+
+        assertThat(authStates).first().isInstanceOf(AuthState.TransientFailure.class);
+        assertThat(authStates).last().isInstanceOf(AuthState.Success.class);
+    }
+
+    @Test
+    void accountFetch_unparseableResponse_keepsTheAccountBodyAndIdentifiersOutOfTheFailureAndTheLog() {
+        stubGet(ACCOUNT_URL,
+                """
+                {"properties": [{"address_line_1": "1 EXAMPLE STREET", "postcode": "ZZ99 9ZZ",
+                  "electricity_meter_points": [{"mpan": "9999999999999", "meters": [{"serial_number": "99XXX99999"}],
+                                                "agreements": [{"tariff_code": "E-1R-VAR-22-11-01-A", "valid_to": null}]}],
+                  "gas_meter_points": [{"mprn": "8888888888", "meters": [{"serial_number": "G4A88888888888"}]}]}]}
+                """);
+        String[] personalValues = {"EXAMPLE STREET", "ZZ99 9ZZ", "9999999999999", "99XXX99999", "8888888888", "G4A88888888888"};
+
+        try (LogCapture connectorLog = LogCapture.capture(OctopusEnergyImpl.class, Level.DEBUG);
+             LogCapture restLog = LogCapture.capture(RestClients.class, Level.DEBUG);
+             OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_parse")) {
+            assertThat(account.getAccount()).failsWithin(Duration.ZERO)
+                                            .withThrowableThat()
+                                            .satisfies(failure -> assertCausalChainOmits(failure, ACCOUNT_ID).allSatisfy(
+                                                    message -> assertThat(message).doesNotContain(personalValues)));
+            assertLinesOmit(connectorLog, restLog, ACCOUNT_ID).allSatisfy(text -> assertThat(text).doesNotContain(personalValues));
+        }
+    }
+
+    @Test
+    void accountFetch_networkFailure_keepsTheAccountIdOutOfTheFailure() {
+        lenient().doAnswer(invocation -> createFailingCall(invocation.getArgument(0))).when(httpClient).newCall(any());
+
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_offline")) {
+            assertThat(account.getAccount()).failsWithin(Duration.ZERO)
+                                            .withThrowableThat()
+                                            .satisfies(failure -> assertCausalChainOmits(failure, ACCOUNT_ID).anySatisfy(
+                                                    message -> assertThat(message).contains("/accounts/***")));
+        }
+
+        assertThat(healthHandler.failures()).singleElement()
+                                            .satisfies(failure -> assertThat(failure).contains("/accounts/***").doesNotContain(ACCOUNT_ID));
+    }
+
+    @Test
+    void getConsumption_unparseablePage_keepsTheReadingsAndIdentifiersOutOfTheFailureAndTheLog() {
+        Instant from = Instant.parse("2024-01-15T00:00:00Z");
+        Instant to = Instant.parse("2024-01-15T00:30:00Z");
+        stubGet(OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
+                + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to,
+                """
+                {"count": 1, "next": null, "results": [{"consumption": 0.345678, "interval_start": "not an instant"}]}
+                """);
+
+        try (LogCapture connectorLog = LogCapture.capture(OctopusEnergyImpl.class, Level.DEBUG);
+             LogCapture restLog = LogCapture.capture(RestClients.class, Level.DEBUG);
+             OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_parse")) {
+            assertThat(account.getConsumption("9999999999999", "99XXX99999", from, to))
+                    .failsWithin(Duration.ZERO)
+                    .withThrowableThat()
+                    .satisfies(failure -> assertCausalChainOmits(failure, "0.345678", "9999999999999", "99XXX99999"));
+            assertLinesOmit(connectorLog, restLog, "0.345678", "9999999999999", "99XXX99999");
+        }
+    }
+
+    @Test
     void authState_consecutiveSameTypeOutcomes_areDeduped_subscriberOnlySeesTypeTransitions() {
         // Account fetch succeeds → Success. Then two more successful authed calls (consumption) → no extra Success notifications. Then 401 → PermanentFailure
         // notification. Then another 401 → no extra PermanentFailure notification.
-        stubGet(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", """
-                                                                     {"properties": []}
-                                                                     """);
+        stubGet(ACCOUNT_URL, """
+                             {"properties": []}
+                             """);
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T01:00:00Z");
         String okUrl = OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                       + "?page_size=25000&period_from=" + from + "&period_to=" + to;
+                       + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to;
         stubGet(okUrl, """
                        {"count": 0, "next": null, "previous": null, "results": []}
                        """);
 
         List<AuthState> observed = new ArrayList<>();
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_dedupe")) {
-            // Subscribing before any state transitions so we see them all in order (modulo dedupe).
-            // Note: the ctor's account fetch has already fired by the time we subscribe — but with the lenient stub it completes synchronously inside the
-            // `account(...)` call, so by this line authState is already Success and ObservableValue replays it on subscribe → first observed value = Success.
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_dedupe")) {
+            // The stubbed account fetch completes synchronously and succeeds, so the subscription's first observed state is AuthState.Success.
+            assertThat(account.getAccount()).succeedsWithin(Duration.ZERO);
             account.subscribeToAuthState(observed::add);
 
             // Two more successful authed calls; if dedupe works, no extra Success notifications.
@@ -689,26 +831,29 @@ class OctopusEnergyImplTest {
 
     @Test
     void getConsumption_401_transitionsAuthStateToPermanentFailure() {
-        // The account fetch succeeds (auth was good at startup), but the key is later revoked — first authenticated call after revocation fails 401 and
-        // must flip the auth state. This pins down that the transition isn't only at the ctor.
-        stubGet(OctopusEnergyImpl.BASE_URL + "/accounts/A-12345678", """
-                                                                     {"properties": []}
-                                                                     """);
+        // The account fetch succeeds, but the key is later revoked — the first authenticated call after revocation fails 401 and must flip the auth state.
+        // This pins down that a call other than the account fetch moves the auth state too.
+        stubGet(ACCOUNT_URL, """
+                             {"properties": []}
+                             """);
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T01:00:00Z");
         stubError(OctopusEnergyImpl.BASE_URL + "/electricity-meter-points/9999999999999/meters/99XXX99999/consumption/"
-                  + "?page_size=25000&period_from=" + from + "&period_to=" + to,
+                  + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to,
                   UNAUTHORIZED_401, "{\"detail\":\"revoked\"}");
 
         List<AuthState> observed = new ArrayList<>();
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_revoked")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_revoked")) {
             account.subscribeToAuthState(observed::add);
+            assertThat(account.getAccount()).succeedsWithin(Duration.ZERO);
             assertThatThrownBy(() -> account.getConsumption("9999999999999", "99XXX99999", from, to).join())
                     .hasCauseInstanceOf(HttpResponseException.class);
         }
 
         // We see Success first (from the account fetch), then PermanentFailure (from the revoked consumption call).
-        assertThat(observed).last().isInstanceOf(AuthState.PermanentFailure.class);
+        assertThat(observed.subList(observed.size() - 2, observed.size()))
+                .satisfiesExactly(first -> assertThat(first).isInstanceOf(AuthState.Success.class),
+                                  second -> assertThat(second).isInstanceOf(AuthState.PermanentFailure.class));
     }
 
     @Test
@@ -724,7 +869,8 @@ class OctopusEnergyImplTest {
             region.getStandardUnitRates("AGILE-23-12-06", "E-1R-AGILE-23-12-06-A", from, to);
             region.getStandingCharges("AGILE-23-12-06", "E-1R-AGILE-23-12-06-A", from, to);
         }
-        try (OctopusAccountService account = octopusEnergy.account("A-12345678", "sk_test")) {
+        try (OctopusAccountService account = octopusEnergy.account(ACCOUNT_ID, "sk_test")) {
+            account.getAccount();
             account.getConsumption("9999999999999", "99XXX99999", from, to);
         }
 

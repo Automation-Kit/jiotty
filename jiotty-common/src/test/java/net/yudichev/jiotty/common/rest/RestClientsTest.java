@@ -147,6 +147,32 @@ class RestClientsTest {
     }
 
     @Test
+    void paginate_withPageFetcher_fetchesEachPageThroughTheFetcherAndConcatenatesInServerOrder() {
+        urlToBody.put(BASE + "/items?p=1", """
+                                           {"results": [{"name": "a"}], "next": "%s/items?p=2"}
+                                           """.formatted(BASE));
+        urlToBody.put(BASE + "/items?p=2", """
+                                           {"results": [{"name": "b"}], "next": null}
+                                           """);
+        List<String> fetchedUrls = new ArrayList<>();
+
+        CompletableFuture<List<Item>> items = RestClients.paginate(url -> {
+                                                                       fetchedUrls.add(url);
+                                                                       return RestClients.callSuppressingResponseBody(callFactory.apply(url),
+                                                                                                                      new TypeToken<>() {},
+                                                                                                                      RestClients.DEFAULT_CALL_RETRY_COUNT,
+                                                                                                                      REDACTED_URL);
+                                                                   },
+                                                                   BASE + "/items?p=1",
+                                                                   2,
+                                                                   Page::results,
+                                                                   Page::nextUrl);
+
+        assertThat(items).succeedsWithin(Duration.ZERO).satisfies(list -> assertThat(list).extracting(Item::name).containsExactly("a", "b"));
+        assertThat(fetchedUrls).containsExactly(BASE + "/items?p=1", BASE + "/items?p=2");
+    }
+
+    @Test
     void paginate_eachPageFetchedExactlyOnce_noQuadraticReads() {
         // Sanity check on the accumulator design: even with N pages, each page URL is hit exactly once. A "tail-concat" implementation could pass the
         // results-shape test above but re-fetch a page on each recursion; this test pins that down.

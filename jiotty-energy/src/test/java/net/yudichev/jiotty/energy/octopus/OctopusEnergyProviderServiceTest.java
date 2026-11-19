@@ -1,14 +1,15 @@
 package net.yudichev.jiotty.energy.octopus;
 
+import com.fasterxml.jackson.core.JsonParseException;
 import com.google.common.collect.ImmutableMap;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.CompletableFutures;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.security.AuthState;
+import net.yudichev.jiotty.common.testutil.LogCapture;
 import net.yudichev.jiotty.connector.octopusenergy.AccountProperty;
 import net.yudichev.jiotty.connector.octopusenergy.ConsumptionRow;
 import net.yudichev.jiotty.connector.octopusenergy.ElectricityMeter;
@@ -24,22 +25,29 @@ import net.yudichev.jiotty.energy.EnergyPriceService;
 import net.yudichev.jiotty.energy.PriceProfile;
 import net.yudichev.jiotty.energy.Prices;
 import net.yudichev.jiotty.timeseriescache.InMemoryTimeSeriesCache;
+import org.apache.logging.log4j.Level;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import static com.google.common.base.Throwables.getCausalChain;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
+import static net.yudichev.jiotty.common.lang.EvenMoreObjects.mapIfNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -58,8 +66,11 @@ class OctopusEnergyProviderServiceTest {
     private static final String AGILE_TARIFF_A = "E-1R-AGILE-23-12-06-A";
     private static final String AGILE_TARIFF_B = "E-1R-AGILE-23-12-06-B";
     private static final String GO_TARIFF_A = "E-1R-GO-VAR-22-10-14-A";
+    private static final String VARIABLE_TARIFF_A = "E-1R-VAR-22-11-01-A";
     private static final Instant TARIFF_VALID_FROM = Instant.parse("2020-01-01T00:00:00Z");
     private static final Instant TARIFF_VALID_TO = Instant.parse("2099-01-01T00:00:00Z");
+    /// The clock's time when each test starts, which is when the first account poll runs.
+    private static final Instant START = Instant.parse("2024-01-01T10:00:00Z");
     private final InMemoryTimeSeriesCache cache = new InMemoryTimeSeriesCache();
     private ProgrammableClock clock;
     @Mock
@@ -81,7 +92,7 @@ class OctopusEnergyProviderServiceTest {
     @BeforeEach
     void setUp() {
         clock = new ProgrammableClock();
-        clock.setTime(Instant.parse("2024-01-01T10:00:00Z"));
+        clock.setTime(START);
         SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("provider");
 
         agileRegionA = new FakeAgilePriceService();
@@ -165,7 +176,7 @@ class OctopusEnergyProviderServiceTest {
 
         // Next 12h poll: user switched to tariff B (different region).
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_B)));
-        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
+        advanceToPoll(1);
 
         assertThat(agileRegionA.subscribers).describedAs("old subscription closed").isEmpty();
         assertThat(agileRegionB.subscribers).describedAs("new subscription opened").hasSize(1);
@@ -191,7 +202,7 @@ class OctopusEnergyProviderServiceTest {
 
         // rerouting to another tariff picks up that delegate's expectation instead
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_B)));
-        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
+        advanceToPoll(1);
         agileRegionB.publishRefreshTime(Instant.parse("2024-01-03T16:00:00Z"));
         clock.tick();
         assertThat(received).containsExactly(Instant.parse("2024-01-02T16:00:00Z"), Instant.parse("2024-01-03T16:00:00Z"));
@@ -201,7 +212,7 @@ class OctopusEnergyProviderServiceTest {
     void accountFetchFailure_emitsPriceRetrievalError() {
         // With RetryableOperationExecutor.noRetries() in setUp, a failed account fetch falls straight through to the whenComplete failure branch, which
         // emits PriceRetrievalError to subscribers via the dedup path.
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
         service.start();
@@ -216,7 +227,7 @@ class OctopusEnergyProviderServiceTest {
     @Test
     void identicalFailureMessage_isDeduplicated() {
         // Same exception type + message on the second poll → dedup suppresses the second emission.
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
         service.start();
@@ -225,15 +236,15 @@ class OctopusEnergyProviderServiceTest {
         assertThat(received).hasSize(1);
 
         // Next 12h poll: same outage continues, identical exception text.
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
-        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
+        advanceToPoll(1);
 
         assertThat(received).describedAs("dedup should suppress a second identical PriceRetrievalError").hasSize(1);
     }
 
     @Test
     void differentFailureMessage_isNotDeduplicated() {
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus 500"));
+        when(accountService.getAccount()).thenReturn(failure("octopus 500"));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
         service.start();
@@ -241,15 +252,15 @@ class OctopusEnergyProviderServiceTest {
         clock.tick();
         assertThat(received).hasSize(1);
 
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("connection reset"));
-        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
+        when(accountService.getAccount()).thenReturn(failure("connection reset"));
+        advanceToPoll(1);
 
         assertThat(received).describedAs("a different exception message should fire a fresh PriceRetrievalError").hasSize(2);
     }
 
     @Test
-    void successAfterFailure_resetsDedup() {
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
+    void failedFirstLoadThenSuccess_routesToTheTariff() {
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
         List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
         service.start();
@@ -257,16 +268,76 @@ class OctopusEnergyProviderServiceTest {
         clock.tick();
         assertThat(received).hasSize(1);
 
-        // Recovery — successful account resolution, delegates wire up, dedup state resets.
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
-        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
-        received.clear();
+        advanceToPoll(1);
 
-        // Next outage — same exception message as the first. Should NOT be deduplicated because the success in between reset the dedup state.
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
-        clock.setTimeAndTick(Instant.parse("2024-01-02T10:00:01Z"));
+        assertThat(agileRegionA.subscribers).hasSize(1);
+        assertThat(forecastRegionA.subscribers).hasSize(1);
+    }
 
-        assertThat(received).describedAs("after recovery, the same exception text should re-notify").hasSize(1);
+    @Test
+    void failedRefreshAfterALoad_leavesTheAgilePricesAsTheyAre() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(priceResults::add);
+        clock.tick();
+        Prices realPrices = prices("10:00", 1, 5.0);
+        agileRegionA.publish(Either.left(realPrices));
+        clock.tick();
+
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
+        advanceToPoll(1);
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        advanceToPoll(2);
+
+        assertThat(priceResults).containsExactly(Either.left(realPrices));
+        assertThat(service.getPrices()).contains(Either.left(realPrices));
+        assertThat(agileRegionA.subscribers).describedAs("the delegate is kept through the failed refresh").hasSize(1);
+    }
+
+    @Test
+    void failedRefreshAfterALoad_keepsTheIncompatibleTariff() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(GO_TARIFF_A)));
+        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(priceResults::add);
+        clock.tick();
+
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
+        advanceToPoll(1);
+        when(accountService.getAccount()).thenReturn(completedFuture(account(GO_TARIFF_A)));
+        advanceToPoll(2);
+
+        assertThat(priceResults).containsExactly(Either.right(new EnergyPriceService.Failure.IncompatibleTariff(GO_TARIFF_A)));
+        assertThat(service.getPrices()).contains(Either.right(new EnergyPriceService.Failure.IncompatibleTariff(GO_TARIFF_A)));
+    }
+
+    @Test
+    void currentAgileAgreementWithAFutureOpenEndedOne_routesToTheAgileTariff() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, "2023-06-01T00:00:00Z", "2024-06-01T00:00:00Z"),
+                createTariff(VARIABLE_TARIFF_A, "2024-06-01T00:00:00Z", null))));
+
+        service.start();
+        clock.tick();
+
+        assertThat(agileRegionA.subscribers).hasSize(1);
+    }
+
+    @Test
+    void currentOpenEndedNonAgileAgreement_emitsIncompatibleTariff() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, "2023-01-01T00:00:00Z", "2023-12-01T00:00:00Z"),
+                createTariff(VARIABLE_TARIFF_A, "2023-12-01T00:00:00Z", null))));
+        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+
+        service.start();
+        service.subscribeToPrices(priceResults::add);
+        clock.tick();
+
+        assertThat(priceResults).containsExactly(Either.right(new EnergyPriceService.Failure.IncompatibleTariff(VARIABLE_TARIFF_A)));
+        assertThat(agileRegionA.subscribers).isEmpty();
     }
 
     @Test
@@ -298,7 +369,7 @@ class OctopusEnergyProviderServiceTest {
 
         // Next poll: user moved to non-Agile tariff.
         when(accountService.getAccount()).thenReturn(completedFuture(account(GO_TARIFF_A)));
-        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
+        advanceToPoll(1);
 
         assertThat(agileRegionA.subscribers).describedAs("Octopus subscription closed on IncompatibleTariff").isEmpty();
         assertThat(forecastRegionA.subscribers).describedAs("forecast subscription closed on IncompatibleTariff").isEmpty();
@@ -326,16 +397,12 @@ class OctopusEnergyProviderServiceTest {
         service.subscribeToAccountDetails(received::add);
         clock.tick();
 
-        var expected = new OctopusAccountDetails(List.of(
-                new OctopusAccountDetails.MeterPoint(MPAN, List.of(METER_SERIAL),
-                                                     List.of(new OctopusAccountDetails.TariffPeriod(AGILE_TARIFF_A, TARIFF_VALID_FROM, TARIFF_VALID_TO)),
-                                                     false)));
-        assertThat(received).contains(new AccountFetchResult.Loaded(expected));
+        assertThat(received).contains(createLoadedResult(AGILE_TARIFF_A));
     }
 
     @Test
     void failedPoll_publishesFailedAccountDetails() {
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
         List<AccountFetchResult> received = new ArrayList<>();
         service.start();
@@ -348,7 +415,7 @@ class OctopusEnergyProviderServiceTest {
 
     @Test
     void consecutiveIdenticalFailures_publishOneFailedAccountDetail() {
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
         List<AccountFetchResult> received = new ArrayList<>();
         service.start();
@@ -356,30 +423,122 @@ class OctopusEnergyProviderServiceTest {
         clock.tick();
 
         // Next 12h poll: same outage, identical exception text → deduplicated, not re-published.
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
-        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
+        advanceToPoll(1);
 
         assertThat(received).filteredOn(result -> result instanceof AccountFetchResult.Failed).hasSize(1);
     }
 
     @Test
-    void identicalFailureAfterSuccess_republishesAccountDetail() {
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
+    void failureAfterSuccess_publishesNothing() {
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
         List<AccountFetchResult> received = new ArrayList<>();
         service.start();
         service.subscribeToAccountDetails(received::add);
         clock.tick();
 
-        // Recovery resets the dedup state.
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
-        clock.setTimeAndTick(Instant.parse("2024-01-01T22:00:01Z"));
+        advanceToPoll(1);
 
-        // Same exception text as the first failure — should re-publish because the success in between reset the dedup state.
-        when(accountService.getAccount()).thenReturn(CompletableFutures.failure("octopus is down"));
-        clock.setTimeAndTick(Instant.parse("2024-01-02T10:00:01Z"));
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
+        advanceToPoll(2);
 
-        assertThat(received).filteredOn(result -> result instanceof AccountFetchResult.Failed).hasSize(2);
+        assertThat(received).satisfiesExactly(first -> assertThat(first).isInstanceOf(AccountFetchResult.Failed.class),
+                                              second -> assertThat(second).isEqualTo(createLoadedResult(AGILE_TARIFF_A)));
+    }
+
+    @Test
+    void failedAttemptBeforeALoad_publishesFailedAndARetrievalError() {
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"), completedFuture(account(AGILE_TARIFF_A)));
+
+        Subscriptions subscriptions = startRetryingService();
+
+        assertThat(subscriptions.accountResults()).satisfiesExactly(first -> assertThat(first).isInstanceOf(AccountFetchResult.Failed.class),
+                                                                    second -> assertThat(second).isEqualTo(createLoadedResult(AGILE_TARIFF_A)));
+        assertThat(subscriptions.priceResults()).singleElement().satisfies(either -> assertThat(either.getRight())
+                .hasValueSatisfying(failure -> assertThat(failure).isInstanceOf(EnergyPriceService.Failure.PriceRetrievalError.class)));
+    }
+
+    @Test
+    void failedAttemptAfterALoad_publishesNothing() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)),
+                                                     failure("octopus is down"),
+                                                     completedFuture(account(AGILE_TARIFF_A)));
+
+        Subscriptions subscriptions = startRetryingService();
+        advanceToPoll(1);
+
+        assertThat(subscriptions.accountResults()).containsExactly(createLoadedResult(AGILE_TARIFF_A), createLoadedResult(AGILE_TARIFF_A));
+        assertThat(subscriptions.priceResults()).isEmpty();
+    }
+
+    @Test
+    void routingFailureOnTheFirstLoad_publishesARetrievalError() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        when(octopusRegistry.forTariff(eq("AGILE-23-12-06"), eq(AGILE_TARIFF_A))).thenThrow(new IllegalStateException("registry is stopping"));
+        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(priceResults::add);
+        clock.tick();
+
+        assertThat(priceResults).singleElement().satisfies(either -> assertThat(either.getRight()).hasValueSatisfying(
+                failure -> assertThat(failure).isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
+                                                                      error -> assertThat(error.cause()).hasRootCauseMessage("registry is stopping"))));
+    }
+
+    @Test
+    void accountWithNoCurrentAgreement_keepsTheSupplyIdentifiersOutOfTheFailureAndTheLog() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, "2020-01-01T00:00:00Z", "2021-01-01T00:00:00Z"))));
+        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+
+        try (LogCapture log = LogCapture.capture(OctopusEnergyProviderService.class, Level.DEBUG)) {
+            service.start();
+            service.subscribeToPrices(priceResults::add);
+            clock.tick();
+
+            assertThat(priceResults).singleElement().satisfies(either -> assertThat(either.getRight()).hasValueSatisfying(
+                    failure -> assertThat(failure).isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
+                                                                          error -> assertThat(getCausalChain(error.cause()))
+                                                                                  .extracting(Throwable::toString)
+                                                                                  .allSatisfy(message -> assertThat(message)
+                                                                                          .doesNotContain(MPAN, METER_SERIAL)))));
+            assertThat(log.lines().stream().flatMap(LogCapture.CapturedLine::text))
+                    .isNotEmpty()
+                    .allSatisfy(text -> assertThat(text).doesNotContain(MPAN, METER_SERIAL));
+        }
+    }
+
+    @Test
+    void pollRetry_retriesAFailedFetchButNotAnUnparseableResponse() {
+        assertThat(OctopusEnergyProviderService.isRetryablePollFailure(new RuntimeException(new IOException("connection reset")))).isTrue();
+        assertThat(OctopusEnergyProviderService.isRetryablePollFailure(
+                new RuntimeException("Failed parsing response of 910 chars", new JsonParseException(null, "Unexpected character")))).isFalse();
+    }
+
+    @Test
+    void successAfterAFailedRefresh_publishesLoaded() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        List<AccountFetchResult> accountResults = new ArrayList<>();
+        service.start();
+        service.subscribeToAccountDetails(accountResults::add);
+        clock.tick();
+
+        when(accountService.getAccount()).thenReturn(failure("octopus is down"));
+        advanceToPoll(1);
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        advanceToPoll(2);
+
+        assertThat(accountResults).containsExactly(createLoadedResult(AGILE_TARIFF_A), createLoadedResult(AGILE_TARIFF_A));
+    }
+
+    @Test
+    void accountDetails_redactTheMpanAndMeterSerials() {
+        OctopusAccountDetails details = createAccountDetails(AGILE_TARIFF_A);
+
+        assertThat(List.of(details.meterPoints().getFirst().toString(), new AccountFetchResult.Loaded(details).toString()))
+                .allSatisfy(text -> assertThat(text).doesNotContain(MPAN, METER_SERIAL));
     }
 
     @Test
@@ -490,12 +649,21 @@ class OctopusEnergyProviderServiceTest {
         verify(accountService, times(1)).getConsumption(any(), any(), any(), any());
     }
 
+    /// Moves the clock just past the `pollNumber`-th account poll after the first one, and runs what is due.
+    private void advanceToPoll(int pollNumber) {
+        clock.setTimeAndTick(START.plus(OctopusEnergyProviderService.ACCOUNT_POLL_INTERVAL.multipliedBy(pollNumber)).plusSeconds(1));
+    }
+
     private OctopusEnergyProviderService createService(SchedulingExecutor serviceExecutor) {
+        return createService(serviceExecutor, RetryableOperationExecutor.noRetries());
+    }
+
+    private OctopusEnergyProviderService createService(SchedulingExecutor serviceExecutor, RetryableOperationExecutor retryExecutor) {
         return new OctopusEnergyProviderService(() -> serviceExecutor,
                                                 clock,
                                                 octopusEnergy,
                                                 () -> octopusEnergy.account(ACCOUNT_ID, API_KEY),
-                                                RetryableOperationExecutor.noRetries(),
+                                                retryExecutor,
                                                 octopusRegistry,
                                                 priceForecastRegistry,
                                                 cache,
@@ -539,36 +707,102 @@ class OctopusEnergyProviderServiceTest {
     }
 
     private static OctopusAccountData account(String tariffCode) {
-        return OctopusAccountData.builder()
-                                 .addProperties(AccountProperty.builder().addElectricityMeterPoints(meterPoint(tariffCode, false)).build())
-                                 .build();
+        return createAccountWithAgreements(createTariffOverTheTestWindow(tariffCode));
     }
 
     private static OctopusAccountData accountWithExportThenImport(String exportTariffCode, String importTariffCode) {
         return OctopusAccountData.builder()
                                  .addProperties(AccountProperty.builder()
-                                                               .addElectricityMeterPoints(meterPoint(exportTariffCode, true))
-                                                               .addElectricityMeterPoints(meterPoint(importTariffCode, false))
+                                                               .addElectricityMeterPoints(meterPoint(true, createTariffOverTheTestWindow(exportTariffCode)))
+                                                               .addElectricityMeterPoints(meterPoint(false, createTariffOverTheTestWindow(importTariffCode)))
                                                                .build())
                                  .build();
     }
 
-    private static ElectricityMeterPoint meterPoint(String tariffCode, boolean isExport) {
+    private static OctopusAccountData createAccountWithAgreements(Tariff... agreements) {
+        return OctopusAccountData.builder()
+                                 .addProperties(AccountProperty.builder().addElectricityMeterPoints(meterPoint(false, agreements)).build())
+                                 .build();
+    }
+
+    /// @param validTo the agreement's exclusive end, `null` for an open-ended agreement with no end date
+    private static Tariff createTariff(String tariffCode, String validFrom, @Nullable String validTo) {
+        return createTariff(tariffCode, Instant.parse(validFrom), mapIfNotNull(validTo, Instant::parse));
+    }
+
+    private static ElectricityMeterPoint meterPoint(boolean isExport, Tariff... agreements) {
         return ElectricityMeterPoint.builder()
                                     .setMpan(MPAN)
                                     .addMeters(ElectricityMeter.builder().setSerialNumber(METER_SERIAL).build())
-                                    .addTariffs(Tariff.builder()
-                                                      .setTariffCode(tariffCode)
-                                                      .setValidFrom(TARIFF_VALID_FROM)
-                                                      .setValidTo(TARIFF_VALID_TO)
-                                                      .build())
+                                    .addTariffs(agreements)
                                     .setExport(isExport)
                                     .build();
+    }
+
+    /// Returns the [AccountFetchResult.Loaded] that a fetch of [#account(String)] publishes.
+    private static AccountFetchResult createLoadedResult(String tariffCode) {
+        return new AccountFetchResult.Loaded(createAccountDetails(tariffCode));
+    }
+
+    /// Returns the account details that [#account(String)] yields.
+    private static OctopusAccountDetails createAccountDetails(String tariffCode) {
+        return new OctopusAccountDetails(List.of(MeterPoint.builder()
+                                                           .setMpan(MPAN)
+                                                           .addMeterSerials(METER_SERIAL)
+                                                           .addTariffs(createTariffOverTheTestWindow(tariffCode))
+                                                           .setExport(false)
+                                                           .build()));
+    }
+
+    private static Tariff createTariffOverTheTestWindow(String tariffCode) {
+        return createTariff(tariffCode, TARIFF_VALID_FROM, TARIFF_VALID_TO);
+    }
+
+    /// @param validTo the agreement's exclusive end, `null` for an open-ended agreement with no end date
+    private static Tariff createTariff(String tariffCode, Instant validFrom, @Nullable Instant validTo) {
+        return Tariff.builder()
+                     .setTariffCode(tariffCode)
+                     .setValidFrom(validFrom)
+                     .setValidTo(validTo)
+                     .build();
     }
 
     private static Prices prices(String start, int idxOfPredictedPriceStart, Double... pricesPerSlot) {
         return new Prices(Instant.parse("2024-01-01T" + start + ":00Z"),
                           new PriceProfile(1800, idxOfPredictedPriceStart, List.of(pricesPerSlot)));
+    }
+
+    /// Starts a service whose account poll retries once, subscribes to its account details and prices, and runs its first poll.
+    private Subscriptions startRetryingService() {
+        OctopusEnergyProviderService retryingService = createService(clock.createSingleThreadedSchedulingExecutor("retrying-provider"),
+                                                                     new RetryingOnceExecutor());
+        var subscriptions = new Subscriptions(new ArrayList<>(), new ArrayList<>());
+        retryingService.start();
+        retryingService.subscribeToAccountDetails(subscriptions.accountResults()::add);
+        retryingService.subscribeToPrices(subscriptions.priceResults()::add);
+        clock.tick();
+        return subscriptions;
+    }
+
+    /// What a service started by [#startRetryingService()] has published to its subscribers.
+    private record Subscriptions(List<AccountFetchResult> accountResults, List<Either<Prices, EnergyPriceService.Failure>> priceResults) {
+    }
+
+    /// A [RetryableOperationExecutor] that retries a failed attempt once, passing the failure to `backoffEventConsumer` first, as a real executor does between
+    /// attempts.
+    private static final class RetryingOnceExecutor implements RetryableOperationExecutor {
+        @Override
+        public <T> CompletableFuture<T> withBackOffAndRetry(String operationName,
+                                                            Supplier<? extends CompletableFuture<T>> action,
+                                                            BiConsumer<Long, Throwable> backoffEventConsumer) {
+            return action.get().handle((result, throwable) -> {
+                if (throwable == null) {
+                    return completedFuture(result);
+                }
+                backoffEventConsumer.accept(0L, throwable);
+                return action.get();
+            }).thenCompose(future -> future);
+        }
     }
 
     /// Hand-rolled fake of [EnergyPriceService] that lets tests observe the subscriber list and publish results synchronously.

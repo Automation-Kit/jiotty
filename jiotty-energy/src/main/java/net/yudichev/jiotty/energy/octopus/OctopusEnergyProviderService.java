@@ -1,5 +1,8 @@
 package net.yudichev.jiotty.energy.octopus;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.inject.BindingAnnotation;
 import jakarta.inject.Inject;
@@ -14,8 +17,10 @@ import net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage;
 import net.yudichev.jiotty.common.lang.ObservableValue;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import net.yudichev.jiotty.connector.octopusenergy.AccountProperty;
 import net.yudichev.jiotty.connector.octopusenergy.ConsumptionRow;
 import net.yudichev.jiotty.connector.octopusenergy.ElectricityMeter;
+import net.yudichev.jiotty.connector.octopusenergy.ElectricityMeterPoint;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountData;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
@@ -50,6 +55,7 @@ import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
+import static net.yudichev.jiotty.common.lang.MoreThrowables.findInCausalChain;
 import static net.yudichev.jiotty.energy.octopus.Bindings.ExecutorProvider;
 import static net.yudichev.jiotty.energy.octopus.OctopusTariffCode.AGILE_PRODUCT_CODE_PREFIX;
 
@@ -59,14 +65,16 @@ import static net.yudichev.jiotty.energy.octopus.OctopusTariffCode.AGILE_PRODUCT
 /// - **prices** — derives the current tariff and region from each account update, routes to the cached app-scope Agile-prices instance for the tariff
 /// (re-targeted on tariff change) and the forecast instance for the region (re-targeted on region change), and combines them by preferring real
 /// (already-published) values and appending predicted values for the period beyond. Emits [Failure.IncompatibleTariff] when the user switches to a non-Agile
-/// tariff and [Failure.PriceRetrievalError] when the fetch fails.
+/// tariff, and [Failure.PriceRetrievalError] when the fetch fails before any has succeeded or when the account has no current tariff to route prices by.
 /// - **account details** — publishes the trimmed [OctopusAccountDetails] to [#subscribeToAccountDetails] subscribers.
 ///
-/// Consecutive identical fetch failures (same [HumanReadableExceptionMessage]) are deduplicated, so a run of identical failures produces a single
-/// notification on each view regardless of how many retries or polls it spanned; a successful fetch resets the dedup state.
+/// Until a fetch has succeeded, each failed attempt publishes [AccountFetchResult.Failed] and a [Failure.PriceRetrievalError]; consecutive identical
+/// failures (same [HumanReadableExceptionMessage]) are deduplicated, so a run of identical failures produces a single notification regardless of how many
+/// retries or polls it spanned. Once a fetch has succeeded, a failed one publishes nothing and is logged.
 public final class OctopusEnergyProviderService extends BaseLifecycleComponent implements EnergyProviderService {
     private static final Logger logger = LogManager.getLogger(OctopusEnergyProviderService.class);
-    private static final Duration ACCOUNT_POLL_INTERVAL = Duration.ofHours(12);
+    @VisibleForTesting
+    static final Duration ACCOUNT_POLL_INTERVAL = Duration.ofHours(12);
     /// How far back [#latestConsumptionInstant] looks for the most recent published consumption slot. This bounds the search, not a lag assumption: it
     /// comfortably exceeds Octopus' worst-case publication delay (hours to ~48 h), so the true frontier is found whenever the meter has reported at all.
     private static final Duration CONSUMPTION_FRONTIER_PROBE_WINDOW = Duration.ofDays(14);
@@ -95,9 +103,11 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     private @Nullable Closeable octopusSubscription;
     private @Nullable Closeable octopusRefreshTimeSubscription;
     private @Nullable Closeable forecastSubscription;
-    /// The [HumanReadableExceptionMessage#humanReadableMessage(Throwable)] of the last published fetch failure, cleared on a successful fetch. Consecutive
-    /// failures with the same message are suppressed so a single outage produces one notification on each view. Accessed only on the poll executor.
+    /// The [HumanReadableExceptionMessage#humanReadableMessage(Throwable)] of the last published fetch failure. Consecutive failures with the same message
+    /// are suppressed so a single outage produces one notification on each view.
     private @Nullable String lastPublishedFailureMessage;
+    /// Whether a fetched account has been routed to its price services; [#publishFailed(Throwable)] publishes nothing once one has.
+    private boolean accountLoaded;
     private @Nullable String currentTariffCode;
     private @Nullable Character currentRegion;
     private @Nullable Either<Prices, Failure> currentOctopusResult;
@@ -206,9 +216,10 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         });
     }
 
-    /// The supply region is the trailing letter of an Octopus tariff code (e.g. `E-1R-AGILE-23-12-06-A` → `A`).
-    private static char regionOf(String tariffCode) {
-        return tariffCode.charAt(tariffCode.length() - 1);
+    /// Whether the account poll retries `failure`: every failure except one with a [JsonProcessingException] in its causal chain, a response that arrived but
+    /// could not be parsed.
+    static boolean isRetryablePollFailure(Throwable failure) {
+        return findInCausalChain(failure, JsonProcessingException.class).isEmpty();
     }
 
     private void poll() {
@@ -230,12 +241,18 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     }
 
     private void publishLoaded(OctopusAccountData account) {
-        lastPublishedFailureMessage = null;
         accountResult.accept(Optional.of(new AccountFetchResult.Loaded(toAccountDetails(account))));
         handleAccountResolution(account);
+        // Set only once the account has been routed, so that a routing failure on the first load reaches publishFailed as a fetch failure does.
+        accountLoaded = true;
     }
 
     private void publishFailed(Throwable cause) {
+        if (accountLoaded) {
+            // The prices come from the tariff's OctopusAgilePriceService and the poll only detects a change of tariff or meter, so a failed refresh leaves
+            // the published prices and account in place.
+            return;
+        }
         String message = humanReadableMessage(cause);
         if (Objects.equals(message, lastPublishedFailureMessage)) {
             return;
@@ -246,20 +263,20 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
     }
 
     private static OctopusAccountDetails toAccountDetails(OctopusAccountData account) {
-        List<OctopusAccountDetails.MeterPoint> meterPoints =
-                account.properties().stream()
-                       .flatMap(property -> property.electricityMeterPoints().stream())
-                       .map(meterPoint -> new OctopusAccountDetails.MeterPoint(
-                               meterPoint.mpan(),
-                               meterPoint.meters().stream().map(ElectricityMeter::serialNumber).toList(),
-                               meterPoint.tariffs().stream()
-                                         .map(tariff -> new OctopusAccountDetails.TariffPeriod(tariff.tariffCode(),
-                                                                                               tariff.validFrom(),
-                                                                                               tariff.validTo()))
-                                         .toList(),
-                               meterPoint.isExport()))
-                       .toList();
-        return new OctopusAccountDetails(meterPoints);
+        ImmutableList.Builder<MeterPoint> meterPoints = ImmutableList.builder();
+        for (AccountProperty property : account.properties()) {
+            for (ElectricityMeterPoint meterPoint : property.electricityMeterPoints()) {
+                MeterPoint.Builder builder = MeterPoint.builder()
+                                                       .setMpan(meterPoint.mpan())
+                                                       .setTariffs(meterPoint.tariffs())
+                                                       .setExport(meterPoint.isExport());
+                for (ElectricityMeter meter : meterPoint.meters()) {
+                    builder.addMeterSerials(meter.serialNumber());
+                }
+                meterPoints.add(builder.build());
+            }
+        }
+        return new OctopusAccountDetails(meterPoints.build());
     }
 
     private void handleAccountResolution(OctopusAccountData account) {
@@ -274,7 +291,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         }
         String tariffCode = tariff.tariffCode();
         String productCode = OctopusTariffCode.productCode(tariffCode);
-        char regionLetter = tariffCode.charAt(tariffCode.length() - 1);
+        char regionLetter = regionOf(tariffCode);
 
         if (!productCode.startsWith(AGILE_PRODUCT_CODE_PREFIX)) {
             handleIncompatibleTariff(tariffCode);
@@ -307,6 +324,11 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         }
     }
 
+    /// The supply region is the trailing letter of an Octopus tariff code (e.g. `E-1R-AGILE-23-12-06-A` → `A`).
+    private static char regionOf(String tariffCode) {
+        return tariffCode.charAt(tariffCode.length() - 1);
+    }
+
     private void handleIncompatibleTariff(String tariffCode) {
         if (Objects.equals(tariffCode, currentTariffCode)) {
             // already in this state, don't re-emit
@@ -335,8 +357,7 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         combineAndNotify();
     }
 
-    /// Emits a [Failure.PriceRetrievalError] to price subscribers. Reached from [#publishFailed] (which already deduplicates identical consecutive fetch
-    /// failures) and from the account-parse failure branch of [#handleAccountResolution].
+    /// Emits a [Failure.PriceRetrievalError] carrying `throwable` to price subscribers.
     private void emitRetrievalError(Throwable throwable) {
         Either<Prices, Failure> result = Either.right(new Failure.PriceRetrievalError(throwable));
         priceResult.accept(Optional.of(result));
@@ -355,13 +376,12 @@ public final class OctopusEnergyProviderService extends BaseLifecycleComponent i
         return account.properties().stream().findFirst()
                       // Prefer an import (consumption) meter point — an export point carries the SEG/export tariff, not the tariff the user pays to consume.
                       .flatMap(accountProperty -> accountProperty.electricityMeterPoints().stream().filter(meterPoint -> !meterPoint.isExport()).findFirst())
-                      .flatMap(electricityMeterPoint -> electricityMeterPoint.tariffs().stream().filter(this::isCurrent).findFirst())
-                      .orElseThrow(() -> new RuntimeException("Unable to extract current tariff from " + account));
-    }
-
-    private boolean isCurrent(Tariff tariff) {
-        var now = timeProvider.currentInstant();
-        return tariff.validFrom().equals(now) || tariff.validFrom().isBefore(now) && tariff.validTo().isAfter(now);
+                      .flatMap(electricityMeterPoint -> electricityMeterPoint.tariffs()
+                                                                             .stream()
+                                                                             .filter(tariff -> tariff.covers(timeProvider.currentInstant()))
+                                                                             .findFirst())
+                      // A fixed message: the account's own rendering would carry its agreements and supply identifiers into the log and the alert.
+                      .orElseThrow(() -> new RuntimeException("No import meter point of the Octopus account has an agreement in force"));
     }
 
     /// Qualifies the [OctopusAccountService] provider. [#doStart()] obtains a new instance from it on each start, since [#doStop()] closes the previous one.

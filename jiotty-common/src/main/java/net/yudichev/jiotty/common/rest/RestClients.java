@@ -41,7 +41,7 @@ public final class RestClients {
 
     private static final Logger logger = LogManager.getLogger(RestClients.class);
 
-    private static final int DEFAULT_CALL_RETRY_COUNT = 3;
+    public static final int DEFAULT_CALL_RETRY_COUNT = 3;
     private static final Duration DEFAULT_HTTP_TIMEOUT = Duration.ofSeconds(60);
     private static final AtomicInteger requestIdGenerator = new AtomicInteger();
 
@@ -315,9 +315,24 @@ public final class RestClients {
                                                                  TypeToken<PageT> pageType,
                                                                  Function<PageT, ? extends List<T>> resultsAccessor,
                                                                  Function<PageT, Optional<String>> nextUrlAccessor) {
+        return paginate(url -> call(callFactory.apply(url), pageType), firstUrl, expectedTotalCount, resultsAccessor, nextUrlAccessor);
+    }
+
+    /// [#paginate(Function, String, int, TypeToken, Function, Function)] with `pageFetcher` making each page's call, so the caller chooses how the call is
+    /// made and logged — [#callSuppressingResponseBody(Call, TypeToken, int, StringFormattable)] for pages that carry personal data, say.
+    ///
+    /// @param <PageT>            the type of a page
+    /// @param <T>                the type of the results that each page lists
+    /// @param pageFetcher        fetches the page that a URL names
+    /// @param expectedTotalCount non-binding sizing hint passed to [ImmutableList#builderWithExpectedSize]
+    public static <PageT, T> CompletableFuture<List<T>> paginate(Function<String, CompletableFuture<PageT>> pageFetcher,
+                                                                 String firstUrl,
+                                                                 int expectedTotalCount,
+                                                                 Function<PageT, ? extends List<T>> resultsAccessor,
+                                                                 Function<PageT, Optional<String>> nextUrlAccessor) {
         checkArgument(expectedTotalCount >= 0, "expectedTotalCount must be non-negative");
         var accumulator = ImmutableList.<T>builderWithExpectedSize(expectedTotalCount);
-        return forEachPage(url -> call(callFactory.apply(url), pageType),
+        return forEachPage(pageFetcher,
                            firstUrl,
                            page -> accumulator.addAll(resultsAccessor.apply(page)),
                            nextUrlAccessor)

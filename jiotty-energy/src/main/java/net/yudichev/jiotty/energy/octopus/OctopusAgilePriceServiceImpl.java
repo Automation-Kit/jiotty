@@ -195,7 +195,8 @@ public final class OctopusAgilePriceServiceImpl extends BaseLifecycleComponent i
         // ratesByInstant is in chronological order (Resolution.halfHourly maps to ascending Instants).
         ImmutableList<StandardUnitRate> rates = ratesByInstant.values().asList();
         Instant startOfOldestPricePeriod = ratesByInstant.keySet().iterator().next();
-        Instant endOfNewestPricePeriod = rates.get(rates.size() - 1).validTo();
+        // An Agile rate covers exactly one slot, so the newest slot's key plus one slot is where its rate ends.
+        Instant endOfNewestPricePeriod = ratesByInstant.keySet().asList().getLast().plusSeconds(PRICE_PERIOD_LENGTH_SEC_L);
         ImmutableList.Builder<Double> pricesPerPeriod = ImmutableList.builderWithExpectedSize(rates.size());
         for (var rate : rates) {
             pricesPerPeriod.add(rate.valueIncVat());

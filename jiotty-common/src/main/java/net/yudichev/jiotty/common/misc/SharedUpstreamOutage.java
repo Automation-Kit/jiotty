@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.common.misc;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
 
 import java.io.IOException;
@@ -23,6 +24,8 @@ import static net.yudichev.jiotty.common.rest.HttpStatuses.isServerError;
 /// - a connectivity/resource [SQLException] ([SQLNonTransientConnectionException], [SQLRecoverableException], [SQLTransientException] — whose
 /// [SQLTransientConnectionException] subtype is also what a pool reports when it has no connection to give) — the database is unreachable or out of
 /// capacity for everyone: a shared outage. Any other [SQLException] (constraint violation, syntax, bad data) is about this caller's own query.
+/// - a [JsonProcessingException] — a response arrived but could not be parsed, which is about the payload, never the network: subject-specific, although
+/// Jackson's exceptions are [IOException]s.
 /// - any other [IOException] — a network-level failure on the shared egress path: a shared outage.
 ///
 /// An unclassifiable chain is subject-specific: a subject-attributed alert for a shared problem is the recoverable mistake (operators see N similar alerts),
@@ -38,6 +41,9 @@ public final class SharedUpstreamOutage {
                 case HttpResponseException httpResponseException -> {
                     int statusCode = httpResponseException.statusCode();
                     return isServerError(statusCode) || statusCode == TOO_MANY_REQUESTS_429;
+                }
+                case JsonProcessingException _ -> {
+                    return false;
                 }
                 case SQLNonTransientConnectionException _,
                      SQLRecoverableException _,

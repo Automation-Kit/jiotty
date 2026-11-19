@@ -89,6 +89,26 @@ class OctopusStreamsTest {
     }
 
     @Test
+    void ratesStream_openEndedRate_coversEverySlotFromItsStart() {
+        // The rate in force on a variable tariff has no end date yet; every requested slot from its start on resolves to it.
+        Instant from = Instant.parse("2024-01-15T00:00:00Z");
+        Instant to = Instant.parse("2024-01-15T00:30:00Z");
+        when(regionService.getStandardUnitRates(eq(PRODUCT), eq(TARIFF), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(StandardUnitRate.builder()
+                                                                                      .setValidFrom(Instant.parse("2024-01-01T00:00:00Z"))
+                                                                                      .setValueExcVat(23.1)
+                                                                                      .setValueIncVat(24.255)
+                                                                                      .build())));
+
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
+        ImmutableMap<Instant, StandardUnitRate> result = stream.readRange(from, to).join();
+
+        assertThat(result)
+                .containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"), Instant.parse("2024-01-15T00:30:00Z"))
+                .allSatisfy((_, rate) -> assertThat(rate.valueIncVat()).isEqualTo(24.255));
+    }
+
+    @Test
     void ratesStream_secondReadOfSameSlots_servesFromCache_noSecondFetch() {
         Instant from = Instant.parse("2024-01-15T00:00:00Z");
         Instant to = Instant.parse("2024-01-15T00:00:00Z");
