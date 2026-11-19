@@ -27,6 +27,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.HashMap;
@@ -293,17 +294,27 @@ class AuthenticatedUIRequestAuthoriserTest {
     void ignoresATokenStateArrivingAfterTheDeadline() throws Exception {
         when(request.getHeader(AUTHORIZATION)).thenReturn(BEARER_HEADER);
         prepareResponseOutput();
-        var tokenStateHandler = new MutableReference<Consumer<? super UserTokenAuthoriser.TokenState>>();
-        doAnswer(invocation -> {
-            tokenStateHandler.set(invocation.getArgument(1));
-            return null;
-        }).when(userTokenAuthoriser).deliverTokenStateTo(eq(TOKEN), any());
+        MutableReference<Consumer<? super UserTokenAuthoriser.TokenState>> tokenStateHandler = captureTokenStateHandler();
         authoriser.authorise(request, response, chain);
         asyncContext.expireDeadlines();
 
         tokenStateHandler.get().accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, new FakeUIServer(), Optional.empty()));
 
         assertThat(asyncContext.dispatches()).isZero();
+    }
+
+    /// A token state arriving after the request's exchange was aborted is not acted on: the request is not dispatched, and no authorisation is timed.
+    @Test
+    void ignoresATokenStateArrivingAfterTheExchangeWasAborted() throws IOException {
+        when(request.getHeader(AUTHORIZATION)).thenReturn(BEARER_HEADER);
+        MutableReference<Consumer<? super UserTokenAuthoriser.TokenState>> tokenStateHandler = captureTokenStateHandler();
+        authoriser.authorise(request, response, chain);
+        asyncContext.abort();
+
+        tokenStateHandler.get().accept(new UserTokenAuthoriser.TokenAuthenticated(PROFILE, new FakeUIServer(), Optional.empty()));
+
+        assertThat(asyncContext.dispatches()).isZero();
+        assertThat(authoriseTimer(AuthenticatedUIRequestAuthoriser.OUTCOME_AUTHENTICATED)).isNotNull().returns(0L, Timer::count);
     }
 
     /// Anything that is not a non-blank `Bearer <token>` is treated as no token at all, so it is refused before any verification work.
@@ -454,6 +465,16 @@ class AuthenticatedUIRequestAuthoriserTest {
             handler.accept(state);
             return null;
         }).when(userTokenAuthoriser).deliverTokenStateTo(eq(TOKEN), any());
+    }
+
+    /// Makes [UserTokenAuthoriser#deliverTokenStateTo] hold the handler that it is given, so that the test can invoke the handler later.
+    private MutableReference<Consumer<? super UserTokenAuthoriser.TokenState>> captureTokenStateHandler() {
+        var tokenStateHandler = new MutableReference<Consumer<? super UserTokenAuthoriser.TokenState>>();
+        doAnswer(invocation -> {
+            tokenStateHandler.set(invocation.getArgument(1));
+            return null;
+        }).when(userTokenAuthoriser).deliverTokenStateTo(eq(TOKEN), any());
+        return tokenStateHandler;
     }
 
     private void prepareResponseOutput() throws Exception {

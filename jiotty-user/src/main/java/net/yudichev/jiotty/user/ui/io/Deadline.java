@@ -17,7 +17,8 @@ public sealed interface Deadline {
     /// @param timeout           how long the exchange may go unanswered; positive
     /// @param answer            the answer once it has; it must not depend on the request, being built before the deadline runs
     /// @param onEncodingFailure invoked on a container thread with the failure when `answer`'s body cannot be encoded
-    /// @param onExpired         invoked on a container thread, before `answer` is written, with what the exchange was waiting on
+    /// @param onExpired         invoked on a container thread, before `answer` is written, with what the exchange was waiting on. It is also invoked for an
+    ///                          exchange that has ended since the deadline expired, to which `answer` is then not written
     static Deadline after(Duration timeout, Answer answer, Consumer<? super Exception> onEncodingFailure, Consumer<Stall> onExpired) {
         return new After(timeout, answer, onEncodingFailure, onExpired);
     }

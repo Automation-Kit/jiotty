@@ -7,7 +7,7 @@ sealed interface DrainState {
     enum Phase implements DrainState {
         /// Nothing being written.
         IDLE,
-        /// A drain has been handed to a container thread and has not started. The container may drop that task when the exchange ends first, so nothing
+        /// A drain has been handed to a container thread and has not started. [AsyncExchange] skips that task when the exchange ends first, so nothing
         /// waits on it: whichever of the task and an end moves the state on first wins.
         QUEUED,
         /// One container thread is writing.

@@ -22,10 +22,10 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static net.yudichev.jiotty.common.lang.MoreThrowables.asUnchecked;
 
 /// An [AsyncContext], and the [ExchangeContainer] behind it, that behave as a container's do where a test can see them:
-/// - [#start(Runnable)] runs the task at once on the calling thread, unless [#holdStartedTasks()] holds it; it and [#complete()] throw once the exchange has
-///   completed;
+/// - [#execute(Runnable)] runs the task at once on the calling thread, unless [#holdTasks()] holds it, whatever the state of the exchange;
 /// - [#complete()] invokes every listener's [AsyncListener#onComplete(AsyncEvent)], recycles the context — from then on [#getRequest()] throws — and then
-///   finishes the container's part in the exchange, which runs its completion listeners; [#holdContainerCompletion()] defers that last step;
+///   finishes the container's part in the exchange, which runs its completion listeners; [#holdContainerCompletion()] defers that last step. A second
+///   [#complete()] throws;
 /// - [#abort()] ends the exchange as a container does when the client goes away: no listener is invoked, and the container finishes with it at once;
 ///   [#abort(Throwable)] does the same and records the cause;
 /// - a scheduled task runs when the test calls [#expireDeadlines()].
@@ -36,17 +36,18 @@ public final class FakeAsyncContext implements AsyncContext, ExchangeContainer {
     private final List<Runnable> completionListeners = new ArrayList<>();
     private final List<ScheduledTask> scheduledTasks = new ArrayList<>();
     private final List<Runnable> heldTasks = new ArrayList<>();
-    private boolean holdingStartedTasks;
+    private boolean holdingTasks;
     private long timeout;
     private int completions;
     private boolean recycled;
     private boolean containerCompletionHeld;
     private boolean containerCompleted;
     private int dispatches;
-    private @Nullable RuntimeException startFailure;
+    private @Nullable RuntimeException executionFailure;
     private @Nullable RuntimeException completionFailure;
     private @Nullable RuntimeException scheduleFailure;
     private @Nullable RuntimeException abortFailure;
+    private @Nullable RuntimeException dispatchFailure;
     private @Nullable Throwable abortCause;
 
     public FakeAsyncContext(ServletRequest request, ServletResponse response) {
@@ -142,29 +143,29 @@ public final class FakeAsyncContext implements AsyncContext, ExchangeContainer {
         completionFailure = checkNotNull(failure, "failure");
     }
 
-    /// Makes [#start(Runnable)] throw `failure` from now on without running the task, as a container whose thread pool has stopped does with a
+    /// Makes [#execute(Runnable)] throw `failure` from now on without running the task, as a container whose thread pool has stopped does with a
     /// [RejectedExecutionException].
-    public void failStartsWith(RuntimeException failure) {
-        startFailure = checkNotNull(failure, "failure");
+    public void failExecutionsWith(RuntimeException failure) {
+        executionFailure = checkNotNull(failure, "failure");
     }
 
-    /// Holds the tasks later [#start(Runnable)] calls accept, until [#runHeldTasks()] or [#dropHeldTasks()], as a container does until a pool thread is free.
-    public void holdStartedTasks() {
-        holdingStartedTasks = true;
+    /// Makes every dispatch throw `failure` from now on without counting it, as a container whose thread pool has stopped does with a
+    /// [RejectedExecutionException].
+    public void failDispatchesWith(RuntimeException failure) {
+        dispatchFailure = checkNotNull(failure, "failure");
     }
 
-    /// Runs the tasks held so far, in the order started, and runs later ones at once again.
+    /// Holds the tasks that later [#execute(Runnable)] calls accept, until [#runHeldTasks()], as a container does until a pool thread is free.
+    public void holdTasks() {
+        holdingTasks = true;
+    }
+
+    /// Runs the tasks held so far, in the order accepted, and runs later ones at once again.
     public void runHeldTasks() {
-        holdingStartedTasks = false;
+        holdingTasks = false;
         List<Runnable> tasks = List.copyOf(heldTasks);
         heldTasks.clear();
         tasks.forEach(Runnable::run);
-    }
-
-    /// Drops the tasks held so far without running them, as a container does with a task it accepted for an exchange that has since ended.
-    public void dropHeldTasks() {
-        holdingStartedTasks = false;
-        heldTasks.clear();
     }
 
     @Override
@@ -180,6 +181,18 @@ public final class FakeAsyncContext implements AsyncContext, ExchangeContainer {
         var scheduledTask = new ScheduledTask(delay, task);
         scheduledTasks.add(scheduledTask);
         return () -> scheduledTask.cancelled = true;
+    }
+
+    @Override
+    public void execute(Runnable task) {
+        if (executionFailure != null) {
+            throw executionFailure;
+        }
+        if (holdingTasks) {
+            heldTasks.add(task);
+        } else {
+            task.run();
+        }
     }
 
     @Override
@@ -200,17 +213,20 @@ public final class FakeAsyncContext implements AsyncContext, ExchangeContainer {
 
     @Override
     public void dispatch() {
+        if (dispatchFailure != null) {
+            throw dispatchFailure;
+        }
         dispatches++;
     }
 
     @Override
     public void dispatch(String path) {
-        dispatches++;
+        dispatch();
     }
 
     @Override
     public void dispatch(ServletContext context, String path) {
-        dispatches++;
+        dispatch();
     }
 
     @Override
@@ -229,17 +245,11 @@ public final class FakeAsyncContext implements AsyncContext, ExchangeContainer {
         }
     }
 
+    /// @throws UnsupportedOperationException always: a container validates the exchange when a task started this way runs, and fails on its own thread if
+    ///                                       the exchange has completed
     @Override
     public void start(Runnable task) {
-        if (startFailure != null) {
-            throw startFailure;
-        }
-        checkState(completions == 0, "the exchange has completed already");
-        if (holdingStartedTasks) {
-            heldTasks.add(task);
-        } else {
-            task.run();
-        }
+        throw new UnsupportedOperationException();
     }
 
     @Override

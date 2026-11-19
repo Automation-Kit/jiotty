@@ -67,7 +67,7 @@ public final class AsyncExchange {
     /// Starts `request`'s async cycle as an exchange. Must be called while dispatching `request`, which the container enforces: it refuses to start a cycle
     /// at any other time.
     ///
-    /// @param alertService escalates a failure the exchange having ended does not explain
+    /// @param alertService raises an alert for a failure that neither the end of the exchange nor a stopped container explains
     /// @param deadline     how long the exchange may go unanswered
     public static AsyncExchange start(AdminAlertService alertService, HttpServletRequest request, HttpServletResponse response, Deadline deadline) {
         AsyncContext asyncContext = request.startAsync();
@@ -94,7 +94,7 @@ public final class AsyncExchange {
         }
         exchange.alertService.raise(WARNING, DISPATCH_FAILED_ALERT_TITLE, logger, '[' + exchange.id + "] The dispatch threw", failure);
         if (exchange.claimFromUnclaimed() != null) {
-            exchange.claim.answer(answer, exchange::alertEncodingFailure);
+            exchange.claim.answer(answer, encodingFailure -> exchange.alertFailure("encode an answer", encodingFailure));
         } else if (exchange.phase.get() instanceof Claimed(ContainerOutput output) && output != null) {
             output.close();
         }
@@ -108,8 +108,8 @@ public final class AsyncExchange {
         return claimFromUnclaimed() == null ? Optional.empty() : heldClaim;
     }
 
-    /// Writes `answer` to the exchange, from any thread, unless it has been claimed already, in which case `answer` is dropped. An answer whose body cannot
-    /// be encoded is sent as a bare 500.
+    /// Writes `answer` to the exchange, from any thread. `answer` is dropped when the exchange has been claimed already, or has ended. An answer whose body
+    /// cannot be encoded is sent as a bare 500.
     ///
     /// @param onEncodingFailure invoked on a container thread with the failure when `answer`'s body cannot be encoded
     public void answer(Answer answer, Consumer<? super Exception> onEncodingFailure) {
@@ -136,24 +136,13 @@ public final class AsyncExchange {
         closedWhenEnded.add(onEnded::run);
     }
 
-    /// Runs `task` on a container thread, from any thread.
+    /// Runs `task` on a container thread, from any thread, if the exchange is [open][#isOpen()] when that thread takes the task. A task for an exchange
+    /// that has ended is not run.
     ///
-    /// @return `true` when a container thread was given the task, which it runs unless the exchange ends first; `false` when the container rejected it, which
-    ///         is logged, or alerted when the exchange having ended does not explain it
+    /// @return `true` when the container accepted the task, whether or not the exchange is open; `false` when the container rejected it, which is logged
+    ///         when the container has stopped and raises an alert otherwise
     public boolean runOnContainerThread(Runnable task) {
-        try {
-            asyncContext.start(task);
-            return true;
-        } catch (RejectedExecutionException e) {
-            // The container's thread pool has stopped, as when the server shuts down.
-            if (logger.isDebugEnabled()) {
-                logger.debug("[{}] Could not start a task, as the container has stopped", id, e);
-            }
-            return false;
-        } catch (RuntimeException e) {
-            reportFailure("start a task", e);
-            return false;
-        }
+        return tryExecute(() -> runIfOpen(task));
     }
 
     /// Marks the request body as arriving, which a deadline expiring meanwhile reports as [Deadline.Stall#RECEIVING_BODY]. Has no effect once claimed.
@@ -191,6 +180,7 @@ public final class AsyncExchange {
     }
 
     /// Runs on the container's timer thread, which also drives every connection's idle timeout, so it only claims, and runs the rest on a container thread.
+    /// That thread reports the expiry whatever the state of the exchange, and starts the answer if the exchange is open.
     private void onDeadline(Deadline.After deadline) {
         Unclaimed unclaimedPhase = claimFromUnclaimed();
         if (unclaimedPhase != null) {
@@ -198,13 +188,13 @@ public final class AsyncExchange {
                 case OPEN -> HANDLING;
                 case AWAITING_BODY -> RECEIVING_BODY;
             };
-            runOnContainerThread(() -> {
+            tryExecute(() -> {
                 try {
                     deadline.onExpired().accept(stall);
                 } catch (RuntimeException e) {
-                    reportFailure("report an expired deadline", e);
+                    alertFailure("report an expired deadline", e);
                 }
-                startAnswer(deadline.answer(), deadline.onEncodingFailure());
+                runIfOpen(() -> startAnswer(deadline.answer(), deadline.onEncodingFailure()));
             });
         }
     }
@@ -219,6 +209,30 @@ public final class AsyncExchange {
             if (phase.compareAndSet(current, CLAIMED_WITHOUT_OUTPUT)) {
                 return unclaimed;
             }
+        }
+    }
+
+    /// Runs `task` on a container thread, whatever the state of the exchange.
+    ///
+    /// @return whether the container accepted the task
+    private boolean tryExecute(Runnable task) {
+        try {
+            container.execute(task);
+            return true;
+        } catch (RejectedExecutionException e) {
+            logContainerStopped("start a task", e);
+            return false;
+        } catch (RuntimeException e) {
+            alertFailure("start a task", e);
+            return false;
+        }
+    }
+
+    private void runIfOpen(Runnable task) {
+        if (isOpen()) {
+            task.run();
+        } else if (logger.isDebugEnabled()) {
+            logger.debug("[{}] Not running a task, as the exchange has ended", id);
         }
     }
 
@@ -249,19 +263,30 @@ public final class AsyncExchange {
         answer.body().applyHeadersTo(response);
     }
 
-    private void alertEncodingFailure(Exception failure) {
-        alertService.raise(WARNING, UNEXPECTED_FAILURE_ALERT_TITLE, logger, '[' + id + "] Could not encode an answer", failure);
-    }
-
-    /// Logs a failure the exchange having ended explains, and raises an alert for any other.
+    /// Logs a failure that a stopped container or the end of the exchange explains, and raises an alert for any other.
     ///
     /// @param action what failed, completing the sentence "Could not …"
     private void reportFailure(String action, RuntimeException failure) {
-        if (isOpen()) {
-            alertService.raise(WARNING, UNEXPECTED_FAILURE_ALERT_TITLE, logger, '[' + id + "] Could not " + action, failure);
+        if (failure instanceof RejectedExecutionException rejection) {
+            logContainerStopped(action, rejection);
+        } else if (isOpen()) {
+            alertFailure(action, failure);
         } else if (logger.isDebugEnabled()) {
             logger.debug("[{}] Could not {}, as the exchange has ended", id, action, failure);
         }
+    }
+
+    /// @param action what the container rejected, completing the sentence "Could not …"
+    private void logContainerStopped(String action, RejectedExecutionException rejection) {
+        // The container's thread pool has stopped, as when the server shuts down.
+        if (logger.isDebugEnabled()) {
+            logger.debug("[{}] Could not {}, as the container has stopped", id, action, rejection);
+        }
+    }
+
+    /// @param action what failed, completing the sentence "Could not …"
+    private void alertFailure(String action, Exception failure) {
+        alertService.raise(WARNING, UNEXPECTED_FAILURE_ALERT_TITLE, logger, '[' + id + "] Could not " + action, failure);
     }
 
     /// The right to answer the exchange, which one party holds: the first to call [AsyncExchange#claim()]. Only the holder touches the exchange's request and
@@ -294,7 +319,8 @@ public final class AsyncExchange {
             runOnContainerThread(this::completeNow);
         }
 
-        /// Completes the exchange from the calling container thread. A failure is logged when the exchange has ended already, and alerted otherwise.
+        /// Completes the exchange from the calling container thread. A failure is logged when the container has stopped or the exchange has ended already,
+        /// and raises an alert otherwise.
         public void completeNow() {
             try {
                 asyncContext.complete();
@@ -319,10 +345,15 @@ public final class AsyncExchange {
             }
         }
 
-        /// Dispatches the request to the container again, which ends this exchange's part in it: a later dispatch starts its own.
+        /// Dispatches the request to the container again, which ends this exchange's part in it: a later dispatch starts its own. A container that has
+        /// stopped rejects the dispatch, which is logged.
         public void dispatch() {
             request().removeAttribute(REQUEST_ATTRIBUTE);
-            asyncContext.dispatch();
+            try {
+                asyncContext.dispatch();
+            } catch (RejectedExecutionException e) {
+                logContainerStopped("dispatch the request", e);
+            }
         }
 
         /// @throws IllegalStateException once the exchange has ended

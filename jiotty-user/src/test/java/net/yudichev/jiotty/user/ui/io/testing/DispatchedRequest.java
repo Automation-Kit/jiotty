@@ -48,7 +48,7 @@ public final class DispatchedRequest {
     /// @param handlerDispatch the handler's dispatch, given the recording view
     public static DispatchedRequest dispatch(HttpServletRequest request, FakeAsyncContext asyncContext, Consumer<HttpServletRequest> handlerDispatch) {
         var recorder = new DispatchedRequest(request);
-        asyncContext.holdStartedTasks();
+        asyncContext.holdTasks();
         try {
             handlerDispatch.accept(recorder.recordingView);
         } finally {

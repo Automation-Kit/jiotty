@@ -81,14 +81,12 @@ public final class DisplayableDownloadHandler extends BaseLifecycleComponent imp
         String downloadId = request.getParameter(DOWNLOAD_ID_PARAMETER);
         whenStartedAndNotLifecycling(() -> {
             var exchange = AsyncExchange.start(alertService, request, response, deadline);
-            exchange.runOnContainerThread(() -> whenStartedAndNotLifecycling(() -> {
-                try {
-                    serve(exchange, displayableId, downloadId);
-                } catch (RuntimeException e) {
-                    alertService.raise(WARNING, DOWNLOAD_FAILED_ALERT_TITLE, logger, '[' + userId + "] Serving a download", e);
-                    answer(exchange, ErrorResponse.SERVER_FAULT);
-                }
-            }));
+            try {
+                serve(exchange, displayableId, downloadId);
+            } catch (RuntimeException e) {
+                alertService.raise(WARNING, DOWNLOAD_FAILED_ALERT_TITLE, logger, '[' + userId + "] Serving a download", e);
+                answer(exchange, ErrorResponse.SERVER_FAULT);
+            }
         });
     }
 

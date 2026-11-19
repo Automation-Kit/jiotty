@@ -10,8 +10,8 @@ import java.util.concurrent.RejectedExecutionException;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-/// The container's services one exchange takes beyond its [AsyncContext]: a callback once the container has finished with the exchange, a timer, and an
-/// abort. An [AsyncContext] that implements this interface itself provides them.
+/// The services that an exchange takes from its container beyond its [AsyncContext]: a callback once the container has finished with the exchange, a
+/// timer, a thread pool and an abort. An [AsyncContext] that implements this interface itself provides them.
 public interface ExchangeContainer {
     /// Registers `onCompleted`, invoked once when the container has finished with the exchange and holds none of the buffers written to its response. Must
     /// be called on the thread dispatching the request.
@@ -22,6 +22,11 @@ public interface ExchangeContainer {
     /// @return cancels the task, if it has not run
     /// @throws RejectedExecutionException if the timer has stopped, as when the server is stopping
     Closeable schedule(Duration delay, Runnable task);
+
+    /// Runs `task` on a thread of the container's pool, whatever the state of the exchange. Safe from any thread.
+    ///
+    /// @throws RejectedExecutionException if the pool has stopped, as when the server is stopping
+    void execute(Runnable task);
 
     /// Ends the exchange without completing its response, so the client sees the response cut off. Safe from any thread.
     ///

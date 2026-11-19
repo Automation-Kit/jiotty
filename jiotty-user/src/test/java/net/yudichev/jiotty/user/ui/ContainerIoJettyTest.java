@@ -14,6 +14,7 @@ import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.user.ui.io.Answer;
 import net.yudichev.jiotty.user.ui.io.AsyncExchange;
 import net.yudichev.jiotty.user.ui.io.Deadline;
+import net.yudichev.jiotty.user.ui.io.ExchangeContainer;
 import net.yudichev.jiotty.user.ui.io.ReceivedBody;
 import net.yudichev.jiotty.user.ui.io.RequestBodies;
 import net.yudichev.jiotty.user.ui.io.ResponseBody;
@@ -45,6 +46,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.Math.toIntExact;
@@ -78,9 +80,9 @@ class ContainerIoJettyTest {
     private static final Duration SHORT_DEADLINE = Duration.ofMillis(200);
     private static final String DEADLINE_TEXT = "past the deadline";
     private static final Answer DEADLINE_ANSWER = Answer.of(SERVICE_UNAVAILABLE_503, new TextBody(DEADLINE_TEXT));
-    /// Written by the [#AFTER_END_SERVLET_PATH] servlet when the ended exchange rejects a task and nothing was alerted, as counted on the serving thread,
-    /// which is the thread that raises any alert.
-    private static final String REJECTED_UNALERTED_LINE = "rejected, alerts: 0";
+    /// Written by the [#AFTER_END_SERVLET_PATH] servlet when the container accepts a task for the ended exchange and nothing was alerted, as counted on
+    /// the serving thread, which is the thread that raises any alert.
+    private static final String ACCEPTED_UNALERTED_LINE = "accepted, alerts: 0";
     /// A deadlock safety net for the cross-thread assertions.
     private static final Duration ASSERTION_TIMEOUT = Duration.ofSeconds(30);
     /// Well inside the production idle timeout, so a stream closed within it was dropped on overflow.
@@ -99,6 +101,9 @@ class ContainerIoJettyTest {
     private final CompletableFuture<Void> streamClosure = new CompletableFuture<>();
     private final CompletableFuture<String> encodingThreadName = new CompletableFuture<>();
     private final CompletableFuture<AsyncExchange> endingExchange = new CompletableFuture<>();
+    private final CompletableFuture<ExchangeContainer> endingContainer = new CompletableFuture<>();
+    /// The name of the thread that ran the task which the [#AFTER_END_SERVLET_PATH] servlet gave to the container of the exchange that had ended.
+    private final CompletableFuture<String> endedContainerTaskThreadName = new CompletableFuture<>();
     private final CompletableFuture<Void> abortReturned = new CompletableFuture<>();
     private final TestAdminAlertService alertService = new TestAdminAlertService();
     private final HttpClient httpClient = HttpClient.newHttpClient();
@@ -186,15 +191,35 @@ class ContainerIoJettyTest {
 
     /// Answering or starting a task on an exchange Jetty has completed and recycled finds it claimed or ended, so nothing is written and nothing alerted.
     @Test
-    void anExchangeJettyHasRecycledRefusesWorkWithoutAnAlert() {
+    void anExchangeJettyHasRecycledIgnoresWorkWithoutAnAlert() {
         startServer(UIHttpServerImpl.IDLE_TIMEOUT);
 
-        // Pipelined on one connection, so Jetty takes the second request only once it has completed the first and recycled its exchange.
-        Socket socket = connectAndSend(requestTo(ENDING_SERVLET_PATH) + requestTo(AFTER_END_SERVLET_PATH));
-        clientSocket = socket;
+        Socket socket = connectAndSendEndingThenAfterEnd();
         var responses = new BufferedReader(new InputStreamReader(getAsUnchecked(socket::getInputStream), UTF_8));
 
-        assertThat(CompletableFuture.supplyAsync(() -> readUntil(responses, REJECTED_UNALERTED_LINE), applicationExecutor)).succeedsWithin(ASSERTION_TIMEOUT);
+        assertThat(CompletableFuture.supplyAsync(() -> readUntil(responses, ACCEPTED_UNALERTED_LINE), applicationExecutor)).succeedsWithin(ASSERTION_TIMEOUT);
+    }
+
+    /// The container runs a task on a thread of its pool whatever the state of the exchange, here one that Jetty has completed and recycled.
+    @Test
+    void aContainerRunsATaskOnAPoolThreadOnceItsExchangeIsRecycled() {
+        startServer(UIHttpServerImpl.IDLE_TIMEOUT);
+
+        connectAndSendEndingThenAfterEnd();
+
+        assertThat(endedContainerTaskThreadName).succeedsWithin(ASSERTION_TIMEOUT).asString().startsWith(UIHttpServerImpl.THREAD_POOL_NAME);
+    }
+
+    @Test
+    void aStoppedContainerRejectsATask() {
+        startServer(UIHttpServerImpl.IDLE_TIMEOUT);
+        assertThat(send(HttpRequest.newBuilder(uriOf(ENDING_SERVLET_PATH)).GET()).statusCode()).isEqualTo(NO_CONTENT_204);
+        ExchangeContainer container = checkNotNull(endingContainer.getNow(null), "the ending exchange was answered first");
+        assert server != null : "the server is started";
+        server.stop();
+        server = null;
+
+        assertThatThrownBy(() -> container.execute(() -> {})).isInstanceOf(RejectedExecutionException.class);
     }
 
     /// A frame smaller than the container's write buffer is flushed to the client as soon as it is written.
@@ -324,6 +349,7 @@ class ContainerIoJettyTest {
                 protected void doGet(HttpServletRequest request, HttpServletResponse response) {
                     var exchange = AsyncExchange.start(alertService, request, response, Deadline.none());
                     endingExchange.complete(exchange);
+                    endingContainer.complete(ExchangeContainer.of(request, request.getAsyncContext()));
                     exchange.answer(Answer.of(NO_CONTENT_204), _ -> {});
                 }
             }), ENDING_SERVLET_PATH);
@@ -333,6 +359,12 @@ class ContainerIoJettyTest {
                     AsyncExchange endedExchange = checkNotNull(endingExchange.getNow(null), "the ending exchange was answered first");
                     endedExchange.answer(Answer.of(OK_200, new TextBody("late")), _ -> {});
                     boolean accepted = endedExchange.runOnContainerThread(() -> {});
+                    try {
+                        checkNotNull(endingContainer.getNow(null), "the ending exchange was answered first")
+                                .execute(() -> endedContainerTaskThreadName.complete(Thread.currentThread().getName()));
+                    } catch (RuntimeException e) {
+                        endedContainerTaskThreadName.completeExceptionally(e);
+                    }
                     response.setContentType(CONTENT_TYPE_TEXT);
                     response.getWriter().println((accepted ? "accepted" : "rejected") + ", alerts: " + alertService.activeAlertsById().size());
                 }
@@ -367,6 +399,13 @@ class ContainerIoJettyTest {
 
     private Socket connectAndRequestStream() {
         return connectAndSend(requestTo(STREAM_SERVLET_PATH));
+    }
+
+    private Socket connectAndSendEndingThenAfterEnd() {
+        // Pipelined on one connection, so Jetty takes the second request only once it has completed the first and recycled its exchange.
+        Socket socket = connectAndSend(requestTo(ENDING_SERVLET_PATH) + requestTo(AFTER_END_SERVLET_PATH));
+        clientSocket = socket;
+        return socket;
     }
 
     private Socket connectAndSend(String requests) {

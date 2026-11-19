@@ -176,6 +176,22 @@ class DisplayableDownloadHandlerTest {
         assertThat(asyncContext.pendingDeadlines()).isEmpty();
     }
 
+    /// The download starts while the request is dispatched, so its failure is alerted before any container thread takes a task for the exchange.
+    @Test
+    void aDownloadThatThrowsIsAlertedWithoutAContainerTask() {
+        var displayable = registerDisplayable("d1");
+        when(displayable.handleDownload("dl-1")).thenThrow(new IllegalStateException("broken"));
+        clock.tick();
+        whenRequestNames("d1", "dl-1");
+        asyncContext.holdTasks();
+
+        handler.handle(request, response);
+
+        assertThat(alertService.activeAlertsById().values())
+                .singleElement()
+                .satisfies(alert -> assertThat(alert.title()).isEqualTo(DisplayableDownloadHandler.DOWNLOAD_FAILED_ALERT_TITLE));
+    }
+
     /// A download that never completes is answered with a server fault once its deadline passes, and alerted.
     @Test
     void aDownloadThatNeverCompletesIsAnsweredByTheDeadline() throws IOException {

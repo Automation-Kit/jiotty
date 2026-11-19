@@ -2,6 +2,7 @@ package net.yudichev.jiotty.user.ui.io;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import net.yudichev.jiotty.adminalerts.AdminAlert;
 import net.yudichev.jiotty.adminalerts.TestAdminAlertService;
 import net.yudichev.jiotty.common.lang.Json;
 import net.yudichev.jiotty.user.ui.io.testing.FakeAsyncContext;
@@ -11,6 +12,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -123,8 +126,7 @@ class AsyncExchangeTest {
         assertThat(asyncContext.isCompleted()).isTrue();
     }
 
-    /// The exchange can end while the answer waits for a container thread, as when the client goes away; the answer is then discarded, and the failure the
-    /// ended exchange explains raises no alert.
+    /// An answer for an exchange that has ended, as when the client goes away, is not written and raises no alert.
     @Test
     void anExchangeThatEndsBeforeItsAnswerStartsIsLeftAlone() {
         asyncContext.abort();
@@ -208,31 +210,62 @@ class AsyncExchangeTest {
         assertThat(ranTasks).containsExactly("task");
     }
 
+    /// A task can wait for a container thread while its exchange ends, as when the client goes away; the task is then not run.
+    @Test
+    void aTaskQueuedBeforeTheExchangeEndsIsNotRun() {
+        var ranTasks = new ArrayList<String>();
+        asyncContext.holdTasks();
+        assertThat(exchange.runOnContainerThread(() -> ranTasks.add("task"))).isTrue();
+
+        asyncContext.abort();
+        asyncContext.runHeldTasks();
+
+        assertThat(ranTasks).isEmpty();
+        assertThat(alertService.activeAlertsById()).isEmpty();
+    }
+
+    @Test
+    void aTaskStartedAfterTheExchangeEndedIsNotRun() {
+        var ranTasks = new ArrayList<String>();
+        asyncContext.abort();
+
+        assertThat(exchange.runOnContainerThread(() -> ranTasks.add("task"))).isTrue();
+
+        assertThat(ranTasks).isEmpty();
+        assertThat(alertService.activeAlertsById()).isEmpty();
+    }
+
+    /// A completed exchange is open until the container has finished with it, so a task started meanwhile runs.
+    @Test
+    void aTaskForACompletedExchangeTheContainerHasYetToFinishWithRuns() {
+        var ranTasks = new ArrayList<String>();
+        asyncContext.holdContainerCompletion();
+        asyncContext.complete();
+
+        assertThat(exchange.runOnContainerThread(() -> ranTasks.add("task"))).isTrue();
+
+        assertThat(ranTasks).containsExactly("task");
+        assertThat(alertService.activeAlertsById()).isEmpty();
+    }
+
     /// A container whose thread pool has stopped rejects every task, as when the server shuts down: routine, so it raises no alert.
     @Test
     void aTaskTheStoppedContainerRejectsIsQuiet() {
-        asyncContext.failStartsWith(new RejectedExecutionException("stopped"));
+        asyncContext.failExecutionsWith(new RejectedExecutionException("stopped"));
 
         assertThat(exchange.runOnContainerThread(() -> {})).isFalse();
 
         assertThat(alertService.activeAlertsById()).isEmpty();
     }
 
-    /// A container that has finished with the exchange explains a failed start, so it raises no alert.
-    @Test
-    void aTaskThatFailsToStartOnceTheContainerHasFinishedIsQuiet() {
-        asyncContext.complete();
-        asyncContext.failStartsWith(new NullPointerException("recycled"));
-
-        assertThat(exchange.runOnContainerThread(() -> {})).isFalse();
-
-        assertThat(alertService.activeAlertsById()).isEmpty();
-    }
-
-    /// A start that fails while the container has yet to finish with the exchange is explained by nothing in its state, so it is alerted.
-    @Test
-    void alertsOnATaskThatFailsToStartWhileTheExchangeIsOpen() {
-        asyncContext.failStartsWith(new NullPointerException("defect"));
+    /// The container accepts a task whatever the state of the exchange, so a start that fails for another reason is a defect, and is alerted.
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void alertsOnATaskThatFailsToStart(boolean exchangeEnded) {
+        if (exchangeEnded) {
+            asyncContext.complete();
+        }
+        asyncContext.failExecutionsWith(new IllegalStateException("defective container"));
 
         assertThat(exchange.runOnContainerThread(() -> {})).isFalse();
 
@@ -265,6 +298,16 @@ class AsyncExchangeTest {
 
         assertThat(asyncContext.dispatches()).isEqualTo(1);
         assertThat(AsyncExchange.failDispatch(request, new IllegalStateException("next dispatch"), DEADLINE_ANSWER)).isFalse();
+    }
+
+    /// A container whose thread pool has stopped rejects a dispatch, as when the server shuts down: routine, so it raises no alert.
+    @Test
+    void aDispatchTheStoppedContainerRejectsIsQuiet() {
+        asyncContext.failDispatchesWith(new RejectedExecutionException("stopped"));
+
+        assertThatCode(() -> claim().dispatch()).doesNotThrowAnyException();
+
+        assertThat(alertService.activeAlertsById()).isEmpty();
     }
 
     @Test
@@ -366,6 +409,38 @@ class AsyncExchangeTest {
         verify(response, never()).setStatus(CREATED_201);
     }
 
+    /// The exchange can end while the expiry waits for a container thread, as when the client goes away. The stall is reported all the same, and the
+    /// exchange is neither answered nor completed.
+    @Test
+    void aDeadlineExpiringAsTheExchangeEndsIsReportedAndNotAnswered() {
+        startExchange(createDeadline());
+        asyncContext.holdTasks();
+        asyncContext.expireDeadlines();
+
+        asyncContext.abort();
+        asyncContext.runHeldTasks();
+
+        assertThat(expiries).containsExactly(Deadline.Stall.HANDLING);
+        verify(response, never()).setStatus(SERVICE_UNAVAILABLE_503);
+        assertThat(asyncContext.completions()).isZero();
+        assertThat(alertService.activeAlertsById()).isEmpty();
+    }
+
+    /// A report of an expiry is the application's own code, so its failure is a defect whatever the state of the exchange, and is alerted.
+    @Test
+    void alertsOnAnExpiryReportThatThrowsAlthoughTheExchangeHasEnded() {
+        startExchange(Deadline.after(DEADLINE, DEADLINE_ANSWER, encodingFailures::add, _ -> {
+            throw new IllegalStateException("defective report");
+        }));
+        asyncContext.holdTasks();
+        asyncContext.expireDeadlines();
+
+        asyncContext.abort();
+        asyncContext.runHeldTasks();
+
+        assertUnexpectedFailureAlerted();
+    }
+
     /// A container whose timer has stopped, as while the server stops, rejects the deadline; the exchange goes on without one.
     @Test
     void goesOnWithoutADeadlineTheStoppedTimerRejects() {
@@ -390,6 +465,19 @@ class AsyncExchangeTest {
         assertThat(alertService.activeAlertsById().values())
                 .singleElement()
                 .satisfies(alert -> assertThat(alert.title()).isEqualTo(AsyncExchange.DISPATCH_FAILED_ALERT_TITLE));
+    }
+
+    /// The answer to a failed dispatch is the servlet's own, so one that cannot be encoded is a defect, and is alerted beside the dispatch failure.
+    @Test
+    void alertsOnADispatchFailureAnswerThatCannotBeEncoded() {
+        Answer answer = Answer.of(CREATED_201, UnserialisablePayload.createJsonBody());
+
+        AsyncExchange.failDispatch(request, new IllegalStateException("defective handler"), answer);
+
+        verify(response).setStatus(INTERNAL_SERVER_ERROR_500);
+        assertThat(alertService.activeAlertsById().values())
+                .extracting(AdminAlert::title)
+                .containsExactlyInAnyOrder(AsyncExchange.DISPATCH_FAILED_ALERT_TITLE, AsyncExchange.UNEXPECTED_FAILURE_ALERT_TITLE);
     }
 
     @Test
@@ -440,6 +528,27 @@ class AsyncExchangeTest {
         claim().abort(new IOException("the archive failed"));
 
         assertUnexpectedFailureAlerted();
+    }
+
+    /// A container whose thread pool has stopped rejects an abort, as when the server shuts down: routine, so it raises no alert.
+    @Test
+    void anAbortTheStoppedContainerRejectsIsQuiet() {
+        asyncContext.failAbortsWith(new RejectedExecutionException("stopped"));
+
+        claim().abort(new IOException("the archive failed"));
+
+        assertThat(alertService.activeAlertsById()).isEmpty();
+    }
+
+    /// A container whose thread pool has stopped rejects the start of an answer's output, as when the server shuts down: routine, so it raises no alert.
+    @Test
+    void anAnswerTheStoppedContainerRejectsIsQuiet() {
+        asUnchecked(() -> lenient().when(response.getOutputStream()).thenThrow(new RejectedExecutionException("stopped")));
+
+        exchange.answer(Answer.of(NO_CONTENT_204), encodingFailures::add);
+
+        assertThat(alertService.activeAlertsById()).isEmpty();
+        assertThat(asyncContext.isCompleted()).isTrue();
     }
 
     /// Once the exchange has ended, the container may be serving the connection's next request, so an abort is ignored.

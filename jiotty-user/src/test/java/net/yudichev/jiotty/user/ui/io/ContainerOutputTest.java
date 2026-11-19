@@ -282,16 +282,17 @@ class ContainerOutputTest {
         assertThat(stream.leakedBuffers()).isEmpty();
     }
 
-    /// A drain the container accepted and then dropped, because the exchange ended first, does not hold the output open: the end ends it.
+    /// A drain can wait for a container thread while its exchange ends, as when the client goes away. The drain then writes nothing, and the end of the
+    /// exchange ends the output.
     @Test
-    void aDrainTheContainerDropsLeavesTheOutputToTheExchangesEnd() {
+    void aDrainQueuedForAnExchangeThatEndsFirstLeavesTheOutputToItsEnd() {
         output.start();
-        asyncContext.holdStartedTasks();
+        asyncContext.holdTasks();
         source.offer("never written");
         output.sourceReady();
 
         asyncContext.abort();
-        asyncContext.dropHeldTasks();
+        asyncContext.runHeldTasks();
 
         assertThat(stream.output()).isEmpty();
         assertThat(endReasons).singleElement().isInstanceOf(EndReason.Failed.class);
@@ -300,7 +301,7 @@ class ContainerOutputTest {
     @Test
     void aQueuedDrainRunningAfterTheOutputClosedWritesNothing() {
         output.start();
-        asyncContext.holdStartedTasks();
+        asyncContext.holdTasks();
         source.offer("never written");
         output.sourceReady();
         output.close();
@@ -316,7 +317,7 @@ class ContainerOutputTest {
     @Test
     void aCallBackArrivingBeforeAQueuedDrainDrainsInItsPlace() {
         HookedOutput hookedOutput = startHookedOutput();
-        asyncContext.holdStartedTasks();
+        asyncContext.holdTasks();
         source.offer("written once");
         hookedOutput.output().sourceReady();
 
@@ -331,7 +332,7 @@ class ContainerOutputTest {
     @Test
     void aDrainTheContainerRejectsEndsTheOutput() {
         output.start();
-        asyncContext.failStartsWith(new RejectedExecutionException("stopped"));
+        asyncContext.failExecutionsWith(new RejectedExecutionException("stopped"));
         source.offer("never written");
 
         output.sourceReady();
@@ -449,18 +450,6 @@ class ContainerOutputTest {
         verify(response, never()).reset();
         verify(response, never()).setStatus(INTERNAL_SERVER_ERROR_500);
         assertThat(endReasons).singleElement().isInstanceOf(EndReason.EncodingFailed.class);
-    }
-
-    /// The container runs nothing more for an exchange it has completed, so a body offered then ends the output at once.
-    @Test
-    void aBodyOfferedOnceTheContainerRunsNothingMoreEndsTheOutput() {
-        asyncContext.complete();
-        source.offer("too late");
-
-        output.sourceReady();
-
-        assertThat(stream.output()).isEmpty();
-        assertThat(endReasons).singleElement().isInstanceOf(EndReason.Failed.class);
     }
 
     /// The held write keeps its chunk until the container has finished with the exchange, which is when the chunk returns to the pool; the leak check in

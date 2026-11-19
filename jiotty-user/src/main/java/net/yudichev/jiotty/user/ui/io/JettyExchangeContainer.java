@@ -17,7 +17,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 final class JettyExchangeContainer implements ExchangeContainer {
     private final ServletContextRequest request;
 
-    JettyExchangeContainer(ServletContextRequest request) {
+    public JettyExchangeContainer(ServletContextRequest request) {
         this.request = checkNotNull(request, "request");
     }
 
@@ -32,6 +32,11 @@ final class JettyExchangeContainer implements ExchangeContainer {
         // The server's own timer: a single thread that also drives every connection's idle timeout, so `task` must hand its work on.
         Scheduler.Task scheduled = request.getComponents().getScheduler().schedule(task, delay.toNanos(), NANOSECONDS);
         return scheduled::cancel;
+    }
+
+    @Override
+    public void execute(Runnable task) {
+        request.getContext().execute(checkNotNull(task, "task"));
     }
 
     @Override

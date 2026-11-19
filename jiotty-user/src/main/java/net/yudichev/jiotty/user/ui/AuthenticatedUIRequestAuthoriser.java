@@ -97,11 +97,11 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
     private final Timer rejectedAuthTimer;
 
     @Inject
-    AuthenticatedUIRequestAuthoriser(@Dependency UserTokenAuthoriser userTokenAuthoriser,
-                                     PreAuthAdmissionControl admissionControl,
-                                     PerUidRateLimiter perUidRateLimiter,
-                                     @Dependency AdminAlertService alertService,
-                                     MeterRegistry meterRegistry) {
+    public AuthenticatedUIRequestAuthoriser(@Dependency UserTokenAuthoriser userTokenAuthoriser,
+                                            PreAuthAdmissionControl admissionControl,
+                                            PerUidRateLimiter perUidRateLimiter,
+                                            @Dependency AdminAlertService alertService,
+                                            MeterRegistry meterRegistry) {
         this.userTokenAuthoriser = checkNotNull(userTokenAuthoriser, "userTokenAuthoriser");
         this.admissionControl = checkNotNull(admissionControl, "admissionControl");
         this.perUidRateLimiter = checkNotNull(perUidRateLimiter, "perUidRateLimiter");
@@ -146,6 +146,8 @@ final class AuthenticatedUIRequestAuthoriser implements UIRequestAuthoriser {
         var exchange = AsyncExchange.start(alertService, request, response, createDeadline(authSample));
         exchange.whenEnded(permit::release);
         try {
+            // [UserTokenAuthoriser#deliverTokenStateTo] invokes its handler on a thread that all tokens may share, so the request's work moves to a container
+            // thread.
             userTokenAuthoriser.deliverTokenStateTo(token, state -> exchange.runOnContainerThread(() -> {
                 try {
                     actOnTokenState(token, state, exchange, authSample);

@@ -17,6 +17,9 @@ public interface UserTokenAuthoriser {
     /// request before dispatch.
     String CUSTOM_DATA_REQUEST_ATTRIBUTE = "net.yudichev.jiotty.user.ui.tokenCustomData";
 
+    /// Invokes `handler` once with the state of `token`: at once if the state is known, and otherwise when it becomes known.
+    ///
+    /// @param handler invoked on an unspecified thread, which may be the same for all tokens, so it must pass lengthy work to another thread
     void deliverTokenStateTo(String token, Consumer<? super TokenState> handler);
 
     Closeable subscribeToTokenState(String token, Consumer<? super TokenState> handler);
