@@ -47,7 +47,8 @@ public interface VarStore {
     /// @throws IllegalStateException if the store was not configured with encryption, or the stored value is not an encryption envelope
     <T> Optional<T> readValueEncrypted(TypeToken<T> type, String key);
 
-    /// Returns a user-scoped view of the store.
+    /// Returns a user-scoped view of the store. Every view of one user sees the writes made through any other. In a multi-user store no view shares a key
+    /// with the unscoped store; a single-user store takes the empty user id and returns itself.
     ///
     /// The returned store may not be re-scoped again via this method.
     VarStore forUser(String userId);

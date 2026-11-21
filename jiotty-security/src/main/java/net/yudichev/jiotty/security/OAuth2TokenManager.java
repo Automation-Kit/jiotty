@@ -43,6 +43,7 @@ public interface OAuth2TokenManager {
     }
 
     /// Supply the new auth code received from the target system after the user logged in, together with the PKCE code verifier that was used to obtain it.
-    /// Suitable for public clients that authenticate via PKCE rather than a client secret. This initiates exchanging this code for an access token.
+    /// A present `codeVerifier` is sent as `code_verifier` in the token request, beside the client secret when one is configured. This initiates exchanging
+    /// this code for an access token.
     void onNewAuthCode(String authCode, String redirectUri, Optional<String> codeVerifier);
 }

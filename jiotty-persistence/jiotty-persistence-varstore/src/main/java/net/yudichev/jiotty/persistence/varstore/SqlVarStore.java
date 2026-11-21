@@ -16,7 +16,9 @@ import org.apache.logging.log4j.Logger;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -47,6 +49,10 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
     private final String deleteAllSql;
     private final String selectAllSql;
     private final Optional<EnvelopeEncryption> encryption;
+
+    /// The one view of each user that [#forUser] returns while the store is started. A view reads from its own copy of the user's rows, so a second view of
+    /// the same user would keep returning a value that was cleared through the first.
+    private final Map<String, UserSqlVarStore> userStoresByUserId = new HashMap<>();
 
     private SchedulingExecutor executor;
     private CloseableDataSource dataSource;
@@ -84,6 +90,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
 
     @Override
     protected void doStop() {
+        userStoresByUserId.clear();
         Closeable.closeSafelyIfNotNull(logger, dataSource, executor);
     }
 
@@ -153,7 +160,7 @@ public final class SqlVarStore extends BaseLifecycleComponent implements VarStor
                 checkArgument(userId.isEmpty(), "In single-user mode, userId must be empty but was: %s", userId);
                 return this;
             }
-            return new UserSqlVarStore(userId);
+            return userStoresByUserId.computeIfAbsent(userId, UserSqlVarStore::new);
         });
     }
 

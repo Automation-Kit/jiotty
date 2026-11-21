@@ -101,6 +101,13 @@ class TeslaFleetImplTest {
     }
 
     @Test
+    void authCode_isExchangedWithItsCodeVerifier() {
+        teslaFleet.onNewAuthCode("auth-code-1", "joulary://joulary/oauth_redirect/tesla", Optional.of("pkce-verifier-1"));
+
+        verify(tokenManager).onNewAuthCode("auth-code-1", "joulary://joulary/oauth_redirect/tesla", Optional.of("pkce-verifier-1"));
+    }
+
+    @Test
     void unauthorisedOnGet_invalidatesTheTokenTheRequestCarried() {
         CompletableFuture<?> result = teslaFleet.listVehicles();
         respondWith(UNAUTHORIZED_401, TOKEN_EXPIRED_BODY);

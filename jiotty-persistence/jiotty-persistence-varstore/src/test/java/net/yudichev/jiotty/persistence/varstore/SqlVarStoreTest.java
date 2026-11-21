@@ -125,6 +125,40 @@ class SqlVarStoreTest {
         assertThat(bob.readValue(String.class, "colour")).contains("blue");
     }
 
+    /// A component that holds a user's view for the user's whole session must not keep reading a credential that another component has deleted.
+    @Test
+    void aValueClearedThroughOneViewOfAUserIsGoneFromEveryOtherView() {
+        startVarStore();
+        VarStore heldView = varStore.forUser("alice");
+        heldView.saveValue("token", "t1");
+        flushExecutor();
+
+        varStore.forUser("alice").clearValue("token");
+        flushExecutor();
+
+        assertThat(heldView.readValue(String.class, "token")).isEmpty();
+    }
+
+    @Test
+    void aValueSavedThroughOneViewOfAUserIsReadThroughEveryOtherView() {
+        startVarStore();
+        VarStore heldView = varStore.forUser("alice");
+
+        varStore.forUser("alice").saveValue("token", "t2");
+        flushExecutor();
+
+        assertThat(heldView.readValue(String.class, "token")).contains("t2");
+    }
+
+    @Test
+    void anUnscopedKeyShapedLikeAUsersKeyIsNotThatUsersKey() {
+        startVarStore();
+        varStore.saveValue("alice.colour", "red");
+        flushExecutor();
+
+        assertThat(varStore.forUser("alice").readValue(String.class, "colour")).isEmpty();
+    }
+
     @Test
     void clearAllOnScopedStoreRemovesAllUserKeysButLeavesOtherUsers() {
         startVarStore();

@@ -117,8 +117,8 @@ public class TeslaFleetImpl extends BaseLifecycleComponent implements TeslaFleet
     }
 
     @Override
-    public void onNewAuthCode(String authCode, String redirectUri) {
-        whenStartedAndNotLifecycling(() -> tokenManager.onNewAuthCode(authCode, redirectUri));
+    public void onNewAuthCode(String authCode, String redirectUri, Optional<String> codeVerifier) {
+        whenStartedAndNotLifecycling(() -> tokenManager.onNewAuthCode(authCode, redirectUri, codeVerifier));
     }
 
     @Override

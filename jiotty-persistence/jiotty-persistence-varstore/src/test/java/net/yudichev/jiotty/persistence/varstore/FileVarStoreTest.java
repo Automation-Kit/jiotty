@@ -106,6 +106,41 @@ class FileVarStoreTest {
         assertThat(alice.keysStartingWith("token_")).containsExactlyInAnyOrder("token_a", "token_b");
     }
 
+    /// A user's key is stored as `<userId>.<key>`, so an unscoped key holding a dot would read and write that user's value.
+    @Test
+    void anUnscopedKeyWithADotIsRefusedByAMultiUserStore(@TempDir Path tempDir) {
+        var varStore = new FileVarStore(tempDir.resolve("data.json"), false, Optional.of(encryption));
+        varStore.forUser("alice").saveValue("colour", "red");
+
+        assertThatThrownBy(() -> varStore.saveValue("alice.colour", "blue")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> varStore.saveValueEncrypted("alice.colour", "blue")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> varStore.readValue(String.class, "alice.colour")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> varStore.readValueEncrypted(String.class, "alice.colour")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> varStore.clearValue("alice.colour")).isInstanceOf(IllegalArgumentException.class);
+        assertThat(varStore.forUser("alice").readValue(String.class, "colour")).contains("red");
+        verifyNoInteractions(encryption);
+    }
+
+    @Test
+    void anUnscopedKeyAndAUsersKeyOfTheSameNameHoldSeparateValues(@TempDir Path tempDir) {
+        var varStore = new FileVarStore(tempDir.resolve("data.json"), false, Optional.empty());
+
+        varStore.saveValue("colour", "red");
+        varStore.forUser("alice").saveValue("colour", "blue");
+
+        assertThat(varStore.readValue(String.class, "colour")).contains("red");
+        assertThat(varStore.forUser("alice").readValue(String.class, "colour")).contains("blue");
+    }
+
+    @Test
+    void aSingleUserStoreAcceptsAKeyWithADot(@TempDir Path tempDir) {
+        var varStore = new FileVarStore(tempDir.resolve("data.json"), true, Optional.empty());
+
+        varStore.saveValue("oauth.token", "t");
+
+        assertThat(varStore.readValue(String.class, "oauth.token")).contains("t");
+    }
+
     @Test
     void keysStartingWithOnUnscopedMultiUserStoreThrows(@TempDir Path tempDir) {
         VarStore varStore = new FileVarStore(tempDir.resolve("data.json"), false, Optional.empty());
