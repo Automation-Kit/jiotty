@@ -1,11 +1,18 @@
 package net.yudichev.jiotty.user.persistence;
 
 import com.google.common.collect.ImmutableSetMultimap;
-import net.yudichev.jiotty.common.observer.SerialisedListeners;
+import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskExecutor;
+import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.testutil.LogCapture;
 import net.yudichev.jiotty.user.persistence.RecordingUserStateListener.Changed;
 import net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolution;
+import net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolutionListener;
+import net.yudichev.jiotty.user.persistence.UserPersistence.UserRecordListener;
 import net.yudichev.jiotty.user.persistence.UserPersistence.UserStateListener;
 import net.yudichev.jiotty.user.persistence.UserStatePublisher.IdentitySubscription;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -15,10 +22,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.RejectedExecutionException;
 
 import static java.time.ZoneOffset.UTC;
+import static java.util.concurrent.CompletableFuture.completedFuture;
+import static java.util.concurrent.CompletableFuture.failedFuture;
+import static net.yudichev.jiotty.common.async.EvenMoreExecutors.directExecutor;
 import static net.yudichev.jiotty.user.persistence.BaseUserChangeContractTest.IDENTITY;
 import static net.yudichev.jiotty.user.persistence.BaseUserChangeContractTest.OTHER_IDENTITY;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,15 +41,17 @@ class UserStatePublisherTest {
     private static final LocalDate DAY = LocalDate.ofInstant(CREATED_AT, UTC);
     private static final UserRecord RECORD = createRecordWithDays(DAY);
 
-    private final UserStatePublisher publisher = new UserStatePublisher(Runnable::run);
+    private final ProgrammableClock clock = new ProgrammableClock();
+    private final SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("persistence");
+    private final UserStatePublisher publisher = new UserStatePublisher();
 
     @Test
     void aSubscriptionClosedBeforeItsImageArrivesReceivesNothing() {
         var stateListener = new RecordingUserStateListener();
-        SerialisedListeners<UserStateListener>.Subscription subscription = publisher.newSubscription(stateListener);
+        Closeable subscription = publisher.subscribe(executor, stateListener, () -> List.of(ACTIVE_USER));
 
         subscription.close();
-        publisher.activate(subscription, List.of(ACTIVE_USER));
+        clock.tick();
         publisher.publishChanged(ACTIVE_USER, List.of(), List.of());
 
         assertThat(stateListener.imageArrived()).isFalse();
@@ -48,10 +60,10 @@ class UserStatePublisherTest {
     @Test
     void anIdentitySubscriptionClosedBeforeItsFirstResolutionArrivesReceivesNothing() {
         var identityListener = new RecordingIdentityListener();
-        IdentitySubscription subscription = publisher.newSubscription(IDENTITY, identityListener);
+        IdentitySubscription subscription = publisher.subscribe(executor, IDENTITY, identityListener, () -> new IdentityResolution.Active(PROFILE));
 
         subscription.close();
-        publisher.activate(subscription, new IdentityResolution.Active(PROFILE));
+        clock.tick();
         publisher.publishChanged(SOFT_DELETED_USER, List.of(IDENTITY), List.of());
 
         assertThat(identityListener.resolutions()).isEmpty();
@@ -67,14 +79,26 @@ class UserStatePublisherTest {
             }
         };
 
-        publisher.activate(publisher.newSubscription(stateListener), List.of());
+        subscribe(stateListener, List.of());
         publisher.publishChanged(ACTIVE_USER, List.of(), List.of());
 
         assertThat(stateListener.failures).singleElement().extracting(Throwable::getMessage).isEqualTo("image boom");
         assertThat(stateListener.receivedChanges).isEmpty();
     }
 
-    /// A listener that throws on a change has missed it, so it is told its subscription has ended and receives no change after it.
+    @Test
+    void aStateSubscriptionWhoseImageCannotBeReadReceivesTheFailureAndNothingAfterIt() {
+        var stateListener = new FailureRecordingStateListener();
+
+        publisher.subscribe(directExecutor(), stateListener, () -> {throw new RuntimeException("read boom");});
+        publisher.publishChanged(ACTIVE_USER, List.of(), List.of());
+
+        assertThat(stateListener.failures).singleElement().extracting(Throwable::getMessage).isEqualTo("read boom");
+        assertThat(stateListener.receivedChanges).isEmpty();
+    }
+
+    /// A listener that throws on a change may have missed the change, so the publisher invokes the listener's [UserStateListener#onSubscriptionFailed] and
+    /// delivers no later change to the listener.
     @Test
     void aListenerThatFailsOnAChangeIsToldAndReceivesNothingAfterIt() {
         var stateListener = new FailureRecordingStateListener() {
@@ -84,7 +108,7 @@ class UserStatePublisherTest {
                 throw new RuntimeException("change boom");
             }
         };
-        publisher.activate(publisher.newSubscription(stateListener), List.of());
+        subscribe(stateListener, List.of());
 
         publisher.publishChanged(ACTIVE_USER, List.of(), List.of());
         publisher.publishChanged(SOFT_DELETED_USER, List.of(), List.of());
@@ -109,8 +133,8 @@ class UserStatePublisherTest {
             }
         };
         var healthyListener = new RecordingUserStateListener();
-        publisher.activate(publisher.newSubscription(failingListener), List.of());
-        publisher.activate(publisher.newSubscription(healthyListener), List.of());
+        subscribe(failingListener, List.of());
+        subscribe(healthyListener, List.of());
 
         publisher.publishChanged(ACTIVE_USER, List.of(), List.of());
 
@@ -127,11 +151,29 @@ class UserStatePublisherTest {
             }
         };
 
-        publisher.activate(publisher.newSubscription(IDENTITY, identityListener), IdentityResolution.Absent.INSTANCE);
+        subscribe(IDENTITY, identityListener, IdentityResolution.Absent.INSTANCE);
         publisher.publishChanged(ACTIVE_USER, List.of(IDENTITY), List.of());
 
         assertThat(identityListener.failures()).singleElement().extracting(Throwable::getMessage).isEqualTo("resolution boom");
         assertThat(identityListener.resolutions()).containsExactly(IdentityResolution.Absent.INSTANCE);
+    }
+
+    /// The failure of the resolution read names the identity, so the publisher passes it to the listener and logs nothing.
+    @Test
+    void anIdentitySubscriptionWhoseResolutionCannotBeReadReceivesTheFailureAndNothingIsLogged() {
+        var identityListener = new RecordingIdentityListener();
+        var readFailure = new RuntimeException("Failed to resolve user for identity " + IDENTITY);
+
+        try (LogCapture log = LogCapture.capture(UserStatePublisher.class, Level.DEBUG)) {
+            publisher.subscribe(directExecutor(), IDENTITY, identityListener, () -> {throw readFailure;});
+
+            assertThat(log.lines()).isEmpty();
+        }
+        publisher.publishChanged(ACTIVE_USER, List.of(IDENTITY), List.of());
+
+        assertThat(identityListener.failures()).containsExactly(readFailure);
+        assertThat(identityListener.resolutions()).isEmpty();
+        assertThat(publisher.subscribedIdentities(PROFILE.id(), List.of(IDENTITY))).isEmpty();
     }
 
     @Test
@@ -145,7 +187,7 @@ class UserStatePublisherTest {
                 }
             }
         };
-        publisher.activate(publisher.newSubscription(IDENTITY, identityListener), new IdentityResolution.Active(PROFILE));
+        subscribe(IDENTITY, identityListener, new IdentityResolution.Active(PROFILE));
 
         publisher.publishChanged(SOFT_DELETED_USER, List.of(), List.of());
         publisher.publishChanged(ACTIVE_USER, List.of(), List.of());
@@ -163,7 +205,7 @@ class UserStatePublisherTest {
                 throw new RuntimeException("removal boom");
             }
         };
-        publisher.activate(publisher.newSubscription(stateListener), List.of(ACTIVE_USER));
+        subscribe(stateListener, List.of(ACTIVE_USER));
 
         assertThat(publisher.publishRemoved(PROFILE.id())).failsWithin(Duration.ZERO);
         publisher.publishChanged(ACTIVE_USER, List.of(), List.of());
@@ -173,52 +215,34 @@ class UserStatePublisherTest {
     }
 
     @Test
-    void aRemovalAListenersExecutorRejectsFailsTheAcknowledgementAndKeepsTheSubscription() {
-        var stateListener = new FailureRecordingStateListener() {
-            @Override
-            public CompletableFuture<?> onRemoved(String userId) {
-                throw new RejectedExecutionException("queue full");
-            }
-        };
-        publisher.activate(publisher.newSubscription(stateListener), List.of(ACTIVE_USER));
-
-        assertThat(publisher.publishRemoved(PROFILE.id())).failsWithin(Duration.ZERO);
-        publisher.publishChanged(ACTIVE_USER, List.of(), List.of());
-
-        assertThat(stateListener.failures).isEmpty();
-        assertThat(stateListener.receivedChanges).containsExactly(ACTIVE_USER);
-    }
-
-    @Test
     void aRemovalWithNoSubscriberIsAcknowledgedAtOnce() {
         assertThat(publisher.publishRemoved(PROFILE.id())).succeedsWithin(Duration.ZERO);
     }
 
-    /// Where the removal executor drops the removal a closing subscription hands it, as one that has shut down does, the next delivery drops the subscription
-    /// itself.
+    /// The next delivery skips and drops a closed subscription itself when the executor drops the removal that the closing queued, as an executor that has
+    /// shut down does.
     @Test
     void aClosedSubscriptionIsSkippedAndForgottenEvenWhenItsRemovalIsDropped() {
-        var droppingPublisher = new UserStatePublisher(_ -> {});
+        var droppingExecutor = new TryExecuteDroppingExecutor();
         var stateListener = new RecordingUserStateListener();
-        SerialisedListeners<UserStateListener>.Subscription stateSubscription = droppingPublisher.newSubscription(stateListener);
-        droppingPublisher.activate(stateSubscription, List.of());
+        Closeable stateSubscription = publisher.subscribe(droppingExecutor, stateListener, List::of);
         var identityListener = new RecordingIdentityListener();
-        IdentitySubscription identitySubscription = droppingPublisher.newSubscription(IDENTITY, identityListener);
-        droppingPublisher.activate(identitySubscription, new IdentityResolution.Active(PROFILE));
+        IdentitySubscription identitySubscription =
+                publisher.subscribe(droppingExecutor, IDENTITY, identityListener, () -> new IdentityResolution.Active(PROFILE));
 
         stateSubscription.close();
         identitySubscription.close();
-        droppingPublisher.publishChanged(SOFT_DELETED_USER, List.of(), List.of());
+        publisher.publishChanged(SOFT_DELETED_USER, List.of(), List.of());
 
         assertThat(stateListener.changes()).isEmpty();
         assertThat(identityListener.resolutions()).containsExactly(new IdentityResolution.Active(PROFILE));
-        assertThat(droppingPublisher.subscribedIdentities(PROFILE.id(), List.of(IDENTITY))).isEmpty();
+        assertThat(publisher.subscribedIdentities(PROFILE.id(), List.of(IDENTITY))).isEmpty();
     }
 
     @Test
     void listsTheSubscribedIdentitiesAWriteToAUserCanChange() {
-        publisher.activate(publisher.newSubscription(IDENTITY, new RecordingIdentityListener()), new IdentityResolution.Active(PROFILE));
-        publisher.activate(publisher.newSubscription(OTHER_IDENTITY, new RecordingIdentityListener()), IdentityResolution.Absent.INSTANCE);
+        subscribe(IDENTITY, new RecordingIdentityListener(), new IdentityResolution.Active(PROFILE));
+        subscribe(OTHER_IDENTITY, new RecordingIdentityListener(), IdentityResolution.Absent.INSTANCE);
         var unsubscribedIdentity = new UserIdentity("apple.com", "uid-a");
 
         assertThat(publisher.subscribedIdentities(PROFILE.id(), List.of(OTHER_IDENTITY, unsubscribedIdentity)))
@@ -228,9 +252,9 @@ class UserStatePublisherTest {
     @Test
     void deliversAChangeToEverySubscriberOfTheUser() {
         var stateListener = new RecordingUserStateListener();
-        publisher.activate(publisher.newSubscription(stateListener), List.of());
+        subscribe(stateListener, List.of());
         var identityListener = new RecordingIdentityListener();
-        publisher.activate(publisher.newSubscription(IDENTITY, identityListener), new IdentityResolution.Active(PROFILE));
+        subscribe(IDENTITY, identityListener, new IdentityResolution.Active(PROFILE));
 
         publisher.publishChanged(SOFT_DELETED_USER, List.of(), List.of());
 
@@ -242,7 +266,7 @@ class UserStatePublisherTest {
     @Test
     void aResolutionReadBackIsDeliveredOnlyWhereItDiffers() {
         var identityListener = new RecordingIdentityListener();
-        publisher.activate(publisher.newSubscription(IDENTITY, identityListener), new IdentityResolution.Active(PROFILE));
+        subscribe(IDENTITY, identityListener, new IdentityResolution.Active(PROFILE));
 
         publisher.publishResolution(IDENTITY, new IdentityResolution.Active(PROFILE));
         publisher.publishResolution(IDENTITY, IdentityResolution.Absent.INSTANCE);
@@ -254,7 +278,7 @@ class UserStatePublisherTest {
     @Test
     void deliversRecordChangesPurgesAndRemovalsToARecordSubscriberAfterItsImage() {
         var recordListener = new RecordingUserRecordListener();
-        publisher.activateRecords(publisher.newSubscription(DAY, recordListener), List.of(RECORD));
+        subscribe(DAY, recordListener, List.of(RECORD));
         UserRecord changedRecord = createRecordWithDays(DAY, DAY.plusDays(1));
 
         publisher.publishRecordChanged(changedRecord);
@@ -271,8 +295,8 @@ class UserStatePublisherTest {
     void aChangedRecordReachesEachSubscriberCutAtItsOwnEarliestDay() {
         var earlierListener = new RecordingUserRecordListener();
         var laterListener = new RecordingUserRecordListener();
-        publisher.activateRecords(publisher.newSubscription(DAY.minusDays(1), earlierListener), List.of());
-        publisher.activateRecords(publisher.newSubscription(DAY.plusDays(1), laterListener), List.of());
+        subscribe(DAY.minusDays(1), earlierListener, List.of());
+        subscribe(DAY.plusDays(1), laterListener, List.of());
         UserRecord changedRecord = createRecordWithDays(DAY.minusDays(1), DAY, DAY.plusDays(1));
 
         publisher.publishRecordChanged(changedRecord);
@@ -285,18 +309,18 @@ class UserStatePublisherTest {
     void aRemovalIsAcknowledgedOnlyOnceBothAStateAndARecordSubscriberHaveAppliedIt() {
         var stateRemovalCompletion = new CompletableFuture<Void>();
         var recordRemovalCompletion = new CompletableFuture<Void>();
-        publisher.activate(publisher.newSubscription(new RecordingUserStateListener() {
+        subscribe(new RecordingUserStateListener() {
             @Override
             public CompletableFuture<?> onRemoved(String userId) {
                 return stateRemovalCompletion;
             }
-        }), List.of(ACTIVE_USER));
-        publisher.activateRecords(publisher.newSubscription(DAY, new RecordingUserRecordListener() {
+        }, List.of(ACTIVE_USER));
+        subscribe(DAY, new RecordingUserRecordListener() {
             @Override
             public CompletableFuture<?> onRemoved(String userId) {
                 return recordRemovalCompletion;
             }
-        }), List.of(RECORD));
+        }, List.of(RECORD));
 
         CompletableFuture<Void> acknowledgement = publisher.publishRemoved(PROFILE.id());
 
@@ -315,7 +339,7 @@ class UserStatePublisherTest {
                 throw new RuntimeException("removal boom");
             }
         };
-        publisher.activateRecords(publisher.newSubscription(DAY, recordListener), List.of(RECORD));
+        subscribe(DAY, recordListener, List.of(RECORD));
 
         assertThat(publisher.publishRemoved(PROFILE.id())).failsWithin(Duration.ZERO);
         publisher.publishRecordChanged(RECORD);
@@ -328,8 +352,8 @@ class UserStatePublisherTest {
     void failingTheRecordSubscriptionsTellsEachSubscriberAndDeliversNothingAfterwards() {
         var recordListener = new RecordingUserRecordListener();
         var stateListener = new RecordingUserStateListener();
-        publisher.activateRecords(publisher.newSubscription(DAY, recordListener), List.of(RECORD));
-        publisher.activate(publisher.newSubscription(stateListener), List.of(ACTIVE_USER));
+        subscribe(DAY, recordListener, List.of(RECORD));
+        subscribe(stateListener, List.of(ACTIVE_USER));
         var failure = new RuntimeException("read-back boom");
 
         publisher.failRecordSubscriptions(failure);
@@ -339,6 +363,43 @@ class UserStatePublisherTest {
         assertThat(recordListener.failure()).isCompletedWithValue(failure);
         assertThat(recordListener.changes()).isEmpty();
         assertThat(stateListener.changes()).containsExactly(new Changed(SOFT_DELETED_USER));
+    }
+
+    @Test
+    void aRecordListenerThatThrowsFromOnSubscriptionFailedIsLoggedAtInfoAndTheOthersStillReceiveTheFailure() {
+        var listenerFailure = new RuntimeException("failure boom");
+        subscribe(DAY, new RecordingUserRecordListener() {
+            @Override
+            public void onSubscriptionFailed(Throwable failure) {
+                throw listenerFailure;
+            }
+        }, List.of(RECORD));
+        var healthyListener = new RecordingUserRecordListener();
+        subscribe(DAY, healthyListener, List.of(RECORD));
+        var failure = new RuntimeException("read-back boom");
+
+        try (LogCapture log = LogCapture.capture(UserStatePublisher.class, Level.INFO)) {
+            publisher.failRecordSubscriptions(failure);
+
+            assertThat(log.lines()).singleElement()
+                                   .satisfies(line -> {
+                                       assertThat(line.level()).isEqualTo(Level.INFO);
+                                       assertThat(line.thrown()).containsExactly(listenerFailure.toString());
+                                   });
+        }
+        assertThat(healthyListener.failure()).isCompletedWithValue(failure);
+    }
+
+    private void subscribe(UserStateListener listener, List<UserProfileWithDeletion> image) {
+        publisher.subscribe(directExecutor(), listener, () -> image);
+    }
+
+    private void subscribe(UserIdentity identity, IdentityResolutionListener listener, IdentityResolution resolution) {
+        publisher.subscribe(directExecutor(), identity, listener, () -> resolution);
+    }
+
+    private void subscribe(LocalDate earliestDay, UserRecordListener listener, List<UserRecord> image) {
+        publisher.subscribe(directExecutor(), earliestDay, listener, () -> image);
     }
 
     private static UserRecord createRecordWithDays(LocalDate... days) {
@@ -358,6 +419,28 @@ class UserStatePublisherTest {
         @Override
         public void onSubscriptionFailed(Throwable failure) {
             failures.add(failure);
+        }
+    }
+
+    /// Runs every task in place, and drops every task given to [#tryExecute], as an executor that has shut down does.
+    private static final class TryExecuteDroppingExecutor implements TaskExecutor {
+        @Override
+        public <T> CompletableFuture<T> submit(Callable<? extends T> task) {
+            try {
+                return completedFuture(task.call());
+            } catch (Exception e) {
+                return failedFuture(e);
+            }
+        }
+
+        @Override
+        public void execute(String taskName, Runnable command) {
+            command.run();
+        }
+
+        @Override
+        public boolean tryExecute(String taskName, Runnable command) {
+            return false;
         }
     }
 }

@@ -1,9 +1,8 @@
 package net.yudichev.jiotty.common.observer;
 
-import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.MutableReference;
 import com.google.common.collect.Sets;
 import net.yudichev.jiotty.common.async.TaskExecutor;
+import net.yudichev.jiotty.common.lang.Closeable;
 
 import java.util.Optional;
 import java.util.Set;
@@ -21,21 +20,32 @@ public final class Listeners<T> {
         return Closeable.idempotent(() -> listeners.remove(consumer));
     }
 
-    /// Adds `consumer` in a task on `executor`, and in the same task delivers to `consumer` the value that `imageSupplier` supplies, if present. Closing the
-    /// returned handle removes `consumer` in a task on the same executor, and does nothing if that executor is already closed, as
-    /// [Observable#subscribe(TaskExecutor, Consumer)] does; that method's doc gives the reason. An exception reaches the failure handler of `executor` when:
+    /// Adds `consumer` to the listeners. The newly added `consumer` first receives the current value that `imageSupplier` supplies, if present, and then every
+    /// later [#notify]. This sequence is only guaranteed if every call to [#notify] is strictly sequential with the tasks of `executor` (same thread, or
+    /// synchronised).
     ///
-    /// - `imageSupplier` throws it, and then `consumer` is not added;
-    /// - `consumer` throws it on the image, and then `consumer` stays added and receives every later [#notify], as it does after throwing on any of them.
+    /// `consumer` receives each later value on the thread that calls [#notify], which is `executor` while every call to [#notify] is made there.
+    ///
+    /// Closing the returned handle, on any thread, ends the deliveries to `consumer`. Depending on the thread and the timing of the closure, the image that
+    /// `imageSupplier` supplies, or a value passed to [#notify] before the closure, may or may not reach `consumer`.
+    ///
+    /// An exception reaches the failure handler of `executor` when:
+    ///
+    /// - `imageSupplier` throws it (and then `consumer` receives nothing);
+    /// - `consumer` throws it on the image, and then `consumer` still receives every later [#notify], as it does after throwing on any of them.
+    ///
+    /// @param executor the executor on which `imageSupplier` is called and `consumer` receives the image
     public Closeable addListener(TaskExecutor executor, Supplier<Optional<T>> imageSupplier, Consumer<? super T> consumer) {
-        // Only tasks on `executor` write and read `handle`.
-        var handle = new MutableReference<Closeable>();
+        var subscription = new ExecutorSubscription(executor, "removeListener");
         executor.execute("addListener", () -> {
+            if (subscription.isClosed()) {
+                return;
+            }
             Optional<T> image = imageSupplier.get();
-            handle.set(addListener(consumer));
+            subscription.set(addListener(consumer));
             image.ifPresent(consumer);
         });
-        return Closeable.idempotent(() -> executor.tryExecute("removeListener", () -> Closeable.closeIfNotNull(handle.get())));
+        return subscription;
     }
 
     public void notify(T value) {

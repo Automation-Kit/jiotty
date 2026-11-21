@@ -2,6 +2,7 @@ package net.yudichev.jiotty.common.lang;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -22,6 +23,14 @@ public final class CompositeException extends RuntimeException {
                 exceptions.add(e);
             }
         }
+        throwIfAny(exceptions);
+    }
+
+    /// Rethrows the exceptions in `exceptions`, if it holds any.
+    ///
+    /// @throws RuntimeException   the one exception in `exceptions`, if it holds exactly one
+    /// @throws CompositeException of all the exceptions in `exceptions`, if it holds several
+    public static void throwIfAny(List<RuntimeException> exceptions) {
         switch (exceptions.size()) {
             case 0 -> {
             }

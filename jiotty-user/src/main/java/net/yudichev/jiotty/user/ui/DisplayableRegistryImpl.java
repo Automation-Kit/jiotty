@@ -7,8 +7,8 @@ import jakarta.inject.Provider;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.observer.Listeners;
 import net.yudichev.jiotty.common.lang.throttling.ThrottlingConsumer;
+import net.yudichev.jiotty.common.observer.Listeners;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 

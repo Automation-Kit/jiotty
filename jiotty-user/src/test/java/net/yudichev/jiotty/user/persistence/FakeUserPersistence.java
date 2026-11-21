@@ -7,9 +7,9 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.common.collect.SetMultimap;
 import com.google.common.collect.Sets;
+import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
-import net.yudichev.jiotty.common.observer.SerialisedListeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.user.persistence.UserStatePublisher.IdentitySubscription;
 import org.jspecify.annotations.Nullable;
@@ -27,23 +27,41 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static java.util.concurrent.CompletableFuture.failedFuture;
 
 public final class FakeUserPersistence implements UserPersistence {
     private final Object lock = new Object();
     private final CurrentDateTimeProvider timeProvider;
     private final Map<String, StoredUser> usersById = new LinkedHashMap<>();
     private final Map<UserIdentity, String> activeUserIdsByIdentity = new HashMap<>();
-    private final UserStatePublisher publisher = new UserStatePublisher(command -> {
-        synchronized (lock) {
-            command.run();
+    /// Runs each task in place, holding the lock that confines this fake's state, so subscribing and unsubscribing run under that lock.
+    private final TaskExecutor lockedExecutor = new TaskExecutor() {
+        @Override
+        public <T> CompletableFuture<T> submit(Callable<? extends T> task) {
+            synchronized (lock) {
+                try {
+                    return completedFuture(task.call());
+                } catch (Exception e) {
+                    return failedFuture(e);
+                }
+            }
         }
-    });
+
+        @Override
+        public void execute(String taskName, Runnable command) {
+            synchronized (lock) {
+                command.run();
+            }
+        }
+    };
+    private final UserStatePublisher publisher = new UserStatePublisher();
 
     private final List<UserStatePublisher.IdentitySubscription> identitySubscriptions = new ArrayList<>();
 
@@ -427,11 +445,7 @@ public final class FakeUserPersistence implements UserPersistence {
     /// change is delivered on the thread that made it, as the real implementation's are.
     @Override
     public Closeable subscribe(UserStateListener listener) {
-        synchronized (lock) {
-            SerialisedListeners<UserStateListener>.Subscription subscription = publisher.newSubscription(listener);
-            publisher.activate(subscription, listAllProfilesIgnoringDeletionLocked());
-            return subscription;
-        }
+        return publisher.subscribe(lockedExecutor, listener, this::listAllProfilesIgnoringDeletionLocked);
     }
 
     private List<UserProfileWithDeletion> listAllProfilesIgnoringDeletionLocked() {
@@ -444,13 +458,14 @@ public final class FakeUserPersistence implements UserPersistence {
     @Override
     public Closeable subscribe(UserIdentity identity, IdentityResolutionListener listener) {
         synchronized (lock) {
-            IdentitySubscription subscription = publisher.newSubscription(identity, listener);
+            RuntimeException failure = identitySubscriptionFailure;
+            IdentitySubscription subscription = publisher.subscribe(lockedExecutor, identity, listener, () -> {
+                if (failure != null) {
+                    throw failure;
+                }
+                return resolveByIdentityLocked(identity);
+            });
             identitySubscriptions.add(subscription);
-            if (identitySubscriptionFailure == null) {
-                publisher.activate(subscription, resolveByIdentityLocked(identity));
-            } else {
-                listener.onSubscriptionFailed(identitySubscriptionFailure);
-            }
             return subscription;
         }
     }
@@ -458,13 +473,11 @@ public final class FakeUserPersistence implements UserPersistence {
     /// Delivers the image of the records in the same way as [#subscribe(UserStateListener)] delivers the image of the users.
     @Override
     public Closeable subscribe(LocalDate earliestDay, UserRecordListener listener) {
-        synchronized (lock) {
-            SerialisedListeners<UserRecordListener>.Subscription subscription = publisher.newSubscription(earliestDay, listener);
+        return publisher.subscribe(lockedExecutor, earliestDay, listener, () -> {
             var records = ImmutableList.<UserRecord>builderWithExpectedSize(usersById.size());
             usersById.values().forEach(user -> records.add(user.createRecord().withoutDaysBefore(earliestDay)));
-            publisher.activateRecords(subscription, records.build());
-            return subscription;
-        }
+            return records.build();
+        });
     }
 
     /// Makes every later identity subscription fail with `failure`, as the real implementation's does when it cannot read the first resolution.

@@ -1,8 +1,9 @@
 package net.yudichev.jiotty.common.observer;
 
-import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.lang.Closeable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -24,11 +25,10 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 class ListenersTest {
     private final Listeners<Integer> listeners = new Listeners<>();
     private final ProgrammableClock clock = new ProgrammableClock();
+    private final SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("test");
 
     @Test
     void givenListenerAddedOnExecutor_whenNotified_thenImageAndLaterValuesDeliveredOnThatExecutor(@Mock Consumer<Integer> consumer) {
-        var executor = clock.createSingleThreadedSchedulingExecutor("test");
-
         listeners.addListener(executor, () -> Optional.of(0), consumer);
         verifyNoMoreInteractions(consumer);
 
@@ -41,8 +41,6 @@ class ListenersTest {
 
     @Test
     void givenNoImageAvailable_whenListenerAddedOnExecutor_thenOnlyLaterValuesDelivered(@Mock Consumer<Integer> consumer) {
-        var executor = clock.createSingleThreadedSchedulingExecutor("test");
-
         listeners.addListener(executor, Optional::empty, consumer);
         clock.tick();
         verifyNoMoreInteractions(consumer);
@@ -53,7 +51,6 @@ class ListenersTest {
 
     @Test
     void givenListenerAddedOnExecutor_whenHandleClosed_thenNoFurtherValuesDelivered(@Mock Consumer<Integer> consumer) {
-        var executor = clock.createSingleThreadedSchedulingExecutor("test");
         Closeable handle = listeners.addListener(executor, () -> Optional.of(0), consumer);
         clock.tick();
 
@@ -68,7 +65,6 @@ class ListenersTest {
     /// Teardown drains executors last, so a listener routinely releases its handle after the executor it subscribed on has closed.
     @Test
     void givenExecutorClosed_whenHandleClosed_thenNoFailure(@Mock Consumer<Integer> consumer) {
-        var executor = clock.createSingleThreadedSchedulingExecutor("test");
         Closeable handle = listeners.addListener(executor, () -> Optional.of(0), consumer);
         clock.tick();
 
@@ -79,17 +75,16 @@ class ListenersTest {
 
     @Test
     void givenExecutorQueueFull_whenHandleClosed_thenTheRejectionIsThrown(@Mock Consumer<Integer> consumer) {
-        var executor = new RejectingSchedulingExecutor(clock.createSingleThreadedSchedulingExecutor("test"));
-        Closeable handle = listeners.addListener(executor, () -> Optional.of(0), consumer);
+        var rejectingExecutor = new RejectingSchedulingExecutor(executor);
+        Closeable handle = listeners.addListener(rejectingExecutor, () -> Optional.of(0), consumer);
         clock.tick();
-        executor.fillQueue();
+        rejectingExecutor.fillQueue();
 
-        assertThatThrownBy(handle::close).hasRootCauseInstanceOf(RejectedExecutionException.class);
+        assertThatThrownBy(handle::close).isInstanceOf(RejectedExecutionException.class);
     }
 
     @Test
     void givenImageSupplierThrows_whenListenerAddedOnExecutor_thenTheTaskFailsAndLaterValuesNotDelivered(@Mock Consumer<Integer> consumer) {
-        var executor = clock.createSingleThreadedSchedulingExecutor("test");
         var failure = new RuntimeException("unreadable");
 
         listeners.addListener(executor, () -> {throw failure;}, consumer);
@@ -102,7 +97,6 @@ class ListenersTest {
 
     @Test
     void givenConsumerThrowsOnTheImage_whenListenerAddedOnExecutor_thenTheTaskFailsAndLaterValuesDelivered(@Mock Consumer<Integer> consumer) {
-        var executor = clock.createSingleThreadedSchedulingExecutor("test");
         var failure = new RuntimeException("boom");
         doThrow(failure).when(consumer).accept(0);
 
@@ -114,16 +108,14 @@ class ListenersTest {
     }
 
     @Test
-    void givenHandleClosedBeforeTheListenerIsAdded_whenNotified_thenTheValueIsNotDelivered(@Mock Consumer<Integer> consumer) {
-        var executor = clock.createSingleThreadedSchedulingExecutor("test");
+    void givenHandleClosedBeforeTheListenerIsAdded_whenNotified_thenNothingIsDelivered(@Mock Consumer<Integer> consumer) {
         Closeable handle = listeners.addListener(executor, () -> Optional.of(0), consumer);
 
         handle.close();
         clock.tick();
         listeners.notify(1);
 
-        verify(consumer).accept(0);
-        verifyNoMoreInteractions(consumer);
+        verifyNoInteractions(consumer);
         assertThat(listeners.isEmpty()).isTrue();
     }
 }

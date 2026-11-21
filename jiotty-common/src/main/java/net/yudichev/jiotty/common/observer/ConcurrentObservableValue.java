@@ -1,6 +1,8 @@
 package net.yudichev.jiotty.common.observer;
 
+import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
+
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -10,17 +12,16 @@ import java.util.function.Consumer;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.lang.CompositeException.runForAll;
 
-/// Thread-safe [ObservableValue] implementation. All methods are safe to call from any thread.
+/// An [ObservableValue] whose methods may be called on any thread.
 ///
-/// When multiple threads call [#accept] concurrently, all values are delivered to all subscribers, but the delivery order is nondeterministic.
+/// A listener subscribed through [#subscribe(Consumer)] is called on the thread of some caller of [#accept], [#subscribe(Consumer)] or a handle's
+/// [Closeable#close()], which may be a different caller from the one that passed the value. A listener subscribed through
+/// [#subscribe(TaskExecutor, Consumer)] is called on its executor, and an exception that it throws reaches the failure handler of that executor. A listener
+/// may subscribe, unsubscribe and call [#accept] while it is being notified.
 ///
-/// Observers may safely subscribe, unsubscribe, or push new values from within their notification callbacks.
+/// This value does not support [#setNotificationsSuppressed(boolean)].
 ///
-/// Actions are serialised through one queue drained by whichever thread finds it idle, so a [#subscribe(Consumer)] landing while another thread is delivering
-/// is completed by that thread: the new observer gets the current value promptly, and can get it after [#subscribe(Consumer)] has returned. This is guarantee
-/// 1 of [ObservableValue] — read that for what a caller may assume.
-///
-/// What an observer throws goes to the `listenerFailureHandler`, and delivery to every observer, that one included, carries on.
+/// @param <T> the type of the value
 public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
 
     private final ConcurrentLinkedQueue<Runnable> actionQueue = new ConcurrentLinkedQueue<>();
@@ -31,8 +32,9 @@ public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
     private volatile T value;
     private volatile LinkedHashSet<Consumer<? super T>> listeners = new LinkedHashSet<>();
 
-    /// @param listenerFailureHandler told of what an observer throws, on whichever thread is delivering at the time — any caller of [#accept],
-    ///                               [#subscribe(Consumer)] or a subscription's [Closeable#close()]; must not throw
+    /// @param listenerFailureHandler invoked with each exception that a listener subscribed through [#subscribe(Consumer)] throws, on the thread on which that
+    ///                               listener is called; the other listeners still receive the value, and every listener receives later values. Must not
+    ///                               throw.
     public ConcurrentObservableValue(T initialValue, Consumer<? super RuntimeException> listenerFailureHandler) {
         value = initialValue;
         this.listenerFailureHandler = checkNotNull(listenerFailureHandler, "listenerFailureHandler");
@@ -63,6 +65,11 @@ public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
     }
 
     @Override
+    public Closeable subscribe(TaskExecutor executor, Consumer<? super T> listener) {
+        return subscribe(value -> executor.tryExecute("deliver", () -> listener.accept(value)));
+    }
+
+    @Override
     public int subscriberCount() {
         return listeners.size();
     }
@@ -76,8 +83,8 @@ public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
         drainAfterAddingAction();
     }
 
-    /// Drain loop: serializes all enqueued actions. Only the thread that increments wip from 0→1 enters the loop. Reentrant and concurrent calls increment wip
-    /// and return; the draining thread re-checks after each pass.
+    /// Runs the queued actions in order, one at a time. A call made while no other call is running the actions runs every action queued until none is left,
+    /// including those that other threads and the actions themselves queue meanwhile; every other call returns at once.
     private void drainAfterAddingAction() {
         if (wip.getAndIncrement() != 0) {
             return;

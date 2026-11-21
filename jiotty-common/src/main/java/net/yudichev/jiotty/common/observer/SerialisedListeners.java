@@ -1,46 +1,51 @@
 package net.yudichev.jiotty.common.observer;
 
+import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
-import com.google.common.collect.ImmutableList;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import net.yudichev.jiotty.common.lang.Closeable;
+import org.jspecify.annotations.Nullable;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
-import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessageFormattable;
 
-/// Listeners that each receive an image of their owner's state from [#add], then every [#notify] after that image. [#add], [#notify], [#removeAll] and
-/// [#size] must be called on one thread, or under one lock. [#newSubscription] may be called on any thread. Closing a subscription runs its removal through
-/// the executor passed to the constructor.
+/// The subscriptions to a publisher that publishes an image of its state and then each change to that state.
 ///
-/// @param <L> the type of the listeners
+/// A listener that throws on a delivery is removed and passed to the failure handler, and the other listeners still receive the delivery. A listener that
+/// throws may not have applied the change, and then holds a wrong copy of the state until it subscribes again and receives a new image. If each delivery is
+/// the whole current value, use [Observable#subscribe(TaskExecutor, Consumer)] or [Listeners#addListener(TaskExecutor, Supplier, Consumer)] instead, both of
+/// which keep a listener that throws.
+///
+/// @param <L> the type of the listeners, which have a method for each kind of delivery
 public final class SerialisedListeners<L> {
-    private static final Logger logger = LogManager.getLogger(SerialisedListeners.class);
+    private final ListenerList<Subscription> subscriptions = new ListenerList<>();
 
-    private final Executor removalExecutor;
-    private final Set<Subscription> subscriptions = new HashSet<>();
-
-    /// @param removalExecutor must run the removal of a closed subscription on the thread, or under the lock, that [#add] and [#notify] are called on
-    public SerialisedListeners(Executor removalExecutor) {
-        this.removalExecutor = checkNotNull(removalExecutor, "removalExecutor");
-    }
-
-    /// A subscription that receives nothing until [#add] is called with it.
-    public Subscription newSubscription(L listener) {
-        return new Subscription(listener);
-    }
-
-    /// Delivers the image to the subscription's listener, then adds the subscription to those [#notify] notifies, unless it is already closed.
+    /// Subscribes `listener`, which first receives the image through `imageDelivery`, and then every later [#publish] until the subscription is closed or
+    /// [#removeAll] delivers its last notification. This sequence is only guaranteed if every call to [#publish] and [#removeAll] is strictly sequential
+    /// with the tasks of `executor` (same thread, or synchronised).
     ///
-    /// @param failureHandler told of a listener that throws on its image, which is then not added
-    public void add(Subscription subscription, Consumer<? super L> imageDelivery, BiConsumer<? super L, RuntimeException> failureHandler) {
+    /// The subscriptions are confined to `executor`. This method may be called on any thread, and so may [Closeable#close()] on the subscription that it
+    /// returns. [#publish], [#removeAll] and [#size] must be called on `executor`.
+    ///
+    /// Closing the returned subscription ends the deliveries to `listener`. Depending on the thread and the timing of the closure, the image may or may not
+    /// have been delivered.
+    ///
+    /// @param executor       the executor on which `imageDelivery` and `failureHandler` are called
+    /// @param imageDelivery  delivers the image to the listener, and may read the image itself
+    /// @param failureHandler invoked with the listener and the exception when `imageDelivery` throws; the subscription is then not added
+    public Closeable subscribe(TaskExecutor executor,
+                               L listener,
+                               Consumer<? super L> imageDelivery,
+                               BiConsumer<? super L, RuntimeException> failureHandler) {
+        var subscription = new Subscription(executor, listener);
+        executor.execute("subscribe", () -> add(subscription, imageDelivery, failureHandler));
+        return subscription;
+    }
+
+    private void add(Subscription subscription, Consumer<? super L> imageDelivery, BiConsumer<? super L, RuntimeException> failureHandler) {
         if (subscription.isClosed()) {
             return;
         }
@@ -53,49 +58,49 @@ public final class SerialisedListeners<L> {
         subscriptions.add(subscription);
     }
 
-    /// Delivers a notification to the listener of each added subscription that is still open. It iterates a copy, so a listener may close its own subscription
-    /// as it is notified.
+    /// Delivers a notification to the listener of each added subscription that is still open. A listener may close a subscription, and a subscription may be
+    /// added, as a listener is notified; a subscription added then does not receive this notification. A listener may also call [#publish] and [#removeAll]
+    /// as it is notified, and after [#removeAll] no listener receives this notification.
     ///
-    /// A listener whose executor rejects the notification with [RejectedExecutionException] stays subscribed, missing only that notification.
-    ///
-    /// @param failureHandler told of each listener that throws anything else, which is then removed, since it has missed this notification; the others are
-    ///                       unaffected
-    public void notify(Consumer<? super L> notification, BiConsumer<? super L, RuntimeException> failureHandler) {
-        for (Subscription subscription : ImmutableList.copyOf(subscriptions)) {
-            if (subscription.isClosed()) {
-                subscriptions.remove(subscription);
-            } else {
-                try {
-                    notification.accept(subscription.listener);
-                } catch (RejectedExecutionException e) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("A listener missed a notification: {}", humanReadableMessageFormattable(e));
+    /// @param failureHandler invoked with each listener that throws and the exception; the listener's subscription is removed first
+    public void publish(Consumer<? super L> notification, BiConsumer<? super L, RuntimeException> failureHandler) {
+        List<@Nullable Subscription> notified = subscriptions.startNotification();
+        try {
+            int subscriptionCount = notified.size();
+            // A listener that calls [#removeAll] as it is notified has had every listener receive its last notification, so the loop stops there.
+            for (int i = 0; i < subscriptionCount && subscriptions.holdsListeners(notified); i++) {
+                Subscription subscription = notified.get(i);
+                if (subscription != null) {
+                    if (subscription.isClosed()) {
+                        subscriptions.removeAt(notified, i);
+                    } else {
+                        try {
+                            notification.accept(subscription.listener);
+                        } catch (RuntimeException e) {
+                            subscriptions.removeAt(notified, i);
+                            failureHandler.accept(subscription.listener, e);
+                        }
                     }
-                } catch (RuntimeException e) {
-                    subscriptions.remove(subscription);
-                    failureHandler.accept(subscription.listener, e);
                 }
             }
+        } finally {
+            subscriptions.endNotification();
         }
     }
 
-    /// Removes every added subscription, and delivers `lastNotification` to the listener of each subscription that is open. If a listener throws an exception
-    /// on its last notification, the exception is logged, and the delivery continues to the listeners of the remaining open subscriptions.
-    public void removeAll(Consumer<? super L> lastNotification) {
-        // The loop iterates over a copy of `subscriptions`, and `subscriptions` is cleared before the first delivery. While a listener is notified, it may
-        // therefore close its own subscription, and a new subscription may be added.
-        List<Subscription> removedSubscriptions = ImmutableList.copyOf(subscriptions);
-        subscriptions.clear();
-        for (Subscription subscription : removedSubscriptions) {
-            if (!subscription.isClosed()) {
+    /// Removes every added subscription, and delivers `lastNotification` to the listener of each subscription that is open.
+    ///
+    /// @param failureHandler invoked with each listener that throws on its last notification and the exception; the delivery continues to the listeners of the
+    ///                       remaining open subscriptions
+    public void removeAll(Consumer<? super L> lastNotification, BiConsumer<? super L, RuntimeException> failureHandler) {
+        // The loop iterates over the removed subscriptions, so a listener may close its own subscription, and a new subscription may be added, while the
+        // listener is notified.
+        for (Subscription subscription : subscriptions.removeAll()) {
+            if (subscription != null && !subscription.isClosed()) {
                 try {
                     lastNotification.accept(subscription.listener);
-                } catch (RejectedExecutionException e) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Unsubscribed a listener whose last notification was rejected: {}", humanReadableMessageFormattable(e));
-                    }
                 } catch (RuntimeException e) {
-                    logger.info("A listener failed on its last notification", e);
+                    failureHandler.accept(subscription.listener, e);
                 }
             }
         }
@@ -107,16 +112,18 @@ public final class SerialisedListeners<L> {
     }
 
     /// One listener's subscription; closing it ends the notifications.
-    public final class Subscription extends BaseIdempotentCloseable {
+    private final class Subscription extends BaseIdempotentCloseable {
+        private final TaskExecutor executor;
         private final L listener;
 
-        private Subscription(L listener) {
+        private Subscription(TaskExecutor executor, L listener) {
+            this.executor = checkNotNull(executor, "executor");
             this.listener = checkNotNull(listener, "listener");
         }
 
         @Override
         protected void doClose() {
-            removalExecutor.execute(() -> subscriptions.remove(this));
+            executor.tryExecute("unsubscribe", () -> subscriptions.remove(this));
         }
     }
 }

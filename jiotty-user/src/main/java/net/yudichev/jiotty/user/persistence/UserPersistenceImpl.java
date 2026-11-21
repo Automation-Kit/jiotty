@@ -11,7 +11,6 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.observer.SerialisedListeners;
 import net.yudichev.jiotty.common.misc.UniqueId;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;
@@ -20,7 +19,6 @@ import net.yudichev.jiotty.persistence.domain.PersistenceDomain;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainConfig;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainMigrator;
 import net.yudichev.jiotty.persistence.domain.PersistenceDomainService;
-import net.yudichev.jiotty.user.persistence.UserStatePublisher.IdentitySubscription;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jspecify.annotations.Nullable;
@@ -45,8 +43,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -201,7 +197,7 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
                                @Migrator PersistenceDomainMigrator migrator,
                                TaskFailureReporter taskFailureReporter) {
         this.taskFailureReporter = checkNotNull(taskFailureReporter, "taskFailureReporter");
-        publisher = new UserStatePublisher(command -> executor.tryExecute("unsubscribe from user changes", command));
+        publisher = new UserStatePublisher();
         this.dataSourceFactory = checkNotNull(dataSourceFactory, "dataSourceFactory");
         this.executorProvider = checkNotNull(executorProvider, "executorProvider");
         this.persistenceDomainService = checkNotNull(persistenceDomainService, "persistenceDomainService");
@@ -467,58 +463,18 @@ public class UserPersistenceImpl extends BaseLifecycleComponent implements UserP
 
     @Override
     public Closeable subscribe(UserStateListener listener) {
-        return whenStartedAndNotLifecycling(() -> {
-            SerialisedListeners<UserStateListener>.Subscription subscription = publisher.newSubscription(listener);
-            activateOnExecutor("subscribe to user states",
-                               this::doListAllProfilesIgnoringDeletion,
-                               image -> publisher.activate(subscription, image),
-                               listener::onSubscriptionFailed);
-            return subscription;
-        });
+        return whenStartedAndNotLifecycling(() -> publisher.subscribe(executor, listener, this::doListAllProfilesIgnoringDeletion));
     }
 
     @Override
     public Closeable subscribe(UserIdentity identity, IdentityResolutionListener listener) {
-        return whenStartedAndNotLifecycling(() -> {
-            IdentitySubscription subscription = publisher.newSubscription(identity, listener);
-            activateOnExecutor("subscribe to an identity",
-                               () -> doResolveByIdentity(identity),
-                               resolution -> publisher.activate(subscription, resolution),
-                               listener::onSubscriptionFailed);
-            return subscription;
-        });
+        return whenStartedAndNotLifecycling(() -> publisher.subscribe(executor, identity, listener, () -> doResolveByIdentity(identity)));
     }
 
     @Override
     public Closeable subscribe(LocalDate earliestDay, UserRecordListener listener) {
         checkNotNull(earliestDay, "earliestDay");
-        return whenStartedAndNotLifecycling(() -> {
-            SerialisedListeners<UserRecordListener>.Subscription subscription = publisher.newSubscription(earliestDay, listener);
-            activateOnExecutor("subscribe to user records",
-                               () -> doListRecords(earliestDay),
-                               image -> publisher.activateRecords(subscription, image),
-                               listener::onSubscriptionFailed);
-            return subscription;
-        });
-    }
-
-    /// Reads a subscription's first delivery and activates the subscription with it in one task, so no write can fall between the two.
-    ///
-    /// @param failureHandler told when the read fails, which activates nothing
-    private <T> void activateOnExecutor(String taskName,
-                                        Supplier<? extends T> firstDeliveryReader,
-                                        Consumer<? super T> activation,
-                                        Consumer<Throwable> failureHandler) {
-        executor.execute(taskName, () -> {
-            T firstDelivery;
-            try {
-                firstDelivery = firstDeliveryReader.get();
-            } catch (RuntimeException e) {
-                failureHandler.accept(e);
-                return;
-            }
-            activation.accept(firstDelivery);
-        });
+        return whenStartedAndNotLifecycling(() -> publisher.subscribe(executor, earliestDay, listener, () -> doListRecords(earliestDay)));
     }
 
     private UserCreationResult doGetOrCreateByIdentity(UserIdentity identity, UserProfileInput profile) {

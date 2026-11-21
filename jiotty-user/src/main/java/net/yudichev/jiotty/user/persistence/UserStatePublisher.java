@@ -4,7 +4,9 @@ import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.SetMultimap;
+import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
+import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.observer.SerialisedListeners;
 import net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolution;
 import net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolutionListener;
@@ -21,69 +23,83 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.concurrent.CompletableFuture.failedFuture;
 
 /// The subscriptions of a [UserPersistence] implementation, and the delivery of its committed changes to them.
 ///
-/// [#newSubscription(UserStateListener)], [#newSubscription(LocalDate, UserRecordListener)] and [#newSubscription(UserIdentity, IdentityResolutionListener)]
-/// only create a subscription, and may be called on any thread. Every other method must be called on the implementation's one thread, or under its one lock.
-/// Closing a subscription runs its removal on that thread or under that lock, through the executor passed to the constructor.
+/// Every method other than the [#subscribe] overloads must be called on the executor that they take.
 final class UserStatePublisher {
     private static final Logger logger = LogManager.getLogger(UserStatePublisher.class);
 
-    private final Executor removalExecutor;
-    private final SerialisedListeners<UserStateListener> stateListeners;
-    private final SerialisedListeners<UserRecordListener> recordListeners;
+    private static final String RECORD_LISTENER_KIND = "User-record";
+
+    private final SerialisedListeners<UserStateListener> stateListeners = new SerialisedListeners<>();
+    private final SerialisedListeners<UserRecordListener> recordListeners = new SerialisedListeners<>();
     /// Each identity subscription under the user its identity currently resolves to; one resolving to nobody is absent here.
     private final SetMultimap<String, IdentitySubscription> identitySubscriptionsByUserId = HashMultimap.create();
     private final SetMultimap<UserIdentity, IdentitySubscription> identitySubscriptionsByIdentity = HashMultimap.create();
 
-    /// @param removalExecutor must run the removal of a closed subscription on the thread, or under the lock, that every other method here is called on
-    public UserStatePublisher(Executor removalExecutor) {
-        this.removalExecutor = checkNotNull(removalExecutor, "removalExecutor");
-        stateListeners = new SerialisedListeners<>(removalExecutor);
-        recordListeners = new SerialisedListeners<>(removalExecutor);
-    }
-
-    /// @return a subscription that delivers nothing until [#activate(SerialisedListeners.Subscription, List)] is called with its image
-    public SerialisedListeners<UserStateListener>.Subscription newSubscription(UserStateListener listener) {
-        return stateListeners.newSubscription(listener);
-    }
-
-    /// @param earliestDay a record delivered to `listener` holds no activity day before this day
-    /// @return a subscription that delivers nothing until [#activateRecords] is called with its image
-    public SerialisedListeners<UserRecordListener>.Subscription newSubscription(LocalDate earliestDay, UserRecordListener listener) {
-        return recordListeners.newSubscription(new DayBoundedUserRecordListener(earliestDay, listener));
-    }
-
-    /// @return a subscription that delivers nothing until [#activate(IdentitySubscription, IdentityResolution)] is called with its first resolution
-    public IdentitySubscription newSubscription(UserIdentity identity, IdentityResolutionListener listener) {
-        return new IdentitySubscription(identity, listener);
-    }
-
-    /// Delivers `image` to the subscription and then every change published after it, unless the subscription is already closed.
-    public void activate(SerialisedListeners<UserStateListener>.Subscription subscription, List<UserProfileWithDeletion> image) {
-        stateListeners.add(subscription, listener -> listener.onImage(image), UserStatePublisher::endStateSubscription);
-    }
-
-    /// Delivers `image` to the subscription, then every record change, purge and removal published later, unless the subscription is already closed.
+    /// Subscribes `listener`, which first receives the image that `imageReader` reads, and then every change published after the read. A failure to read the
+    /// image ends the subscription as a failure of `listener` does.
     ///
-    /// @param image every user's record. A record must hold no activity day before the `earliestDay` passed to
-    ///              [#newSubscription(LocalDate, UserRecordListener)] for this subscription.
-    public void activateRecords(SerialisedListeners<UserRecordListener>.Subscription subscription, List<UserRecord> image) {
-        recordListeners.add(subscription, listener -> listener.onImage(image), UserStatePublisher::endRecordSubscription);
+    /// This method may be called on any thread, and so may [Closeable#close()] on the subscription that it returns.
+    ///
+    /// @param executor the executor on which `imageReader` is called and `listener` receives the image
+    public Closeable subscribe(TaskExecutor executor, UserStateListener listener, Supplier<? extends List<UserProfileWithDeletion>> imageReader) {
+        return stateListeners.subscribe(executor,
+                                        listener,
+                                        stateListener -> stateListener.onImage(imageReader.get()),
+                                        UserStatePublisher::endStateSubscription);
     }
 
-    /// Delivers `resolution` to the subscription and then every different resolution published after it, unless the subscription is already closed.
-    public void activate(IdentitySubscription subscription, IdentityResolution resolution) {
+    /// Subscribes `listener`, which first receives the image that `imageReader` reads, and then every record change, purge and removal published after the
+    /// read. A failure to read the image ends the subscription as a failure of `listener` does.
+    ///
+    /// This method may be called on any thread, and so may [Closeable#close()] on the subscription that it returns.
+    ///
+    /// @param executor    the executor on which `imageReader` is called and `listener` receives the image
+    /// @param earliestDay a record delivered to `listener` holds no activity day before this day
+    /// @param imageReader must return every user's record, each holding no activity day before `earliestDay`
+    public Closeable subscribe(TaskExecutor executor,
+                               LocalDate earliestDay,
+                               UserRecordListener listener,
+                               Supplier<? extends List<UserRecord>> imageReader) {
+        return recordListeners.subscribe(executor,
+                                         new DayBoundedUserRecordListener(earliestDay, listener),
+                                         recordListener -> recordListener.onImage(imageReader.get()),
+                                         UserStatePublisher::endRecordSubscription);
+    }
+
+    /// Subscribes `listener`, which first receives the resolution that `resolutionReader` reads, and then every different resolution published after the
+    /// read. A failure to read the resolution reaches [IdentityResolutionListener#onSubscriptionFailed] unlogged, because its message names the identity.
+    ///
+    /// This method may be called on any thread, and so may [Closeable#close()] on the subscription that it returns.
+    ///
+    /// @param executor the executor on which `resolutionReader` is called and `listener` receives the first resolution
+    public IdentitySubscription subscribe(TaskExecutor executor,
+                                          UserIdentity identity,
+                                          IdentityResolutionListener listener,
+                                          Supplier<IdentityResolution> resolutionReader) {
+        var subscription = new IdentitySubscription(executor, identity, listener);
+        executor.execute("subscribe to an identity", () -> activate(subscription, resolutionReader));
+        return subscription;
+    }
+
+    private void activate(IdentitySubscription subscription, Supplier<IdentityResolution> resolutionReader) {
         if (subscription.isClosed()) {
+            return;
+        }
+        IdentityResolution resolution;
+        try {
+            resolution = resolutionReader.get();
+        } catch (RuntimeException e) {
+            subscription.listener.onSubscriptionFailed(e);
             return;
         }
         try {
@@ -102,7 +118,7 @@ final class UserStatePublisher {
     /// @param linkedIdentities   identities the write made resolve to `user`
     /// @param unlinkedIdentities identities the write made resolve to nobody
     public void publishChanged(UserProfileWithDeletion user, Collection<UserIdentity> linkedIdentities, Collection<UserIdentity> unlinkedIdentities) {
-        stateListeners.notify(listener -> listener.onChanged(user), UserStatePublisher::endStateSubscription);
+        stateListeners.publish(listener -> listener.onChanged(user), UserStatePublisher::endStateSubscription);
         IdentityResolution resolution = IdentityResolution.createLinked(user.profile(), user.deletedAt().isPresent());
         deliver(identitySubscriptionsByUserId.get(user.profile().id()), resolution);
         for (UserIdentity identity : linkedIdentities) {
@@ -115,18 +131,19 @@ final class UserStatePublisher {
 
     /// Publishes a committed write that changed a user's record. `record` must be that user's whole record as the write left it.
     public void publishRecordChanged(UserRecord record) {
-        recordListeners.notify(listener -> listener.onChanged(record), UserStatePublisher::endRecordSubscription);
+        recordListeners.publish(listener -> listener.onChanged(record), UserStatePublisher::endRecordSubscription);
     }
 
     /// Publishes a committed deletion of every user's activity days before `day`.
     public void publishDaysPurged(LocalDate day) {
-        recordListeners.notify(listener -> listener.onDaysPurged(day), UserStatePublisher::endRecordSubscription);
+        recordListeners.publish(listener -> listener.onDaysPurged(day), UserStatePublisher::endRecordSubscription);
     }
 
     /// Ends every record subscription: each open subscriber receives `failure` through [UserRecordListener#onSubscriptionFailed], and no record subscriber
     /// receives anything further.
     public void failRecordSubscriptions(Throwable failure) {
-        recordListeners.removeAll(listener -> listener.onSubscriptionFailed(failure));
+        recordListeners.removeAll(listener -> listener.onSubscriptionFailed(failure),
+                                  (_, e) -> logOnSubscriptionFailedFailure(RECORD_LISTENER_KIND, e));
     }
 
     /// Publishes a committed hard delete of `userId`.
@@ -151,20 +168,11 @@ final class UserStatePublisher {
                                           Function<? super L, ? extends CompletableFuture<?>> removal,
                                           BiConsumer<? super L, RuntimeException> subscriptionEnder,
                                           Consumer<? super CompletableFuture<?>> acknowledgementConsumer) {
-        listeners.notify(listener -> {
-                             try {
-                                 acknowledgementConsumer.accept(removal.apply(listener));
-                             } catch (RejectedExecutionException e) {
-                                 // The listener's executor rejected the removal, so the listener has not applied it, and the failed future fails the
-                                 // future that `hardDelete` returns.
-                                 acknowledgementConsumer.accept(failedFuture(e));
-                                 throw e;
-                             }
-                         },
-                         (listener, e) -> {
-                             acknowledgementConsumer.accept(failedFuture(e));
-                             subscriptionEnder.accept(listener, e);
-                         });
+        listeners.publish(listener -> acknowledgementConsumer.accept(removal.apply(listener)),
+                          (listener, e) -> {
+                              acknowledgementConsumer.accept(failedFuture(e));
+                              subscriptionEnder.accept(listener, e);
+                          });
     }
 
     /// The subscribed identities a write to `userId` can change the resolution of: those resolving to the user, and those among `touchedIdentities` that are
@@ -245,26 +253,31 @@ final class UserStatePublisher {
     }
 
     private static void endRecordSubscription(UserRecordListener listener, RuntimeException failure) {
-        endSubscription("User-record", listener::onSubscriptionFailed, failure);
+        endSubscription(RECORD_LISTENER_KIND, listener::onSubscriptionFailed, failure);
     }
 
     private static void endIdentitySubscription(IdentityResolutionListener listener, RuntimeException failure) {
         endSubscription("Identity", listener::onSubscriptionFailed, failure);
     }
 
-    /// Tells a listener that threw on a delivery, and so is no longer subscribed, that its subscription has ended. A delivery runs after the write it
-    /// delivers has committed, so nothing the listener throws may reach that write.
+    /// Logs the failure that ended a listener's subscription, and invokes `subscriptionFailureHandler` with it. The failure is a throw of the listener
+    /// on a delivery, or a failed read of the image for a state or record subscription. A delivery runs after the write that it delivers has committed, so
+    /// nothing the listener throws may reach that write.
     ///
     /// @param listenerKind               names the kind of listener in the log
     /// @param subscriptionFailureHandler the listener's [UserStateListener#onSubscriptionFailed], [UserRecordListener#onSubscriptionFailed] or
     ///                                   [IdentityResolutionListener#onSubscriptionFailed]
     private static void endSubscription(String listenerKind, Consumer<Throwable> subscriptionFailureHandler, RuntimeException failure) {
-        logger.info("{} listener failed on a delivery, so it is unsubscribed", listenerKind, failure);
+        logger.info("{} subscription ended by a failure", listenerKind, failure);
         try {
             subscriptionFailureHandler.accept(failure);
         } catch (RuntimeException e) {
-            logger.info("{} listener failed on being told its subscription ended", listenerKind, e);
+            logOnSubscriptionFailedFailure(listenerKind, e);
         }
+    }
+
+    private static void logOnSubscriptionFailedFailure(String listenerKind, RuntimeException failure) {
+        logger.info("{} listener failed on being told its subscription ended", listenerKind, failure);
     }
 
     /// A [UserRecordListener] that passes every delivery to `delegate`. It passes a changed record without the activity days before `earliestDay`, as
@@ -303,19 +316,21 @@ final class UserStatePublisher {
 
     /// An [IdentityResolutionListener]'s subscription to one identity; closing it ends the deliveries.
     public final class IdentitySubscription extends BaseIdempotentCloseable {
+        private final TaskExecutor executor;
         private final UserIdentity identity;
         private final IdentityResolutionListener listener;
         /// The resolution last delivered, or `null` before the subscription is activated.
         private @Nullable IdentityResolution resolution;
 
-        private IdentitySubscription(UserIdentity identity, IdentityResolutionListener listener) {
+        private IdentitySubscription(TaskExecutor executor, UserIdentity identity, IdentityResolutionListener listener) {
+            this.executor = checkNotNull(executor, "executor");
             this.identity = checkNotNull(identity, "identity");
             this.listener = checkNotNull(listener, "listener");
         }
 
         @Override
         protected void doClose() {
-            removalExecutor.execute(() -> unindex(this));
+            executor.tryExecute("unsubscribe from an identity", () -> unindex(this));
         }
     }
 }
