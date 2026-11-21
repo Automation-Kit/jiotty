@@ -1,5 +1,7 @@
-package net.yudichev.jiotty.common.lang;
+package net.yudichev.jiotty.common.observer;
 
+import net.yudichev.jiotty.common.lang.Closeable;
+import net.yudichev.jiotty.common.lang.MutableReference;
 import net.yudichev.jiotty.common.testutil.LogCapture;
 import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;

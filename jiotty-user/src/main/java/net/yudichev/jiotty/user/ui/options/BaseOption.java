@@ -5,7 +5,7 @@ import net.yudichev.jiotty.common.async.TaskExecutor;
 import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.observer.Listeners;
 import net.yudichev.jiotty.common.lang.StringFormattable;
 import org.jspecify.annotations.Nullable;
 

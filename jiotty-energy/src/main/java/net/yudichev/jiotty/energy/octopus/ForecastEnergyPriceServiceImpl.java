@@ -11,7 +11,7 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.observer.ObservableValue;
 import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.connector.octopusenergy.priceforecast.ForecastPrice;

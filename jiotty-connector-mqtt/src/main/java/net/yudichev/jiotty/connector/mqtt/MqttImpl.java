@@ -11,7 +11,7 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.observer.Listeners;
 import net.yudichev.jiotty.common.lang.Runnables;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;

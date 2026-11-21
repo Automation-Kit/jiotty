@@ -11,7 +11,7 @@ import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
-import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.observer.ObservableValue;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusRegionService;
 import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;

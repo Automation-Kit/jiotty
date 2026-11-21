@@ -10,7 +10,7 @@ import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.lang.Json;
-import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.observer.ObservableValue;
 import net.yudichev.jiotty.common.lang.backoff.BackOff;
 import net.yudichev.jiotty.common.lang.backoff.ExponentialBackOff;
 import net.yudichev.jiotty.common.security.AuthState;

@@ -1,5 +1,6 @@
-package net.yudichev.jiotty.common.lang;
+package net.yudichev.jiotty.common.observer;
 
+import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.RejectingSchedulingExecutor;
 import org.junit.jupiter.api.Test;

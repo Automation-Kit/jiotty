@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.connector.mqtt;
 
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.observer.Listeners;
 
 import java.util.ArrayList;
 import java.util.HashMap;

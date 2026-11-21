@@ -1,5 +1,6 @@
-package net.yudichev.jiotty.common.lang;
+package net.yudichev.jiotty.common.observer;
 
+import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import com.google.common.collect.ImmutableList;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;

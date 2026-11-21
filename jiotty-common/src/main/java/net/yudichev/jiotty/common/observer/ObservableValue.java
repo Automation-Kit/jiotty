@@ -1,4 +1,4 @@
-package net.yudichev.jiotty.common.lang;
+package net.yudichev.jiotty.common.observer;
 
 import java.util.function.Consumer;
 

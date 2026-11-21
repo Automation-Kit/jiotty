@@ -11,7 +11,7 @@ import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.SerialisedListeners;
+import net.yudichev.jiotty.common.observer.SerialisedListeners;
 import net.yudichev.jiotty.common.misc.UniqueId;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.persistence.db.CloseableDataSource;

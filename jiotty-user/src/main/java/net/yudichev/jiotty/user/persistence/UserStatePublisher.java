@@ -5,7 +5,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.SetMultimap;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
-import net.yudichev.jiotty.common.lang.SerialisedListeners;
+import net.yudichev.jiotty.common.observer.SerialisedListeners;
 import net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolution;
 import net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolutionListener;
 import net.yudichev.jiotty.user.persistence.UserPersistence.UserRecordListener;

@@ -1,5 +1,6 @@
-package net.yudichev.jiotty.common.lang;
+package net.yudichev.jiotty.common.observer;
 
+import net.yudichev.jiotty.common.lang.Closeable;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;

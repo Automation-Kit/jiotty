@@ -5,7 +5,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.observer.Listeners;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
 import net.yudichev.jiotty.user.ui.io.Answer;
 import org.immutables.value.Value;

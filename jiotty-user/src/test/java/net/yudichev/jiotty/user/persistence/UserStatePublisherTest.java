@@ -1,7 +1,7 @@
 package net.yudichev.jiotty.user.persistence;
 
 import com.google.common.collect.ImmutableSetMultimap;
-import net.yudichev.jiotty.common.lang.SerialisedListeners;
+import net.yudichev.jiotty.common.observer.SerialisedListeners;
 import net.yudichev.jiotty.user.persistence.RecordingUserStateListener.Changed;
 import net.yudichev.jiotty.user.persistence.UserPersistence.IdentityResolution;
 import net.yudichev.jiotty.user.persistence.UserPersistence.UserStateListener;

@@ -4,7 +4,7 @@ import com.google.common.collect.ImmutableList;
 import jakarta.inject.Inject;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.observer.Listeners;
 import net.yudichev.jiotty.user.ui.options.Option;
 import net.yudichev.jiotty.user.ui.options.OptionPersistence;
 import org.apache.logging.log4j.LogManager;

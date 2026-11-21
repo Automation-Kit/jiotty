@@ -5,7 +5,7 @@ import net.yudichev.jiotty.common.async.ExecutorFactory;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.Listeners;
+import net.yudichev.jiotty.common.observer.Listeners;
 import net.yudichev.jiotty.connector.mqtt.Mqtt;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;

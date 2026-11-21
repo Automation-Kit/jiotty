@@ -9,7 +9,7 @@ import com.google.common.collect.SetMultimap;
 import com.google.common.collect.Sets;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.Json;
-import net.yudichev.jiotty.common.lang.SerialisedListeners;
+import net.yudichev.jiotty.common.observer.SerialisedListeners;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.user.persistence.UserStatePublisher.IdentitySubscription;
 import org.jspecify.annotations.Nullable;

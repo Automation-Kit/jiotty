@@ -11,7 +11,7 @@ import net.yudichev.jiotty.common.lang.Append;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.common.lang.ConcurrentDeduplicatingConsumer;
-import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.observer.ObservableValue;
 import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 import net.yudichev.jiotty.common.misc.UpstreamHealthReporting;

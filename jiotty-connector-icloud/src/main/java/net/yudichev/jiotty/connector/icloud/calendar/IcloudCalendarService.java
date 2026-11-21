@@ -12,7 +12,7 @@ import net.yudichev.jiotty.common.async.SequentialOperationQueue;
 import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.BaseLifecycleComponent;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.ObservableValue;
+import net.yudichev.jiotty.common.observer.ObservableValue;
 import net.yudichev.jiotty.common.lang.StringFormattable;
 import net.yudichev.jiotty.common.rest.HttpResponseException;
 import net.yudichev.jiotty.common.security.AuthState;
