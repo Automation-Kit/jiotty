@@ -156,6 +156,28 @@ class OAuth2TokenManagerImplTest {
                                                            success -> assertThat(success.authInfo()).isEqualTo("at"));
     }
 
+    /// The log tells a sign-in that sent a PKCE code verifier from one that sent none, and never carries the verifier itself.
+    @ParameterizedTest
+    @MethodSource
+    void authCodeExchange_logsWhetherAVerifierCameWithTheCode(Optional<String> codeVerifier, String expectedLine) {
+        respondWithToken("at", "rt", 3600);
+        startTokenManager();
+
+        // The manager's logger is named after its runtime class, which here is the test's subclass.
+        try (LogCapture log = LogCapture.capture(tokenManager.getClass(), Level.INFO)) {
+            tokenManager.onNewAuthCode("auth-code-123", "http://localhost/callback", codeVerifier);
+
+            assertThat(log.lines()).extracting(CapturedLine::message).contains(expectedLine);
+            assertThat(log.lines().stream().flatMap(CapturedLine::text)).noneMatch(text -> text.contains("pkce-verifier"));
+        }
+    }
+
+    static Stream<Arguments> authCodeExchange_logsWhetherAVerifierCameWithTheCode() {
+        return Stream.of(
+                arguments(named("with a verifier", Optional.of("pkce-verifier")), "[" + API_NAME + "] auth code received, PKCE code verifier present: true"),
+                arguments(named("without one", Optional.empty()), "[" + API_NAME + "] auth code received, PKCE code verifier present: false"));
+    }
+
     @Test
     void refresh_publicClient_omitsClientSecret() {
         varStore.saveValueEncrypted(VAR_STORE_KEY, OauthAccessToken.of("old-at", "old-rt", NOW.minusSeconds(60)));

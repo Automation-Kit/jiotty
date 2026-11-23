@@ -285,7 +285,7 @@ public class OAuth2TokenManagerImpl extends BaseLifecycleComponent implements OA
 
     @Override
     public void onNewAuthCode(String authCode, String redirectUri, Optional<String> codeVerifier) {
-        logger.info("[{}] auth code received", apiName);
+        logger.info("[{}] auth code received, PKCE code verifier present: {}", apiName, codeVerifier.isPresent());
         var formBuilder = new FormBody.Builder()
                 .add("grant_type", "authorization_code")
                 .add("code", authCode)
