@@ -10,7 +10,7 @@ import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-public final class Prices implements StringFormattable {
+public final class Prices implements PriceResult, StringFormattable {
     private final Instant profileStart;
     private final PriceProfile profile;
 
@@ -101,6 +101,24 @@ public final class Prices implements StringFormattable {
                                                    return newSize;
                                                }
                                            }));
+    }
+
+    /// Returns a view of the intervals that overlap `[from, to)`: from the interval running at `from` up to the last one that starts before `to`. The view
+    /// shares this profile's price list, and each interval it holds stays actual or predicted as it is in this profile.
+    public Prices viewCovering(Instant from, Instant to) {
+        checkArgument(!to.isBefore(from), "to %s is before from %s", to, from);
+        List<Double> pricePerInterval = profile.pricePerInterval();
+        int startIndex = firstUnendedProfileIndex(from);
+        long secondsToEnd = Duration.between(profileStart, to).toSeconds();
+        int endIndex = secondsToEnd <= 0 ? 0 : (int) Math.min(Math.ceilDiv(secondsToEnd, profile.intervalLengthSec()), pricePerInterval.size());
+        endIndex = Math.max(endIndex, startIndex);
+        if (startIndex == 0 && endIndex == pricePerInterval.size()) {
+            return this;
+        }
+        int newSize = endIndex - startIndex;
+        int idxOfPredictedPriceStart = Math.clamp((long) profile.idxOfPredictedPriceStart() - startIndex, 0, newSize);
+        return new Prices(startOfProfileIndex(startIndex),
+                          new PriceProfile(profile.intervalLengthSec(), idxOfPredictedPriceStart, pricePerInterval.subList(startIndex, endIndex)));
     }
 
     @Override

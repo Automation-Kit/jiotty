@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.energy.octopus;
 
 import com.google.common.reflect.TypeToken;
+import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
 import net.yudichev.jiotty.connector.octopusenergy.ConsumptionRow;
 import net.yudichev.jiotty.connector.octopusenergy.MpanRegionResolver;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
@@ -40,13 +41,16 @@ import static com.google.common.base.Preconditions.checkNotNull;
 ///
 /// Callers supply the already-acquired connector handle ([OctopusRegionService] / [OctopusAccountService]); the factory does not own the handle's lifecycle.
 public final class OctopusStreams {
+    /// Octopus' name for the payment method of the rows that give the prices charged to a customer who pays by direct debit.
+    public static final String DIRECT_DEBIT = "DIRECT_DEBIT";
     private static final Duration HALF_HOUR = Duration.ofMinutes(30);
     private static final Duration ONE_DAY = Duration.ofDays(1);
     // Cache schema versions for the Octopus connector DTOs cached by these streams. The DTOs live in jiotty-connector-octopusenergy, which must not depend on
-    // the cache module to carry a @CacheSchemaVersion, so the version is declared here at stream-definition. Bump the relevant one when that DTO's serialized
-    // shape changes (a renamed/removed/retyped field) so the old cached rows recompute instead of mis-decoding. They version independently.
-    private static final int RATES_SCHEMA_VERSION = 2;
-    private static final int STANDING_CHARGES_SCHEMA_VERSION = 1;
+    // the cache module to carry a @CacheSchemaVersion, so the version is declared here at stream-definition. Bump the relevant one when that DTO's serialised
+    // shape changes (a renamed/removed/retyped field), or when the mapping from response rows to slots changes, so the old cached rows recompute instead of
+    // mis-decoding or keeping a wrong row. They version independently.
+    private static final int RATES_SCHEMA_VERSION = 3;
+    private static final int STANDING_CHARGES_SCHEMA_VERSION = 2;
     private static final int CONSUMPTION_SCHEMA_VERSION = 1;
 
     private OctopusStreams() {
@@ -54,14 +58,18 @@ public final class OctopusStreams {
 
     /// Returns a handle on the `octopus.rates:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandardUnitRates].
     /// Each half-hour slot maps to whichever returned rate's `[validFrom, validTo)` window contains it: an exact match for half-hourly tariffs (each
-    /// window is one half-hour), the covering window for flat or multi-day tariffs. A slot no returned rate covers is left absent (uncached) so a future read
-    /// requests it again: an uncovered slot can be a future or not-yet-published half-hour whose rate will exist later, so it must stay re-queryable rather
-    /// than be recorded as definitively empty.
+    /// window is one half-hour), the covering window for flat or multi-day tariffs. Only rows whose payment method is empty or {@value #DIRECT_DEBIT} are
+    /// used. A slot that no returned rate covers is left absent, so a later read requests it again: its rate may not be published yet. The returned map has
+    /// no entry for a slot that starts after `timeProvider`'s current instant under a rate with no end date, because Octopus can still end that rate before
+    /// the slot.
+    ///
+    /// @param timeProvider read at every fetch, which runs long after the stream is defined
     public static TimeSeriesStream<StandardUnitRate> ratesStream(TimeSeriesCache cache,
                                                                  OctopusRegionService regionService,
+                                                                 CurrentDateTimeProvider timeProvider,
                                                                  String productCode,
                                                                  String tariffCode) {
-        char regionLetter = validateRegionScopedArgs(cache, regionService, productCode, tariffCode);
+        char regionLetter = validateRegionScopedArgs(cache, regionService, timeProvider, productCode, tariffCode);
         return cache.defineStream(
                 "octopus.rates:" + productCode + ":" + tariffCode,
                 Scope.region(String.valueOf(regionLetter)),
@@ -69,19 +77,28 @@ public final class OctopusStreams {
                 new TypeToken<>() {},
                 RATES_SCHEMA_VERSION,
                 slots -> regionService.getStandardUnitRates(productCode, tariffCode, slots.first(), slots.last().plus(HALF_HOUR))
-                                      .thenApply(rates -> mapSlotsToCoveringWindow(
-                                              slots, rates, StandardUnitRate::validFrom, rate -> rate.validTo().orElse(null), false)));
+                                      .thenApply(rates -> mapSlotsToCoveringWindow(slots,
+                                                                                   rates,
+                                                                                   StandardUnitRate::validFrom,
+                                                                                   rate -> rate.validTo().orElse(null),
+                                                                                   StandardUnitRate::paymentMethod,
+                                                                                   timeProvider.currentInstant(),
+                                                                                   false)));
     }
 
     /// Returns a handle on the `octopus.standing:<productCode>:<tariffCode>` stream backed by [OctopusRegionService#getStandingCharges]. Each daily
-    /// slot maps to whichever returned charge's `[validFrom, validTo)` window contains the slot's start instant; slots not covered by any returned charge are
-    /// tombstoned (negative-cached) so a future call does not re-request them — this stream is only ever read for settled past days, so an uncovered slot is
-    /// definitively empty.
+    /// slot maps to whichever returned charge's `[validFrom, validTo)` window contains the slot's start instant. Only rows whose payment method is empty or
+    /// {@value #DIRECT_DEBIT} are used. A slot that no returned charge covers is cached as empty, since this stream is read only for past days, whose
+    /// charges Octopus have already published. A slot that starts after `timeProvider`'s current
+    /// instant and falls under a charge with no end date is left absent, because Octopus can still end that charge before the slot.
+    ///
+    /// @param timeProvider read at every fetch, which runs long after the stream is defined
     public static TimeSeriesStream<StandingCharge> standingChargesStream(TimeSeriesCache cache,
                                                                          OctopusRegionService regionService,
+                                                                         CurrentDateTimeProvider timeProvider,
                                                                          String productCode,
                                                                          String tariffCode) {
-        char regionLetter = validateRegionScopedArgs(cache, regionService, productCode, tariffCode);
+        char regionLetter = validateRegionScopedArgs(cache, regionService, timeProvider, productCode, tariffCode);
         return cache.defineStream(
                 "octopus.standing:" + productCode + ":" + tariffCode,
                 Scope.region(String.valueOf(regionLetter)),
@@ -93,6 +110,8 @@ public final class OctopusStreams {
                                                                                             charges,
                                                                                             StandingCharge::validFrom,
                                                                                             charge -> charge.validTo().orElse(null),
+                                                                                            StandingCharge::paymentMethod,
+                                                                                            timeProvider.currentInstant(),
                                                                                             true)));
     }
 
@@ -120,14 +139,18 @@ public final class OctopusStreams {
                                        .thenApply(rows -> indexByTombstoningMisses(slots, rows, ConsumptionRow::intervalStart)));
     }
 
-    /// Shared precondition prelude for [#ratesStream] / [#standingChargesStream]: validates non-null cache + service and non-blank product/tariff codes, then
-    /// returns the region letter derived from the tariff code's trailing character.
-    private static char validateRegionScopedArgs(TimeSeriesCache cache, OctopusRegionService regionService, String productCode, String tariffCode) {
+    /// Checks the arguments of [#ratesStream] and [#standingChargesStream] and returns [OctopusTariffCode#region] of `tariffCode`.
+    private static char validateRegionScopedArgs(TimeSeriesCache cache,
+                                                 OctopusRegionService regionService,
+                                                 CurrentDateTimeProvider timeProvider,
+                                                 String productCode,
+                                                 String tariffCode) {
         checkNotNull(cache, "cache");
         checkNotNull(regionService, "regionService");
+        checkNotNull(timeProvider, "timeProvider");
         checkArgument(productCode != null && !productCode.isBlank(), "productCode must be non-blank");
         checkArgument(tariffCode != null && !tariffCode.isBlank(), "tariffCode must be non-blank");
-        return tariffCode.charAt(tariffCode.length() - 1);
+        return OctopusTariffCode.region(tariffCode);
     }
 
     /// Builds a `slot → Optional<value>` map by indexing each returned row by its `slotKeyExtractor`, then resolving every requested slot: a slot with a
@@ -147,37 +170,58 @@ public final class OctopusStreams {
         return result;
     }
 
-    /// Maps each requested slot to the row whose `[validFrom, validTo)` window contains it, where a null `validToExclusive` means "open-ended" (the current
-    /// row). Rows are indexed by `validFrom` in a [NavigableMap], so each slot resolves with one floor lookup: an exact match when a window starts on the slot
-    /// (half-hourly data), the covering window otherwise (flat or multi-day data). Windows are non-overlapping, so the latest window starting at-or-before the
-    /// slot is the one covering it. A covered slot carries [Optional#of] the row. A slot no window covers carries [Optional#empty] (a negative-cache tombstone,
-    /// so it is not re-requested) when `tombstoneMisses` is true, or is omitted entirely (so the cache re-requests it later) when false. The `byStart` index is
-    /// the intermediate that earns its keep: it turns the per-slot covering lookup from an O(slots·rows) scan into O(slots·log rows).
+    /// Maps each requested slot to the row whose `[validFrom, validTo)` window contains it, where a null `validToExclusive` means the row has no end. Only
+    /// the rows of [#indexDirectDebitRowsByStart] are used, and each slot is found with one floor lookup on their start. A covered slot carries [Optional#of]
+    /// the row, except a slot after `now` under a row with no end, which is omitted. A slot that no row covers carries [Optional#empty] when
+    /// `tombstoneMisses` is true, and is omitted when it is false.
+    ///
+    /// @param <T> the row type: a rate or a standing charge
     private static <T> Map<Instant, Optional<T>> mapSlotsToCoveringWindow(SortedSet<Instant> requestedMissingSlots,
                                                                           List<T> rows,
                                                                           Function<T, Instant> validFrom,
                                                                           Function<T, @Nullable Instant> validToExclusive,
+                                                                          Function<T, Optional<String>> paymentMethod,
+                                                                          Instant now,
                                                                           boolean tombstoneMisses) {
-        NavigableMap<Instant, T> byStart = new TreeMap<>();
-        for (T row : rows) {
-            byStart.put(validFrom.apply(row), row);
-        }
+        NavigableMap<Instant, T> rowsByStart = indexDirectDebitRowsByStart(rows, validFrom, paymentMethod);
         var result = HashMap.<Instant, Optional<T>>newHashMap(requestedMissingSlots.size());
         for (Instant slot : requestedMissingSlots) {
-            Map.Entry<Instant, T> covering = byStart.floorEntry(slot);
-            T value = null;
-            if (covering != null) {
-                Instant end = validToExclusive.apply(covering.getValue());
-                if (end == null || slot.isBefore(end)) {
-                    value = covering.getValue();
-                }
+            Map.Entry<Instant, T> coveringEntry = rowsByStart.floorEntry(slot);
+            Instant end = null;
+            boolean covered = false;
+            if (coveringEntry != null) {
+                end = validToExclusive.apply(coveringEntry.getValue());
+                covered = end == null || slot.isBefore(end);
             }
-            if (value != null) {
-                result.put(slot, Optional.of(value));
-            } else if (tombstoneMisses) {
-                result.put(slot, Optional.empty());
+            if (!covered) {
+                if (tombstoneMisses) {
+                    result.put(slot, Optional.empty());
+                }
+            } else if (end != null || !slot.isAfter(now)) {
+                result.put(slot, Optional.of(coveringEntry.getValue()));
             }
         }
         return result;
+    }
+
+    /// @param <T> the row type: a rate or a standing charge
+    /// @return the rows for which [#appliesToDirectDebit] holds, by their start; their windows do not overlap
+    static <T> NavigableMap<Instant, T> indexDirectDebitRowsByStart(List<T> rows, Function<T, Instant> validFrom, Function<T, Optional<String>> paymentMethod) {
+        // The index by start turns each slot's lookup of its covering row into one floorEntry, O(log rows), where a scan would be O(rows) per slot.
+        NavigableMap<Instant, T> rowsByStart = new TreeMap<>();
+        for (T row : rows) {
+            if (appliesToDirectDebit(paymentMethod.apply(row).orElse(null))) {
+                rowsByStart.put(validFrom.apply(row), row);
+            }
+        }
+        return rowsByStart;
+    }
+
+    /// Whether a rate or standing-charge row with this `paymentMethod` is the row whose price a customer paying by direct debit is charged: a row for every
+    /// payment method or a {@value #DIRECT_DEBIT} one. Octopus price some tariffs per payment method and return a row for each over the same window.
+    ///
+    /// @param paymentMethod the row's payment method, `null` for a row that applies to every payment method
+    private static boolean appliesToDirectDebit(@Nullable String paymentMethod) {
+        return paymentMethod == null || paymentMethod.equals(DIRECT_DEBIT);
     }
 }

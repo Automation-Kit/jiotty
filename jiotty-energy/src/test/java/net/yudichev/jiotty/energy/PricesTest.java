@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PricesTest {
     @Test
@@ -62,6 +63,47 @@ class PricesTest {
         var prices = new Prices(Instant.EPOCH, new PriceProfile(60, 0, List.of(0.1, 0.2, 0.3)));
 
         assertThat(prices.startOfProfileIndex(prices.firstUnendedProfileIndex(Instant.EPOCH.plusSeconds(6000)))).isEqualTo(prices.profileEnd());
+    }
+
+    @Test
+    void viewCovering_endBeforeStart_isRejected() {
+        var prices = new Prices(Instant.EPOCH, new PriceProfile(60, 2, List.of(0.1, 0.2)));
+
+        assertThatThrownBy(() -> prices.viewCovering(Instant.EPOCH.plusSeconds(60), Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void viewCovering_keepsTheIntervalsOverlappingTheRange() {
+        var prices = new Prices(Instant.EPOCH, new PriceProfile(60, 2, List.of(0.1, 0.2, 0.3, 0.4)));
+
+        Prices view = prices.viewCovering(Instant.EPOCH.plusSeconds(60), Instant.EPOCH.plusSeconds(150));
+
+        assertThat(view.profileStart()).isEqualTo(Instant.EPOCH.plusSeconds(60));
+        assertThat(view.profile().pricePerInterval()).containsExactly(0.2, 0.3);
+        assertThat(view.profile().idxOfPredictedPriceStart()).isEqualTo(1);
+    }
+
+    @Test
+    void viewCovering_theWholeProfile_returnsIt() {
+        var prices = new Prices(Instant.EPOCH, new PriceProfile(60, 3, List.of(0.1, 0.2, 0.3)));
+
+        assertThat(prices.viewCovering(Instant.EPOCH.minusSeconds(600), Instant.EPOCH.plusSeconds(600))).isSameAs(prices);
+    }
+
+    @Test
+    void viewCovering_keepsEveryIntervalPredictedOrActualAsItWas() {
+        var prices = new Prices(Instant.EPOCH, new PriceProfile(60, 1, List.of(0.1, 0.2, 0.3)));
+
+        assertThat(prices.viewCovering(Instant.EPOCH.plusSeconds(120), Instant.EPOCH.plusSeconds(180)).profile().idxOfPredictedPriceStart()).isZero();
+        assertThat(prices.viewCovering(Instant.EPOCH, Instant.EPOCH.plusSeconds(60)).profile().idxOfPredictedPriceStart()).isEqualTo(1);
+    }
+
+    @Test
+    void viewCovering_outsideTheProfile_isEmpty() {
+        var prices = new Prices(Instant.EPOCH, new PriceProfile(60, 3, List.of(0.1, 0.2, 0.3)));
+
+        assertThat(prices.viewCovering(Instant.EPOCH.plusSeconds(600), Instant.EPOCH.plusSeconds(900)).profile().pricePerInterval()).isEmpty();
+        assertThat(prices.viewCovering(Instant.EPOCH.minusSeconds(900), Instant.EPOCH.minusSeconds(600)).profile().pricePerInterval()).isEmpty();
     }
 
     /// An empty curve has no slot to be in and none still to run, so the two answers differ by shape rather than by value.

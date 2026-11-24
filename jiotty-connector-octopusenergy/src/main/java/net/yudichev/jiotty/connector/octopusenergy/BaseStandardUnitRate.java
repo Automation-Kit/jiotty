@@ -27,4 +27,9 @@ interface BaseStandardUnitRate {
     /// date is not set yet. A half-hourly (Agile) rate always has one.
     @JsonProperty("valid_to")
     Optional<Instant> validTo();
+
+    /// The payment method that this rate is for, such as `DIRECT_DEBIT` or `NON_DIRECT_DEBIT`; empty when the rate applies to every payment method. For a
+    /// tariff whose price depends on the payment method, Octopus list one rate for each payment method, with the same [#validFrom()] and [#validTo()].
+    @JsonProperty("payment_method")
+    Optional<String> paymentMethod();
 }

@@ -19,6 +19,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -29,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Stream;
 
 import static com.google.common.base.Throwables.getCausalChain;
@@ -41,6 +44,7 @@ import static net.yudichev.jiotty.common.rest.OkHttpStubs.response;
 import static net.yudichev.jiotty.common.rest.OkHttpStubs.stubCalls;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -452,6 +456,58 @@ class OctopusEnergyImplTest {
                 assertThat(c.valueIncVat()).isEqualTo(50.0);
                 assertThat(c.valueExcVat()).isEqualTo(47.62);
             });
+        }
+    }
+
+    static Stream<Arguments> dayAndNightRateCalls() {
+        return Stream.of(arguments("day-unit-rates", (RatesCall) OctopusRegionService::getDayUnitRates),
+                         arguments("night-unit-rates", (RatesCall) OctopusRegionService::getNightUnitRates));
+    }
+
+    @ParameterizedTest
+    @MethodSource("dayAndNightRateCalls")
+    void getDayOrNightUnitRates_buildsUrlAndParsesResults(String endpoint, RatesCall call) {
+        Instant from = Instant.parse("2026-11-21T00:00:00Z");
+        Instant to = Instant.parse("2026-12-06T00:00:00Z");
+        stubGet(OctopusEnergyImpl.BASE_URL + "/products/IOG-SMB-VAR-26-11-04/electricity-tariffs/E-1R-IOG-SMB-VAR-26-11-04-A/" + endpoint + "/"
+                + "?page_size=" + OctopusEnergyImpl.MAX_PAGE_SIZE + "&period_from=" + from + "&period_to=" + to,
+                """
+                {
+                  "count": 1, "next": null, "previous": null,
+                  "results": [
+                    {"value_exc_vat": 9.9, "value_inc_vat": 9.9,
+                     "valid_from": "2026-11-05T00:00:00Z", "valid_to": null, "payment_method": null}
+                  ]
+                }
+                """);
+
+        try (OctopusRegionService region = octopusEnergy.region('A')) {
+            assertThat(call.get(region, "IOG-SMB-VAR-26-11-04", "E-1R-IOG-SMB-VAR-26-11-04-A", from, to))
+                    .succeedsWithin(Duration.ZERO)
+                    .satisfies(rates -> assertThat(rates).singleElement().satisfies(rate -> {
+                        assertThat(rate.valueIncVat()).isEqualTo(9.9);
+                        assertThat(rate.validFrom()).isEqualTo(Instant.parse("2026-11-05T00:00:00Z"));
+                        assertThat(rate.validTo()).isEmpty();
+                        assertThat(rate.paymentMethod()).isEmpty();
+                    }));
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("dayAndNightRateCalls")
+    void getDayOrNightUnitRates_tariffCodeRegionMismatch_failedFuture(String endpoint, RatesCall call) {
+        try (OctopusRegionService region = octopusEnergy.region('A')) {
+            assertThat(call.get(region,
+                                "IOG-SMB-VAR-26-11-04",
+                                "E-1R-IOG-SMB-VAR-26-11-04-B",
+                                Instant.parse("2026-11-21T00:00:00Z"),
+                                Instant.parse("2026-11-22T00:00:00Z")))
+                    .describedAs(endpoint)
+                    .failsWithin(Duration.ZERO)
+                    .withThrowableThat()
+                    .havingRootCause()
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .withMessageContaining("is not for region A");
         }
     }
 
@@ -879,4 +935,8 @@ class OctopusEnergyImplTest {
                 .hasSize(6);
     }
 
+    /// One of the [OctopusRegionService] methods that read a tariff's rates.
+    private interface RatesCall {
+        CompletableFuture<List<StandardUnitRate>> get(OctopusRegionService region, String productCode, String tariffCode, Instant from, Instant to);
+    }
 }

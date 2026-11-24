@@ -28,4 +28,9 @@ interface BaseStandingCharge {
     /// @return [Optional#empty()] for the current (open-ended) charge; populated for historical charges
     @JsonProperty("valid_to")
     Optional<Instant> validTo();
+
+    /// The payment method that this charge is for, such as `DIRECT_DEBIT` or `NON_DIRECT_DEBIT`; empty when the charge applies to every payment method. For
+    /// a tariff whose price depends on the payment method, Octopus list one charge for each payment method, with the same [#validFrom()] and [#validTo()].
+    @JsonProperty("payment_method")
+    Optional<String> paymentMethod();
 }

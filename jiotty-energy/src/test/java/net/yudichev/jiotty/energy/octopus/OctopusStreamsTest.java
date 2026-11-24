@@ -1,6 +1,7 @@
 package net.yudichev.jiotty.energy.octopus;
 
 import com.google.common.collect.ImmutableMap;
+import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.connector.octopusenergy.ConsumptionRow;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusRegionService;
@@ -21,6 +22,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
@@ -36,6 +38,7 @@ class OctopusStreamsTest {
     private static final String SERIAL = "99XXX99999";
     private static final String USER = "userId";
 
+    private final ProgrammableClock clock = new ProgrammableClock();
     private TimeSeriesCache cache;
     @Mock
     private OctopusRegionService regionService;
@@ -45,6 +48,75 @@ class OctopusStreamsTest {
     @BeforeEach
     void setUp() {
         cache = new InMemoryTimeSeriesCache();
+        clock.setTime(Instant.parse("2026-11-21T12:00:00Z"));
+    }
+
+    @Test
+    void ratesStream_directDebitRowWins_inEitherResponseOrder() {
+        Instant slot = Instant.parse("2026-10-15T00:00:00Z");
+        StandardUnitRate directDebit = rate("2026-09-30T23:00:00Z", "2026-12-31T00:00:00Z", 26.554).withPaymentMethod(OctopusStreams.DIRECT_DEBIT);
+        StandardUnitRate nonDirectDebit = rate("2026-09-30T23:00:00Z", "2026-12-31T00:00:00Z", 28.0484).withPaymentMethod("NON_DIRECT_DEBIT");
+        when(regionService.getStandardUnitRates(eq(PRODUCT), eq(TARIFF), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(directDebit, nonDirectDebit)))
+                .thenReturn(CompletableFuture.completedFuture(List.of(nonDirectDebit, directDebit)));
+
+        assertThat(OctopusStreams.ratesStream(cache, regionService, clock, PRODUCT, TARIFF).readRange(slot, slot).getNow(null))
+                .containsExactly(entry(slot, directDebit));
+        assertThat(OctopusStreams.ratesStream(new InMemoryTimeSeriesCache(), regionService, clock, PRODUCT, TARIFF).readRange(slot, slot).getNow(null))
+                .containsExactly(entry(slot, directDebit));
+    }
+
+    @Test
+    void standingChargesStream_directDebitRowWins_inEitherResponseOrder() {
+        Instant day = Instant.parse("2026-10-15T00:00:00Z");
+        StandingCharge directDebit = createCharge("2026-09-30T23:00:00Z", "2026-12-31T00:00:00Z", 54.44, OctopusStreams.DIRECT_DEBIT);
+        StandingCharge nonDirectDebit = createCharge("2026-09-30T23:00:00Z", "2026-12-31T00:00:00Z", 61.74, "NON_DIRECT_DEBIT");
+        when(regionService.getStandingCharges(eq(PRODUCT), eq(TARIFF), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(directDebit, nonDirectDebit)))
+                .thenReturn(CompletableFuture.completedFuture(List.of(nonDirectDebit, directDebit)));
+
+        assertThat(OctopusStreams.standingChargesStream(cache, regionService, clock, PRODUCT, TARIFF).readRange(day, day).getNow(null))
+                .containsExactly(entry(day, directDebit));
+        assertThat(OctopusStreams.standingChargesStream(new InMemoryTimeSeriesCache(), regionService, clock, PRODUCT, TARIFF).readRange(day, day).getNow(null))
+                .containsExactly(entry(day, directDebit));
+    }
+
+    @Test
+    void ratesStream_openEndedRate_cachesAPastSlot_andLeavesAFutureSlotToBeRequestedAgain() {
+        Instant pastSlot = Instant.parse("2026-11-21T11:30:00Z");
+        Instant futureSlot = Instant.parse("2026-11-21T12:30:00Z");
+        StandardUnitRate openEndedRate = StandardUnitRate.builder()
+                                                         .setValidFrom(Instant.parse("2026-09-30T23:00:00Z"))
+                                                         .setValueExcVat(26.554)
+                                                         .setValueIncVat(26.554)
+                                                         .build();
+        when(regionService.getStandardUnitRates(eq(PRODUCT), eq(TARIFF), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(openEndedRate)));
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, clock, PRODUCT, TARIFF);
+
+        assertThat(stream.readRange(pastSlot, futureSlot).getNow(null)).containsOnlyKeys(pastSlot, Instant.parse("2026-11-21T12:00:00Z"));
+        assertThat(stream.readRange(pastSlot, pastSlot).getNow(null)).containsOnlyKeys(pastSlot);
+        verify(regionService, times(1)).getStandardUnitRates(any(), any(), any(), any());
+
+        assertThat(stream.readRange(futureSlot, futureSlot).getNow(null)).isEmpty();
+        verify(regionService, times(2)).getStandardUnitRates(any(), any(), any(), any());
+    }
+
+    @Test
+    void standingChargesStream_openEndedCharge_leavesAFutureDayToBeRequestedAgain() {
+        Instant futureDay = Instant.parse("2026-11-22T00:00:00Z");
+        when(regionService.getStandingCharges(eq(PRODUCT), eq(TARIFF), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(StandingCharge.builder()
+                                                                                    .setValidFrom(Instant.parse("2026-09-30T23:00:00Z"))
+                                                                                    .setValueExcVat(54.44)
+                                                                                    .setValueIncVat(54.44)
+                                                                                    .build())));
+        TimeSeriesStream<StandingCharge> stream = OctopusStreams.standingChargesStream(cache, regionService, clock, PRODUCT, TARIFF);
+
+        assertThat(stream.readRange(futureDay, futureDay).getNow(null)).isEmpty();
+        assertThat(stream.readRange(futureDay, futureDay).getNow(null)).isEmpty();
+
+        verify(regionService, times(2)).getStandingCharges(any(), any(), any(), any());
     }
 
     @Test
@@ -59,8 +131,8 @@ class OctopusStreamsTest {
                         // Row whose window covers no requested slot — must not appear in the result.
                         rate("2024-01-15T01:00:00Z", "2024-01-15T01:30:00Z", 16.0))));
 
-        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
-        ImmutableMap<Instant, StandardUnitRate> result = stream.readRange(from, to).join();
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, clock, PRODUCT, TARIFF);
+        ImmutableMap<Instant, StandardUnitRate> result = stream.readRange(from, to).getNow(null);
 
         assertThat(result)
                 .hasEntrySatisfying(Instant.parse("2024-01-15T00:00:00Z"), rate -> assertThat(rate.valueIncVat()).isEqualTo(14.0))
@@ -78,8 +150,8 @@ class OctopusStreamsTest {
                 .thenReturn(CompletableFuture.completedFuture(List.of(
                         rate("2024-01-01T00:00:00Z", "2024-02-01T00:00:00Z", 24.5))));
 
-        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
-        ImmutableMap<Instant, StandardUnitRate> result = stream.readRange(from, to).join();
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, clock, PRODUCT, TARIFF);
+        ImmutableMap<Instant, StandardUnitRate> result = stream.readRange(from, to).getNow(null);
 
         assertThat(result)
                 .containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"),
@@ -100,8 +172,8 @@ class OctopusStreamsTest {
                                                                                       .setValueIncVat(24.255)
                                                                                       .build())));
 
-        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
-        ImmutableMap<Instant, StandardUnitRate> result = stream.readRange(from, to).join();
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, clock, PRODUCT, TARIFF);
+        ImmutableMap<Instant, StandardUnitRate> result = stream.readRange(from, to).getNow(null);
 
         assertThat(result)
                 .containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"), Instant.parse("2024-01-15T00:30:00Z"))
@@ -115,9 +187,9 @@ class OctopusStreamsTest {
         when(regionService.getStandardUnitRates(eq(PRODUCT), eq(TARIFF), any(), any()))
                 .thenReturn(CompletableFuture.completedFuture(List.of(rate("2024-01-15T00:00:00Z", "2024-01-15T00:30:00Z", 14.0))));
 
-        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
-        stream.readRange(from, to).join();
-        stream.readRange(from, to).join();
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, clock, PRODUCT, TARIFF);
+        stream.readRange(from, to).getNow(null);
+        stream.readRange(from, to).getNow(null);
 
         verify(regionService, times(1)).getStandardUnitRates(any(), any(), any(), any());
     }
@@ -142,8 +214,8 @@ class OctopusStreamsTest {
                                       // empty validTo = open-ended (current charge).
                                       .build())));
 
-        TimeSeriesStream<StandingCharge> stream = OctopusStreams.standingChargesStream(cache, regionService, PRODUCT, TARIFF);
-        ImmutableMap<Instant, StandingCharge> result = stream.readRange(day1, day2).join();
+        TimeSeriesStream<StandingCharge> stream = OctopusStreams.standingChargesStream(cache, regionService, clock, PRODUCT, TARIFF);
+        ImmutableMap<Instant, StandingCharge> result = stream.readRange(day1, day2).getNow(null);
 
         // day1 (2024-01-15) is covered by the [2024-01-01, 2024-01-16) charge (42.0).
         // day2 (2024-01-16) is covered by the open-ended [2024-01-16, ∞) charge (47.25).
@@ -162,7 +234,7 @@ class OctopusStreamsTest {
                         consumption("2024-01-15T00:30:00Z", "2024-01-15T01:00:00Z", 0.422))));
 
         TimeSeriesStream<ConsumptionRow> stream = OctopusStreams.consumptionStream(cache, accountService, USER, MPAN, SERIAL);
-        ImmutableMap<Instant, ConsumptionRow> result = stream.readRange(from, to).join();
+        ImmutableMap<Instant, ConsumptionRow> result = stream.readRange(from, to).getNow(null);
 
         assertThat(result)
                 .hasEntrySatisfying(Instant.parse("2024-01-15T00:00:00Z"), row -> assertThat(row.consumption()).isEqualTo(0.345))
@@ -178,9 +250,9 @@ class OctopusStreamsTest {
         when(regionService.getStandardUnitRates(eq(PRODUCT), eq(TARIFF), any(), any()))
                 .thenReturn(CompletableFuture.completedFuture(List.of()));   // no rate published yet
 
-        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, PRODUCT, TARIFF);
-        assertThat(stream.readRange(slot, slot).join()).isEmpty();
-        assertThat(stream.readRange(slot, slot).join()).isEmpty();
+        TimeSeriesStream<StandardUnitRate> stream = OctopusStreams.ratesStream(cache, regionService, clock, PRODUCT, TARIFF);
+        assertThat(stream.readRange(slot, slot).getNow(null)).isEmpty();
+        assertThat(stream.readRange(slot, slot).getNow(null)).isEmpty();
 
         verify(regionService, times(2)).getStandardUnitRates(any(), any(), any(), any());
     }
@@ -195,9 +267,9 @@ class OctopusStreamsTest {
                         consumption("2024-01-15T00:00:00Z", "2024-01-15T00:30:00Z", 0.345))));
 
         TimeSeriesStream<ConsumptionRow> stream = OctopusStreams.consumptionStream(cache, accountService, USER, MPAN, SERIAL);
-        assertThat(stream.readRange(from, to).join()).containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"));
+        assertThat(stream.readRange(from, to).getNow(null)).containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"));
         // Second read: both the value slot and the tombstoned empty slot are hits, so the connector is not called again.
-        assertThat(stream.readRange(from, to).join()).containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"));
+        assertThat(stream.readRange(from, to).getNow(null)).containsOnlyKeys(Instant.parse("2024-01-15T00:00:00Z"));
 
         verify(accountService, times(1)).getConsumption(any(), any(), any(), any());
     }
@@ -209,16 +281,16 @@ class OctopusStreamsTest {
         when(regionService.getStandingCharges(eq(PRODUCT), eq(TARIFF), any(), any()))
                 .thenReturn(CompletableFuture.completedFuture(List.of()));   // no charge covers the day
 
-        TimeSeriesStream<StandingCharge> stream = OctopusStreams.standingChargesStream(cache, regionService, PRODUCT, TARIFF);
-        assertThat(stream.readRange(day, day).join()).isEmpty();
-        assertThat(stream.readRange(day, day).join()).isEmpty();
+        TimeSeriesStream<StandingCharge> stream = OctopusStreams.standingChargesStream(cache, regionService, clock, PRODUCT, TARIFF);
+        assertThat(stream.readRange(day, day).getNow(null)).isEmpty();
+        assertThat(stream.readRange(day, day).getNow(null)).isEmpty();
 
         verify(regionService, times(1)).getStandingCharges(any(), any(), any(), any());
     }
 
     @Test
     void ratesStream_blankProductCode_throws() {
-        assertThatThrownBy(() -> OctopusStreams.ratesStream(cache, regionService, "", TARIFF))
+        assertThatThrownBy(() -> OctopusStreams.ratesStream(cache, regionService, clock, "", TARIFF))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("productCode must be non-blank");
     }
@@ -237,6 +309,16 @@ class OctopusStreamsTest {
                                .setValueExcVat(valueIncVat / 1.05)
                                .setValueIncVat(valueIncVat)
                                .build();
+    }
+
+    private static StandingCharge createCharge(String validFrom, String validTo, double valueIncVat, String paymentMethod) {
+        return StandingCharge.builder()
+                             .setValidFrom(Instant.parse(validFrom))
+                             .setValidTo(Instant.parse(validTo))
+                             .setValueExcVat(valueIncVat)
+                             .setValueIncVat(valueIncVat)
+                             .setPaymentMethod(paymentMethod)
+                             .build();
     }
 
     private static ConsumptionRow consumption(String intervalStart, String intervalEnd, double kwh) {

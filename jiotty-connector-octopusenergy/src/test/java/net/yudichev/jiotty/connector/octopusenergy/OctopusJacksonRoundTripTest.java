@@ -74,6 +74,8 @@ class OctopusJacksonRoundTripTest {
 
         assertThat(details.code()).isEqualTo("AGILE-23-12-06");
         assertThat(details.tariffsActiveAt()).isEqualTo(Instant.parse("2024-01-01T12:00:00Z"));
+        assertThat(details.tracker()).isFalse();
+        assertThat(details.fourRateEvElectricityTariffs()).isEmpty();
         assertThat(details.singleRegisterElectricityTariffs())
                 .hasEntrySatisfying("_A", regionEntry ->
                         assertThat(regionEntry).hasEntrySatisfying("direct_debit_monthly", variant -> {
@@ -149,6 +151,91 @@ class OctopusJacksonRoundTripTest {
 
         assertThat(rate.validFrom()).isEqualTo(Instant.parse("2026-10-01T00:00:00Z"));
         assertThat(rate.validTo()).isEmpty();
+        assertThat(rate.paymentMethod()).isEmpty();
+    }
+
+    @Test
+    void standardUnitRate_parsesPaymentMethod() {
+        StandardUnitRate rate = Json.parse("""
+                                           {"value_exc_vat": 26.554, "value_inc_vat": 26.554, "valid_from": "2026-09-30T23:00:00Z", "valid_to": null,
+                                            "payment_method": "DIRECT_DEBIT"}
+                                           """, StandardUnitRate.class);
+
+        assertThat(rate.paymentMethod()).contains("DIRECT_DEBIT");
+    }
+
+    @Test
+    void standingCharge_parsesPaymentMethod() {
+        StandingCharge charge = Json.parse("""
+                                           {"value_exc_vat": 61.74, "value_inc_vat": 61.74, "valid_from": "2026-09-30T23:00:00Z", "valid_to": null,
+                                            "payment_method": "NON_DIRECT_DEBIT"}
+                                           """, StandingCharge.class);
+
+        assertThat(charge.paymentMethod()).contains("NON_DIRECT_DEBIT");
+    }
+
+    @Test
+    void tariff_ignoresAnUnknownProperty() {
+        Tariff tariff = Json.parse("""
+                                   {"tariff_code": "E-1R-VAR-22-11-01-A", "valid_from": "2026-11-21T00:00:00Z", "valid_to": null, "new_field": 1}
+                                   """, Tariff.class);
+
+        assertThat(tariff.tariffCode()).isEqualTo("E-1R-VAR-22-11-01-A");
+    }
+
+    @Test
+    void productDetails_parsesFourRateTariffsAndTheTrackerFlag() {
+        ProductDetails details = Json.parse("""
+                                            {
+                                              "code": "IOG-SMB-VAR-26-11-04",
+                                              "display_name": "Intelligent Octopus Go",
+                                              "brand": "OCTOPUS_ENERGY",
+                                              "is_tracker": false,
+                                              "available_from": "2026-11-05T00:00:00Z",
+                                              "available_to": null,
+                                              "tariffs_active_at": "2026-11-21T12:00:00Z",
+                                              "single_register_electricity_tariffs": {},
+                                              "dual_register_electricity_tariffs": {},
+                                              "four_rate_ev_electricity_tariffs": {
+                                                "_A": {
+                                                  "direct_debit_monthly": {
+                                                    "code": "E-1R-IOG-SMB-VAR-26-11-04-A",
+                                                    "standing_charge_exc_vat": 51.94,
+                                                    "standing_charge_inc_vat": 51.94,
+                                                    "links": [],
+                                                    "day_unit_rate_inc_vat": 34.4638,
+                                                    "night_unit_rate_inc_vat": 9.9
+                                                  }
+                                                }
+                                              }
+                                            }
+                                            """, ProductDetails.class);
+
+        assertThat(details.tracker()).isFalse();
+        assertThat(details.singleRegisterElectricityTariffs()).isEmpty();
+        assertThat(details.dualRegisterElectricityTariffs()).isEmpty();
+        assertThat(details.fourRateEvElectricityTariffs())
+                .hasEntrySatisfying("_A", regionEntry ->
+                        assertThat(regionEntry).hasEntrySatisfying("direct_debit_monthly",
+                                                                   variant -> assertThat(variant.code()).isEqualTo("E-1R-IOG-SMB-VAR-26-11-04-A")));
+    }
+
+    @Test
+    void productDetails_readsTheTrackerFlag() {
+        ProductDetails details = Json.parse("""
+                                            {
+                                              "code": "SILVER-24-12-31",
+                                              "display_name": "Octopus Tracker",
+                                              "brand": "OCTOPUS_ENERGY",
+                                              "is_tracker": true,
+                                              "available_from": "2024-12-31T00:00:00Z",
+                                              "available_to": null,
+                                              "tariffs_active_at": "2026-11-21T12:00:00Z",
+                                              "single_register_electricity_tariffs": {}
+                                            }
+                                            """, ProductDetails.class);
+
+        assertThat(details.tracker()).isTrue();
     }
 
     @Test

@@ -1,13 +1,13 @@
 package net.yudichev.jiotty.energy.octopus;
 
 import com.fasterxml.jackson.core.JsonParseException;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.async.backoff.RetryableOperationExecutor;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.Either;
 import net.yudichev.jiotty.common.security.AuthState;
 import net.yudichev.jiotty.common.testutil.LogCapture;
 import net.yudichev.jiotty.connector.octopusenergy.AccountProperty;
@@ -23,13 +23,19 @@ import net.yudichev.jiotty.connector.octopusenergy.StandingCharge;
 import net.yudichev.jiotty.connector.octopusenergy.Tariff;
 import net.yudichev.jiotty.energy.EnergyPriceService;
 import net.yudichev.jiotty.energy.PriceProfile;
+import net.yudichev.jiotty.energy.PriceResult;
 import net.yudichev.jiotty.energy.Prices;
+import net.yudichev.jiotty.energy.TariffPeriod;
+import net.yudichev.jiotty.energy.TariffPricing;
+import net.yudichev.jiotty.energy.TariffTimeline;
 import net.yudichev.jiotty.timeseriescache.InMemoryTimeSeriesCache;
 import org.apache.logging.log4j.Level;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -46,9 +52,14 @@ import java.util.function.Supplier;
 
 import static com.google.common.base.Throwables.getCausalChain;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static java.util.concurrent.CompletableFuture.failedFuture;
 import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
 import static net.yudichev.jiotty.common.lang.EvenMoreObjects.mapIfNotNull;
+import static net.yudichev.jiotty.energy.octopus.TestPrices.FORWARD_WINDOW;
+import static net.yudichev.jiotty.energy.octopus.TestPrices.FORWARD_WINDOW_SLOTS;
+import static net.yudichev.jiotty.energy.octopus.TestPrices.createFlatPrices;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -65,13 +76,18 @@ class OctopusEnergyProviderServiceTest {
     private static final String METER_SERIAL = "99XXX99999";
     private static final String AGILE_TARIFF_A = "E-1R-AGILE-23-12-06-A";
     private static final String AGILE_TARIFF_B = "E-1R-AGILE-23-12-06-B";
-    private static final String GO_TARIFF_A = "E-1R-GO-VAR-22-10-14-A";
-    private static final String VARIABLE_TARIFF_A = "E-1R-VAR-22-11-01-A";
+    private static final String TRACKER_TARIFF_A = "E-1R-SILVER-24-12-31-A";
+    private static final String FLEXIBLE_TARIFF_A = "E-1R-VAR-22-11-01-A";
+    private static final String IOG_TARIFF_A = "E-1R-IOG-SMB-VAR-26-11-04-A";
     private static final Instant TARIFF_VALID_FROM = Instant.parse("2020-01-01T00:00:00Z");
     private static final Instant TARIFF_VALID_TO = Instant.parse("2099-01-01T00:00:00Z");
     /// The clock's time when each test starts, which is when the first account poll runs.
     private static final Instant START = Instant.parse("2024-01-01T10:00:00Z");
+    /// A switch between agreements inside [TestPrices#FORWARD_WINDOW] from [#START].
+    private static final Instant SWITCH = Instant.parse("2024-01-03T00:00:00Z");
+    private static final int SLOTS_TO_SWITCH = 76;
     private final InMemoryTimeSeriesCache cache = new InMemoryTimeSeriesCache();
+    private final ListenerBackedTaskExceptionHandlerRegistry taskFailureRegistry = new ListenerBackedTaskExceptionHandlerRegistry();
     private ProgrammableClock clock;
     @Mock
     private OctopusEnergy octopusEnergy;
@@ -80,11 +96,12 @@ class OctopusEnergyProviderServiceTest {
     @Mock
     private OctopusRegionService regionService;
     @Mock
-    private OctopusAgilePriceServiceRegistry octopusRegistry;
+    private OctopusTariffPriceServiceRegistry tariffRegistry;
     @Mock
     private PriceForecastServiceRegistry priceForecastRegistry;
-    private FakeAgilePriceService agileRegionA;
-    private FakeAgilePriceService agileRegionB;
+    private FakeTariffPriceService agileRegionA;
+    private FakeTariffPriceService agileRegionB;
+    private FakeTariffPriceService flexibleRegionA;
     private FakeForecastPriceService forecastRegionA;
     private FakeForecastPriceService forecastRegionB;
     private OctopusEnergyProviderService service;
@@ -95,14 +112,19 @@ class OctopusEnergyProviderServiceTest {
         clock.setTime(START);
         SchedulingExecutor executor = clock.createSingleThreadedSchedulingExecutor("provider");
 
-        agileRegionA = new FakeAgilePriceService();
-        agileRegionB = new FakeAgilePriceService();
+        agileRegionA = new FakeTariffPriceService();
+        agileRegionB = new FakeTariffPriceService();
+        flexibleRegionA = new FakeTariffPriceService();
+        var iogRegionA = new FakeTariffPriceService();
         forecastRegionA = new FakeForecastPriceService();
         forecastRegionB = new FakeForecastPriceService();
 
         lenient().when(octopusEnergy.account(ACCOUNT_ID, API_KEY)).thenReturn(accountService);
-        lenient().when(octopusRegistry.forTariff(eq("AGILE-23-12-06"), eq(AGILE_TARIFF_A))).thenReturn(agileRegionA);
-        lenient().when(octopusRegistry.forTariff(eq("AGILE-23-12-06"), eq(AGILE_TARIFF_B))).thenReturn(agileRegionB);
+        lenient().when(tariffRegistry.forTariff(AGILE_TARIFF_A)).thenReturn(createPricedSource(agileRegionA, TariffPricing.DYNAMIC, false));
+        lenient().when(tariffRegistry.forTariff(AGILE_TARIFF_B)).thenReturn(createPricedSource(agileRegionB, TariffPricing.DYNAMIC, false));
+        lenient().when(tariffRegistry.forTariff(FLEXIBLE_TARIFF_A)).thenReturn(createPricedSource(flexibleRegionA, TariffPricing.PUBLISHED, false));
+        lenient().when(tariffRegistry.forTariff(IOG_TARIFF_A)).thenReturn(createPricedSource(iogRegionA, TariffPricing.PUBLISHED, true));
+        lenient().when(tariffRegistry.forTariff(TRACKER_TARIFF_A)).thenReturn(completedFuture(TariffPriceSource.Unsupported.INSTANCE));
         lenient().when(priceForecastRegistry.forRegion('A')).thenReturn(forecastRegionA);
         lenient().when(priceForecastRegistry.forRegion('B')).thenReturn(forecastRegionB);
 
@@ -122,16 +144,16 @@ class OctopusEnergyProviderServiceTest {
         assertThat(forecastRegionA.subscribers).hasSize(1);
         assertThat(agileRegionB.subscribers).isEmpty();
 
-        // Real prices arrive — combine path notifies subscribers.
-        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        service.subscribeToPrices(received::add);
+        // The tariff's price service publishes, and the service delivers its prices to subscribers.
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.subscribeToPrices(deliveries::add);
         clock.tick();
 
         Prices realPrices = prices("10:00", 1, 5.0);
-        agileRegionA.publish(Either.left(realPrices));
+        agileRegionA.publish(realPrices);
         clock.tick();
 
-        assertThat(received).containsExactly(Either.left(realPrices));
+        assertThat(deliveries).containsExactly(realPrices);
     }
 
     @Test
@@ -139,16 +161,16 @@ class OctopusEnergyProviderServiceTest {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
         service.start();
         clock.tick();
-        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        service.subscribeToPrices(received::add);
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.subscribeToPrices(deliveries::add);
         clock.tick();
 
-        agileRegionA.publish(Either.left(prices("10:00", 1, 5.0)));
+        agileRegionA.publish(prices("10:00", 1, 5.0));
         clock.tick();
         forecastRegionA.publish(prices("10:00", 0, 7.0, 9.0));
         clock.tick();
 
-        assertThat(received).last().isEqualTo(Either.left(prices("10:00", 1, 5.0, 9.0)));
+        assertThat(deliveries).last().isEqualTo(prices("10:00", 1, 5.0, 9.0));
     }
 
     @Test
@@ -167,6 +189,20 @@ class OctopusEnergyProviderServiceTest {
     }
 
     @Test
+    void exportMeterPointOnly_isARetrievalError() {
+        ElectricityMeterPoint exportMeterPoint = meterPoint(true, createTariffOverTheTestWindow(AGILE_TARIFF_A));
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithMeterPoints(exportMeterPoint)));
+        List<PriceResult> deliveries = new ArrayList<>();
+
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+
+        assertThat(deliveries).singleElement().isInstanceOf(EnergyPriceService.Failure.PriceRetrievalError.class);
+        assertThat(agileRegionA.subscribers).isEmpty();
+    }
+
+    @Test
     void tariffChange_reroutesOctopusDelegate() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
 
@@ -174,7 +210,7 @@ class OctopusEnergyProviderServiceTest {
         clock.tick();
         assertThat(agileRegionA.subscribers).hasSize(1);
 
-        // Next 12h poll: user switched to tariff B (different region).
+        // Next 12h poll: the account's agreements are now on tariff B (different region).
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_B)));
         advanceToPoll(1);
 
@@ -184,44 +220,43 @@ class OctopusEnergyProviderServiceTest {
         assertThat(forecastRegionB.subscribers).describedAs("new forecast subscription opened").hasSize(1);
     }
 
-    /// The forecast fills slots past the real prices but never makes the real ones reach further, so the Agile delegate's expectation is the account's.
+    /// The forecast fills slots past the real prices but never makes the real ones reach further, so the next refresh time is the one that the Agile
+    /// tariff's [OctopusTariffPriceService] reports.
     @Test
-    void agileDelegateRefreshTime_isForwardedToSubscribers() {
+    void agileTariffRefreshTime_isForwardedToSubscribers() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
         service.start();
         clock.tick();
 
-        List<Instant> received = new ArrayList<>();
-        service.subscribeToNextRefreshTime(received::add);
+        List<Instant> deliveries = new ArrayList<>();
+        service.subscribeToNextRefreshTime(deliveries::add);
         clock.tick();
-        assertThat(received).describedAs("nothing until the delegate has said").isEmpty();
+        assertThat(deliveries).describedAs("nothing until the tariff's price service reports a refresh time").isEmpty();
 
         agileRegionA.publishRefreshTime(Instant.parse("2024-01-02T16:00:00Z"));
         clock.tick();
-        assertThat(received).containsExactly(Instant.parse("2024-01-02T16:00:00Z"));
+        assertThat(deliveries).containsExactly(Instant.parse("2024-01-02T16:00:00Z"));
 
-        // rerouting to another tariff picks up that delegate's expectation instead
+        // after the account moves to AGILE_TARIFF_B, the refresh time of its price service is delivered
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_B)));
         advanceToPoll(1);
         agileRegionB.publishRefreshTime(Instant.parse("2024-01-03T16:00:00Z"));
         clock.tick();
-        assertThat(received).containsExactly(Instant.parse("2024-01-02T16:00:00Z"), Instant.parse("2024-01-03T16:00:00Z"));
+        assertThat(deliveries).containsExactly(Instant.parse("2024-01-02T16:00:00Z"), Instant.parse("2024-01-03T16:00:00Z"));
     }
 
     @Test
     void accountFetchFailure_emitsPriceRetrievalError() {
-        // With RetryableOperationExecutor.noRetries() in setUp, a failed account fetch falls straight through to the whenComplete failure branch, which
-        // emits PriceRetrievalError to subscribers via the dedup path.
+        // With no retries, a failed account fetch is delivered to price subscribers as a PriceRetrievalError carrying the cause.
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
-        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
+        List<PriceResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToPrices(received::add);
+        service.subscribeToPrices(deliveries::add);
         clock.tick();
 
-        assertThat(received).hasSize(1).first().satisfies(either -> assertThat(either.getRight()).hasValueSatisfying(failure -> assertThat(failure)
-                .isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
-                                        err -> assertThat(err.cause()).hasMessageContaining("octopus is down"))));
+        assertThat(deliveries).singleElement().isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
+                                                                      err -> assertThat(err.cause()).hasMessageContaining("octopus is down"));
     }
 
     @Test
@@ -229,44 +264,44 @@ class OctopusEnergyProviderServiceTest {
         // Same exception type + message on the second poll → dedup suppresses the second emission.
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
-        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
+        List<PriceResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToPrices(received::add);
+        service.subscribeToPrices(deliveries::add);
         clock.tick();
-        assertThat(received).hasSize(1);
+        assertThat(deliveries).hasSize(1);
 
         // Next 12h poll: same outage continues, identical exception text.
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
         advanceToPoll(1);
 
-        assertThat(received).describedAs("dedup should suppress a second identical PriceRetrievalError").hasSize(1);
+        assertThat(deliveries).describedAs("dedup should suppress a second identical PriceRetrievalError").hasSize(1);
     }
 
     @Test
     void differentFailureMessage_isNotDeduplicated() {
         when(accountService.getAccount()).thenReturn(failure("octopus 500"));
 
-        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
+        List<PriceResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToPrices(received::add);
+        service.subscribeToPrices(deliveries::add);
         clock.tick();
-        assertThat(received).hasSize(1);
+        assertThat(deliveries).hasSize(1);
 
         when(accountService.getAccount()).thenReturn(failure("connection reset"));
         advanceToPoll(1);
 
-        assertThat(received).describedAs("a different exception message should fire a fresh PriceRetrievalError").hasSize(2);
+        assertThat(deliveries).describedAs("a different exception message should fire a fresh PriceRetrievalError").hasSize(2);
     }
 
     @Test
     void failedFirstLoadThenSuccess_routesToTheTariff() {
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
-        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
+        List<PriceResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToPrices(received::add);
+        service.subscribeToPrices(deliveries::add);
         clock.tick();
-        assertThat(received).hasSize(1);
+        assertThat(deliveries).hasSize(1);
 
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
         advanceToPoll(1);
@@ -278,12 +313,12 @@ class OctopusEnergyProviderServiceTest {
     @Test
     void failedRefreshAfterALoad_leavesTheAgilePricesAsTheyAre() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
-        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+        List<PriceResult> priceResults = new ArrayList<>();
         service.start();
         service.subscribeToPrices(priceResults::add);
         clock.tick();
         Prices realPrices = prices("10:00", 1, 5.0);
-        agileRegionA.publish(Either.left(realPrices));
+        agileRegionA.publish(realPrices);
         clock.tick();
 
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
@@ -291,89 +326,333 @@ class OctopusEnergyProviderServiceTest {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
         advanceToPoll(2);
 
-        assertThat(priceResults).containsExactly(Either.left(realPrices));
-        assertThat(service.getPrices()).contains(Either.left(realPrices));
+        assertThat(priceResults).containsExactly(realPrices);
+        assertThat(service.getPrices()).contains(realPrices);
         assertThat(agileRegionA.subscribers).describedAs("the delegate is kept through the failed refresh").hasSize(1);
     }
 
     @Test
     void failedRefreshAfterALoad_keepsTheIncompatibleTariff() {
-        when(accountService.getAccount()).thenReturn(completedFuture(account(GO_TARIFF_A)));
-        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+        when(accountService.getAccount()).thenReturn(completedFuture(account(TRACKER_TARIFF_A)));
+        List<PriceResult> priceResults = new ArrayList<>();
         service.start();
         service.subscribeToPrices(priceResults::add);
         clock.tick();
 
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
         advanceToPoll(1);
-        when(accountService.getAccount()).thenReturn(completedFuture(account(GO_TARIFF_A)));
+        when(accountService.getAccount()).thenReturn(completedFuture(account(TRACKER_TARIFF_A)));
         advanceToPoll(2);
 
-        assertThat(priceResults).containsExactly(Either.right(new EnergyPriceService.Failure.IncompatibleTariff(GO_TARIFF_A)));
-        assertThat(service.getPrices()).contains(Either.right(new EnergyPriceService.Failure.IncompatibleTariff(GO_TARIFF_A)));
+        assertThat(priceResults).containsExactly(new EnergyPriceService.Failure.IncompatibleTariff(TRACKER_TARIFF_A));
+        assertThat(service.getPrices()).contains(new EnergyPriceService.Failure.IncompatibleTariff(TRACKER_TARIFF_A));
     }
 
     @Test
     void currentAgileAgreementWithAFutureOpenEndedOne_routesToTheAgileTariff() {
         when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
                 createTariff(AGILE_TARIFF_A, "2023-06-01T00:00:00Z", "2024-06-01T00:00:00Z"),
-                createTariff(VARIABLE_TARIFF_A, "2024-06-01T00:00:00Z", null))));
+                createTariff(FLEXIBLE_TARIFF_A, "2024-06-01T00:00:00Z", null))));
 
         service.start();
         clock.tick();
 
         assertThat(agileRegionA.subscribers).hasSize(1);
+        assertThat(flexibleRegionA.subscribers).describedAs("an agreement past FORWARD_WINDOW from now is not resolved").isEmpty();
     }
 
     @Test
-    void currentOpenEndedNonAgileAgreement_emitsIncompatibleTariff() {
+    void currentOpenEndedFlexibleAgreement_routesToItsPublishedRates() {
         when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
                 createTariff(AGILE_TARIFF_A, "2023-01-01T00:00:00Z", "2023-12-01T00:00:00Z"),
-                createTariff(VARIABLE_TARIFF_A, "2023-12-01T00:00:00Z", null))));
-        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+                createTariff(FLEXIBLE_TARIFF_A, "2023-12-01T00:00:00Z", null))));
+        List<PriceResult> priceResults = new ArrayList<>();
 
         service.start();
         service.subscribeToPrices(priceResults::add);
         clock.tick();
-
-        assertThat(priceResults).containsExactly(Either.right(new EnergyPriceService.Failure.IncompatibleTariff(VARIABLE_TARIFF_A)));
-        assertThat(agileRegionA.subscribers).isEmpty();
-    }
-
-    @Test
-    void unparseableAccountResponse_emitsPriceRetrievalErrorWithoutRetry() {
-        // Empty account (no electricity meter points) → extractCurrentTariff throws; the service surfaces a PriceRetrievalError directly, no retry attempted.
-        when(accountService.getAccount()).thenReturn(completedFuture(OctopusAccountData.builder().build()));
-
-        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        service.start();
-        service.subscribeToPrices(received::add);
+        Prices flexiblePrices = createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554);
+        flexibleRegionA.publish(flexiblePrices);
         clock.tick();
 
-        assertThat(received).hasSize(1).first().satisfies(either -> assertThat(either.getRight())
-                .hasValueSatisfying(failure -> assertThat(failure).isInstanceOf(EnergyPriceService.Failure.PriceRetrievalError.class)));
+        assertThat(priceResults).containsExactly(flexiblePrices);
+        assertThat(agileRegionA.subscribers).isEmpty();
+        assertThat(forecastRegionA.subscribers).describedAs("no Agile agreement in the window, so no forecast").isEmpty();
     }
 
     @Test
-    void incompatibleTariff_emitsFailureAndClosesDelegates() {
+    void priceSubscriberThatThrows_isReportedUnderTheDeliveryName() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(FLEXIBLE_TARIFF_A)));
+        List<String> reportedTasks = new ArrayList<>();
+        taskFailureRegistry.addExceptionHandler((taskDescription, _) -> reportedTasks.add(taskDescription));
+
+        service.start();
+        service.subscribeToPrices(_ -> {
+            throw new IllegalStateException("subscriber bug");
+        });
+        clock.tick();
+        flexibleRegionA.publish(createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554));
+        clock.tick();
+
+        assertThat(reportedTasks).containsExactly("Delivering the Octopus prices");
+    }
+
+    @Test
+    void overlappingAgreements_rejoinAtTheEarliestBoundary() {
+        Instant earlierEnd = Instant.parse("2024-01-01T11:00:00Z");
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                // starts after the Agile agreement starts and ends before the Agile agreement ends
+                createTariff(FLEXIBLE_TARIFF_A, Instant.parse("2023-12-01T00:00:00Z"), earlierEnd))));
+        service.start();
+        clock.tick();
+        assertThat(flexibleRegionA.subscribers).hasSize(1);
+
+        clock.setTimeAndTick(earlierEnd);
+
+        assertThat(flexibleRegionA.subscribers).describedAs("the flexible agreement has left the window").isEmpty();
+    }
+
+    @Test
+    void accountWithNoMeterPoints_emitsAPriceRetrievalError() {
+        // An empty account (no electricity meter points) has no agreement in force, so the service delivers a PriceRetrievalError.
+        when(accountService.getAccount()).thenReturn(completedFuture(OctopusAccountData.builder().build()));
+
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+
+        assertThat(deliveries).singleElement().isInstanceOf(EnergyPriceService.Failure.PriceRetrievalError.class);
+    }
+
+    @Test
+    void unsupportedTariff_emitsIncompatibleTariffAndClosesDelegates() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
 
         service.start();
         clock.tick();
         assertThat(agileRegionA.subscribers).hasSize(1);
 
-        List<Either<Prices, EnergyPriceService.Failure>> received = new ArrayList<>();
-        service.subscribeToPrices(received::add);
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.subscribeToPrices(deliveries::add);
         clock.tick();
-        received.clear();
+        deliveries.clear();
 
-        // Next poll: user moved to non-Agile tariff.
-        when(accountService.getAccount()).thenReturn(completedFuture(account(GO_TARIFF_A)));
+        // Next poll: the account is now on a tariff that cannot be priced.
+        when(accountService.getAccount()).thenReturn(completedFuture(account(TRACKER_TARIFF_A)));
         advanceToPoll(1);
 
         assertThat(agileRegionA.subscribers).describedAs("Octopus subscription closed on IncompatibleTariff").isEmpty();
         assertThat(forecastRegionA.subscribers).describedAs("forecast subscription closed on IncompatibleTariff").isEmpty();
-        assertThat(received).contains(Either.right(new EnergyPriceService.Failure.IncompatibleTariff(GO_TARIFF_A)));
+        assertThat(deliveries).contains(new EnergyPriceService.Failure.IncompatibleTariff(TRACKER_TARIFF_A));
+    }
+
+    // ---- Joining agreements ----
+
+    /// An account on Agile until [#SWITCH] and on Flexible, with no end date, from then on.
+    @Test
+    void agileThenFlexible_joinsTheTwoAtTheSwitch() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                createTariff(FLEXIBLE_TARIFF_A, SWITCH, null))));
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+
+        agileRegionA.publish(createFlatPrices(START, SLOTS_TO_SWITCH, 12.0));
+        flexibleRegionA.publish(createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554));
+        clock.tick();
+
+        assertThat(deliveries).last().isInstanceOfSatisfying(Prices.class, prices -> {
+            assertThat(prices.profileStart()).isEqualTo(START);
+            assertThat(prices.profileEnd()).isEqualTo(START.plus(FORWARD_WINDOW));
+            assertThat(prices.profile().pricePerInterval().get(SLOTS_TO_SWITCH - 1)).isEqualTo(12.0);
+            assertThat(prices.profile().pricePerInterval().get(SLOTS_TO_SWITCH)).isEqualTo(26.554);
+            assertThat(prices.profile().idxOfPredictedPriceStart()).isEqualTo(FORWARD_WINDOW_SLOTS);
+        });
+        assertThat(forecastRegionA.subscribers).describedAs("the Agile agreement is in the window").hasSize(1);
+    }
+
+    @Test
+    void flexibleThenAgile_joinsTheTwoAtTheSwitch() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(FLEXIBLE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                createTariff(AGILE_TARIFF_A, SWITCH, null))));
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+
+        flexibleRegionA.publish(createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554));
+        agileRegionA.publish(createFlatPrices(START, 100, 12.0));
+        clock.tick();
+
+        assertThat(deliveries).last().isInstanceOfSatisfying(Prices.class, prices -> {
+            assertThat(prices.profile().pricePerInterval().get(SLOTS_TO_SWITCH - 1)).isEqualTo(26.554);
+            assertThat(prices.profile().pricePerInterval().get(SLOTS_TO_SWITCH)).isEqualTo(12.0);
+            assertThat(prices.profileEnd()).isEqualTo(START.plus(OctopusPriceSlots.SLOT_LENGTH.multipliedBy(100)));
+        });
+    }
+
+    /// The Agile stretch takes the forecast after its actual prices; the Flexible stretch after the switch does not.
+    @Test
+    void forecast_isJoinedToTheAgileStretchOnly() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                createTariff(FLEXIBLE_TARIFF_A, SWITCH, null))));
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+
+        agileRegionA.publish(createFlatPrices(START, 10, 12.0));
+        forecastRegionA.publish(createFlatPrices(START, 200, 30.0));
+        flexibleRegionA.publish(createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554));
+        clock.tick();
+
+        assertThat(deliveries).last().isInstanceOfSatisfying(Prices.class, prices -> {
+            assertThat(prices.profile().pricePerInterval().get(9)).isEqualTo(12.0);
+            assertThat(prices.profile().pricePerInterval().get(10)).isEqualTo(30.0);
+            assertThat(prices.profile().pricePerInterval().get(SLOTS_TO_SWITCH)).isEqualTo(26.554);
+            assertThat(prices.profile().idxOfPredictedPriceStart()).isEqualTo(10);
+        });
+    }
+
+    @Test
+    void supportedThenUnsupported_endsTheProfileAtTheSwitch_withNoRefreshExpected() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(FLEXIBLE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                createTariff(TRACKER_TARIFF_A, SWITCH, null))));
+        List<PriceResult> deliveries = new ArrayList<>();
+        List<Instant> refreshTimes = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        service.subscribeToNextRefreshTime(refreshTimes::add);
+        clock.tick();
+
+        flexibleRegionA.publish(createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554));
+        clock.tick();
+
+        assertThat(deliveries).last().isInstanceOfSatisfying(Prices.class, prices -> assertThat(prices.profileEnd()).isEqualTo(SWITCH));
+        assertThat(refreshTimes).last().isEqualTo(EnergyPriceService.NO_REFRESH_EXPECTED);
+    }
+
+    @Test
+    void laterStretchArrivingLate_extendsTheProfileWhenItComes() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                createTariff(FLEXIBLE_TARIFF_A, SWITCH, null))));
+        List<PriceResult> deliveries = new ArrayList<>();
+        List<Instant> refreshTimes = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        service.subscribeToNextRefreshTime(refreshTimes::add);
+        clock.tick();
+
+        agileRegionA.publish(createFlatPrices(START, SLOTS_TO_SWITCH, 12.0));
+        flexibleRegionA.publishRefreshTime(Instant.parse("2024-01-01T18:00:00Z"));
+        clock.tick();
+        assertThat(deliveries).last().isInstanceOfSatisfying(Prices.class, prices -> assertThat(prices.profileEnd()).isEqualTo(SWITCH));
+        assertThat(refreshTimes).describedAs("the Flexible stretch owns the slot at the profile's end")
+                                .last()
+                                .isEqualTo(Instant.parse("2024-01-01T18:00:00Z"));
+
+        flexibleRegionA.publish(createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554));
+        clock.tick();
+        assertThat(deliveries).last().isInstanceOfSatisfying(Prices.class, prices -> assertThat(prices.profileEnd()).isAfter(SWITCH));
+    }
+
+    @Test
+    void agreementBoundary_rejoinsWithoutWaitingForThePoll() {
+        Instant switchAt = Instant.parse("2024-01-01T12:00:00Z");
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), switchAt),
+                createTariff(FLEXIBLE_TARIFF_A, switchAt, null))));
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+        agileRegionA.publish(createFlatPrices(START, 4, 12.0));
+        flexibleRegionA.publish(createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554));
+        clock.tick();
+        assertThat(forecastRegionA.subscribers).hasSize(1);
+
+        clock.setTimeAndTick(switchAt);
+
+        assertThat(agileRegionA.subscribers).describedAs("the Agile agreement has left the window").isEmpty();
+        assertThat(forecastRegionA.subscribers).describedAs("no Agile agreement remains").isEmpty();
+        assertThat(deliveries).last().isInstanceOfSatisfying(Prices.class, prices -> {
+            assertThat(prices.profileStart()).isEqualTo(switchAt);
+            assertThat(prices.profile().pricePerInterval().getFirst()).isEqualTo(26.554);
+        });
+    }
+
+    /// An agreement that starts past the forward window when the account is fetched is joined as soon as the window reaches it, well before the next poll,
+    /// whether a switch between the agreements inside the window comes before or after that.
+    ///
+    /// @param switchAfterStart when the switch from the Flexible agreement to the first Agile one comes, after [#START]
+    @ParameterizedTest
+    @ValueSource(ints = {2, 6})
+    void agreementEnteringTheWindow_isJoinedWithoutWaitingForThePoll(int switchAfterStart) {
+        Instant laterAgileStart = START.plus(FORWARD_WINDOW).plus(Duration.ofHours(4));
+        Instant switchToAgile = START.plus(Duration.ofHours(switchAfterStart));
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(FLEXIBLE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), switchToAgile),
+                createTariff(AGILE_TARIFF_B, switchToAgile, laterAgileStart),
+                createTariff(AGILE_TARIFF_A, laterAgileStart, null))));
+        List<TariffTimeline> timelines = new ArrayList<>();
+        service.start();
+        service.subscribeToTariffTimeline(timelines::add);
+        clock.tick();
+        assertThat(agileRegionA.subscribers).describedAs("the later Agile agreement starts past the window").isEmpty();
+
+        clock.setTimeAndTick(laterAgileStart.minus(FORWARD_WINDOW).plus(OctopusPriceSlots.SLOT_LENGTH));
+
+        assertThat(agileRegionA.subscribers).hasSize(1);
+        TariffPeriod laterAgilePeriod = createPeriod(laterAgileStart, null, TariffPricing.DYNAMIC, false);
+        assertThat(timelines).last().satisfies(timeline -> assertThat(timeline.periods()).last().isEqualTo(laterAgilePeriod));
+    }
+
+    @Test
+    void failedResolution_publishesARetrievalError_andIsRetried() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(FLEXIBLE_TARIFF_A)));
+        when(tariffRegistry.forTariff(FLEXIBLE_TARIFF_A)).thenReturn(failedFuture(new RuntimeException("products endpoint is down")))
+                                                         .thenReturn(createPricedSource(flexibleRegionA, TariffPricing.PUBLISHED, false));
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+
+        assertThat(deliveries).singleElement().isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
+                                                                      error -> assertThat(error.cause()).hasMessage("products endpoint is down"));
+
+        clock.advanceTimeAndTick(OctopusPriceSlots.FAILURE_RETRY_DELAY);
+        Prices flexiblePrices = createFlatPrices(START, FORWARD_WINDOW_SLOTS, 26.554);
+        flexibleRegionA.publish(flexiblePrices);
+        clock.tick();
+
+        assertThat(deliveries).last().isEqualTo(flexiblePrices);
+    }
+
+    @Test
+    void timeline_describesEveryAgreementInTheWindow_andComesBeforeThePrices() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                createTariff(IOG_TARIFF_A, SWITCH, null))));
+        List<Object> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToTariffTimeline(deliveries::add);
+        service.subscribeToPrices(deliveries::add);
+        agileRegionA.publish(createFlatPrices(START, SLOTS_TO_SWITCH, 12.0));
+        clock.tick();
+
+        assertThat(deliveries).satisfiesExactly(
+                first -> assertThat(first).isEqualTo(new TariffTimeline(ImmutableList.of(
+                        createPeriod(Instant.parse("2023-06-01T00:00:00Z"), SWITCH, TariffPricing.DYNAMIC, false),
+                        createPeriod(SWITCH, null, TariffPricing.PUBLISHED, true)))),
+                second -> assertThat(second).isInstanceOf(Prices.class));
     }
 
     // ---- Account details ----
@@ -381,61 +660,61 @@ class OctopusEnergyProviderServiceTest {
     @Test
     void beforeFirstPoll_noAccountDetailsDelivered() {
         // No clock tick, so the scheduled poll has not run yet — a new subscriber sees nothing (there is no Loading state).
-        List<AccountFetchResult> received = new ArrayList<>();
+        List<AccountFetchResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToAccountDetails(received::add);
+        service.subscribeToAccountDetails(deliveries::add);
 
-        assertThat(received).isEmpty();
+        assertThat(deliveries).isEmpty();
     }
 
     @Test
     void successfulPoll_publishesLoadedAccountDetails() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
 
-        List<AccountFetchResult> received = new ArrayList<>();
+        List<AccountFetchResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToAccountDetails(received::add);
+        service.subscribeToAccountDetails(deliveries::add);
         clock.tick();
 
-        assertThat(received).contains(createLoadedResult(AGILE_TARIFF_A));
+        assertThat(deliveries).contains(createLoadedResult(AGILE_TARIFF_A));
     }
 
     @Test
     void failedPoll_publishesFailedAccountDetails() {
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
-        List<AccountFetchResult> received = new ArrayList<>();
+        List<AccountFetchResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToAccountDetails(received::add);
+        service.subscribeToAccountDetails(deliveries::add);
         clock.tick();
 
-        assertThat(received).last().isInstanceOfSatisfying(AccountFetchResult.Failed.class,
-                                                           failed -> assertThat(failed.cause()).hasMessageContaining("octopus is down"));
+        assertThat(deliveries).last().isInstanceOfSatisfying(AccountFetchResult.Failed.class,
+                                                             failed -> assertThat(failed.cause()).hasMessageContaining("octopus is down"));
     }
 
     @Test
     void consecutiveIdenticalFailures_publishOneFailedAccountDetail() {
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
-        List<AccountFetchResult> received = new ArrayList<>();
+        List<AccountFetchResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToAccountDetails(received::add);
+        service.subscribeToAccountDetails(deliveries::add);
         clock.tick();
 
         // Next 12h poll: same outage, identical exception text → deduplicated, not re-published.
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
         advanceToPoll(1);
 
-        assertThat(received).filteredOn(result -> result instanceof AccountFetchResult.Failed).hasSize(1);
+        assertThat(deliveries).filteredOn(result -> result instanceof AccountFetchResult.Failed).hasSize(1);
     }
 
     @Test
     void failureAfterSuccess_publishesNothing() {
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
 
-        List<AccountFetchResult> received = new ArrayList<>();
+        List<AccountFetchResult> deliveries = new ArrayList<>();
         service.start();
-        service.subscribeToAccountDetails(received::add);
+        service.subscribeToAccountDetails(deliveries::add);
         clock.tick();
 
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
@@ -444,8 +723,8 @@ class OctopusEnergyProviderServiceTest {
         when(accountService.getAccount()).thenReturn(failure("octopus is down"));
         advanceToPoll(2);
 
-        assertThat(received).satisfiesExactly(first -> assertThat(first).isInstanceOf(AccountFetchResult.Failed.class),
-                                              second -> assertThat(second).isEqualTo(createLoadedResult(AGILE_TARIFF_A)));
+        assertThat(deliveries).satisfiesExactly(first -> assertThat(first).isInstanceOf(AccountFetchResult.Failed.class),
+                                                second -> assertThat(second).isEqualTo(createLoadedResult(AGILE_TARIFF_A)));
     }
 
     @Test
@@ -456,8 +735,7 @@ class OctopusEnergyProviderServiceTest {
 
         assertThat(subscriptions.accountResults()).satisfiesExactly(first -> assertThat(first).isInstanceOf(AccountFetchResult.Failed.class),
                                                                     second -> assertThat(second).isEqualTo(createLoadedResult(AGILE_TARIFF_A)));
-        assertThat(subscriptions.priceResults()).singleElement().satisfies(either -> assertThat(either.getRight())
-                .hasValueSatisfying(failure -> assertThat(failure).isInstanceOf(EnergyPriceService.Failure.PriceRetrievalError.class)));
+        assertThat(subscriptions.priceResults()).singleElement().isInstanceOf(EnergyPriceService.Failure.PriceRetrievalError.class);
     }
 
     @Test
@@ -474,36 +752,41 @@ class OctopusEnergyProviderServiceTest {
     }
 
     @Test
-    void routingFailureOnTheFirstLoad_publishesARetrievalError() {
+    void routingFailureOnTheFirstLoad_publishesARetrievalError_andTheNextPollResolvesTheTariff() {
         when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
-        when(octopusRegistry.forTariff(eq("AGILE-23-12-06"), eq(AGILE_TARIFF_A))).thenThrow(new IllegalStateException("registry is stopping"));
-        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+        when(tariffRegistry.forTariff(AGILE_TARIFF_A)).thenThrow(new IllegalStateException("registry is stopping"))
+                                                      .thenReturn(createPricedSource(agileRegionA, TariffPricing.DYNAMIC, false));
+        List<PriceResult> priceResults = new ArrayList<>();
+        List<AccountFetchResult> accountResults = new ArrayList<>();
         service.start();
         service.subscribeToPrices(priceResults::add);
+        service.subscribeToAccountDetails(accountResults::add);
         clock.tick();
 
-        assertThat(priceResults).singleElement().satisfies(either -> assertThat(either.getRight()).hasValueSatisfying(
-                failure -> assertThat(failure).isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
-                                                                      error -> assertThat(error.cause()).hasRootCauseMessage("registry is stopping"))));
+        assertThat(priceResults).singleElement().isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
+                                                                        error -> assertThat(error.cause()).hasRootCauseMessage("registry is stopping"));
+        assertThat(accountResults).singleElement().isInstanceOf(AccountFetchResult.Failed.class);
+
+        advanceToPoll(1);
+        assertThat(agileRegionA.subscribers).hasSize(1);
+        assertThat(accountResults).last().isEqualTo(createLoadedResult(AGILE_TARIFF_A));
     }
 
     @Test
     void accountWithNoCurrentAgreement_keepsTheSupplyIdentifiersOutOfTheFailureAndTheLog() {
         when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
                 createTariff(AGILE_TARIFF_A, "2020-01-01T00:00:00Z", "2021-01-01T00:00:00Z"))));
-        List<Either<Prices, EnergyPriceService.Failure>> priceResults = new ArrayList<>();
+        List<PriceResult> priceResults = new ArrayList<>();
 
         try (LogCapture log = LogCapture.capture(OctopusEnergyProviderService.class, Level.DEBUG)) {
             service.start();
             service.subscribeToPrices(priceResults::add);
             clock.tick();
 
-            assertThat(priceResults).singleElement().satisfies(either -> assertThat(either.getRight()).hasValueSatisfying(
-                    failure -> assertThat(failure).isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
-                                                                          error -> assertThat(getCausalChain(error.cause()))
-                                                                                  .extracting(Throwable::toString)
-                                                                                  .allSatisfy(message -> assertThat(message)
-                                                                                          .doesNotContain(MPAN, METER_SERIAL)))));
+            assertThat(priceResults).singleElement().isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class, error -> {
+                assertThat(getCausalChain(error.cause())).extracting(Throwable::toString)
+                                                         .allSatisfy(message -> assertThat(message).doesNotContain(MPAN, METER_SERIAL));
+            });
             assertThat(log.lines().stream().flatMap(LogCapture.CapturedLine::text))
                     .isNotEmpty()
                     .allSatisfy(text -> assertThat(text).doesNotContain(MPAN, METER_SERIAL));
@@ -552,6 +835,146 @@ class OctopusEnergyProviderServiceTest {
 
         assertThat(result).isSameAs(subscription);
         verify(accountService).subscribeToAuthState(consumer);
+    }
+
+    // ---- Lifecycle ----
+
+    @Test
+    void pollWhilePreviousFetchIsInFlight_isSkipped() {
+        CompletableFuture<OctopusAccountData> firstFetch = new CompletableFuture<>();
+        when(accountService.getAccount()).thenReturn(firstFetch, completedFuture(account(AGILE_TARIFF_A)));
+        service.start();
+        clock.tick();
+
+        advanceToPoll(1);
+        verify(accountService, times(1)).getAccount();
+
+        firstFetch.complete(account(AGILE_TARIFF_A));
+        clock.tick();
+        advanceToPoll(2);
+        verify(accountService, times(2)).getAccount();
+    }
+
+    @Test
+    void resolutionStillRunning_isNotStartedAgain_andIsIgnoredOnceTheTariffHasLeftTheWindow() {
+        CompletableFuture<TariffPriceSource> pendingResolution = new CompletableFuture<>();
+        when(tariffRegistry.forTariff(FLEXIBLE_TARIFF_A)).thenReturn(pendingResolution);
+        when(accountService.getAccount()).thenReturn(completedFuture(account(FLEXIBLE_TARIFF_A)),
+                                                     completedFuture(account(FLEXIBLE_TARIFF_A)),
+                                                     completedFuture(account(AGILE_TARIFF_A)));
+        service.start();
+        clock.tick();
+
+        advanceToPoll(1);
+        verify(tariffRegistry, times(1)).forTariff(FLEXIBLE_TARIFF_A);
+
+        advanceToPoll(2);
+        pendingResolution.complete(new TariffPriceSource.Priced(flexibleRegionA, TariffPricing.PUBLISHED, false));
+        clock.tick();
+
+        assertThat(flexibleRegionA.subscribers).isEmpty();
+        assertThat(agileRegionA.subscribers).hasSize(1);
+    }
+
+    @Test
+    void twoFailedResolutions_areRetriedTogether() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                createTariff(FLEXIBLE_TARIFF_A, SWITCH, null))));
+        when(tariffRegistry.forTariff(AGILE_TARIFF_A)).thenReturn(failedFuture(new RuntimeException("down")),
+                                                                  createPricedSource(agileRegionA, TariffPricing.DYNAMIC, false));
+        when(tariffRegistry.forTariff(FLEXIBLE_TARIFF_A)).thenReturn(failedFuture(new RuntimeException("down")),
+                                                                     createPricedSource(flexibleRegionA, TariffPricing.PUBLISHED, false));
+        service.start();
+        clock.tick();
+
+        clock.advanceTimeAndTick(OctopusPriceSlots.FAILURE_RETRY_DELAY);
+
+        verify(tariffRegistry, times(2)).forTariff(AGILE_TARIFF_A);
+        verify(tariffRegistry, times(2)).forTariff(FLEXIBLE_TARIFF_A);
+        assertThat(agileRegionA.subscribers).hasSize(1);
+        assertThat(flexibleRegionA.subscribers).hasSize(1);
+    }
+
+    @Test
+    void updateFromATariffThatLeftTheWindow_isIgnored() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)), completedFuture(account(FLEXIBLE_TARIFF_A)));
+        List<PriceResult> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+        Consumer<PriceResult> staleSubscriber = agileRegionA.subscribers.getFirst();
+        advanceToPoll(1);
+        deliveries.clear();
+
+        staleSubscriber.accept(createFlatPrices(START, 4, 99.0));
+        clock.tick();
+
+        assertThat(deliveries).isEmpty();
+    }
+
+    @Test
+    void currentPrices_waitForTheTimeline_whileALaterTariffIsUnresolved() {
+        when(accountService.getAccount()).thenReturn(completedFuture(createAccountWithAgreements(
+                createTariff(AGILE_TARIFF_A, Instant.parse("2023-06-01T00:00:00Z"), SWITCH),
+                createTariff(FLEXIBLE_TARIFF_A, SWITCH, null))));
+        when(tariffRegistry.forTariff(FLEXIBLE_TARIFF_A)).thenReturn(failedFuture(new RuntimeException("down")),
+                                                                     createPricedSource(flexibleRegionA, TariffPricing.PUBLISHED, false));
+        List<Object> deliveries = new ArrayList<>();
+        service.start();
+        service.subscribeToTariffTimeline(deliveries::add);
+        service.subscribeToPrices(deliveries::add);
+        clock.tick();
+
+        agileRegionA.publish(createFlatPrices(START, SLOTS_TO_SWITCH, 12.0));
+        clock.tick();
+        assertThat(deliveries).describedAs("no timeline while the Flexible tariff is unresolved, so no prices either").isEmpty();
+
+        clock.advanceTimeAndTick(OctopusPriceSlots.FAILURE_RETRY_DELAY);
+        assertThat(deliveries).satisfiesExactly(first -> assertThat(first).isInstanceOf(TariffTimeline.class),
+                                                second -> assertThat(second).isInstanceOf(Prices.class));
+    }
+
+    @Test
+    void stop_closesTheSubscriptionsAndTheAccountOnTheExecutor() {
+        when(accountService.getAccount()).thenReturn(completedFuture(account(AGILE_TARIFF_A)));
+        service.start();
+        clock.tick();
+        assertThat(agileRegionA.subscribers).hasSize(1);
+
+        service.stop();
+        assertThat(agileRegionA.subscribers).describedAs("the teardown waits for the executor").hasSize(1);
+        clock.tick();
+
+        assertThat(agileRegionA.subscribers).isEmpty();
+        assertThat(agileRegionA.refreshTimeSubscribers).isEmpty();
+        assertThat(forecastRegionA.subscribers).isEmpty();
+        verify(accountService).close();
+    }
+
+    /// A stopped service makes no further call on Octopus with the user's API key: stopping cancels an account fetch that is still retrying, which ends its
+    /// retries.
+    @Test
+    void stopWhileTheAccountFetchIsRetrying_cancelsTheFetch() {
+        var retryingFetch = new CompletableFuture<OctopusAccountData>();
+        service = createService(clock.createSingleThreadedSchedulingExecutor("provider"), new RetryableOperationExecutor() {
+            // the service under test calls this only for its account fetch, whose T is OctopusAccountData
+            @SuppressWarnings("unchecked")
+            @Override
+            public <T> CompletableFuture<T> withBackOffAndRetry(String operationName,
+                                                                Supplier<? extends CompletableFuture<T>> action,
+                                                                BiConsumer<Long, Throwable> backoffEventConsumer) {
+                return (CompletableFuture<T>) retryingFetch;
+            }
+        });
+        service.start();
+        clock.tick();
+
+        service.stop();
+        assertThat(retryingFetch).describedAs("the teardown waits for the executor").isNotDone();
+        clock.tick();
+
+        assertThat(retryingFetch).isCancelled();
     }
 
     // ---- Caching invariant: a second query over the same historical range is served from the cache, not re-fetched from Octopus ----
@@ -644,14 +1067,23 @@ class OctopusEnergyProviderServiceTest {
         CompletableFuture<Optional<Instant>> result = service.latestConsumptionInstant(MPAN, METER_SERIAL);
         clock.tick();
 
-        assertThat(result.join()).contains(Instant.parse("2026-06-02T11:30:00Z"));
+        assertThat(result).succeedsWithin(Duration.ZERO).satisfies(latest -> assertThat(latest).hasValue(Instant.parse("2026-06-02T11:30:00Z")));
         // Direct connector call — the frontier probe must NOT route through the (tombstoning) consumption cache stream.
         verify(accountService, times(1)).getConsumption(any(), any(), any(), any());
     }
 
+    @Test
+    void construction_refusesANonPositiveForwardWindow() {
+        SchedulingExecutor serviceExecutor = clock.createSingleThreadedSchedulingExecutor("refused-provider");
+
+        assertThatThrownBy(() -> createService(serviceExecutor, RetryableOperationExecutor.noRetries(), Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("forwardWindow must be positive: PT0S");
+    }
+
     /// Moves the clock just past the `pollNumber`-th account poll after the first one, and runs what is due.
     private void advanceToPoll(int pollNumber) {
-        clock.setTimeAndTick(START.plus(OctopusEnergyProviderService.ACCOUNT_POLL_INTERVAL.multipliedBy(pollNumber)).plusSeconds(1));
+        clock.setTimeAndTick(START.plus(OctopusEnergyProviderService.DEFAULT_ACCOUNT_POLL_INTERVAL.multipliedBy(pollNumber)).plusSeconds(1));
     }
 
     private OctopusEnergyProviderService createService(SchedulingExecutor serviceExecutor) {
@@ -659,25 +1091,44 @@ class OctopusEnergyProviderServiceTest {
     }
 
     private OctopusEnergyProviderService createService(SchedulingExecutor serviceExecutor, RetryableOperationExecutor retryExecutor) {
+        return createService(serviceExecutor, retryExecutor, FORWARD_WINDOW);
+    }
+
+    private OctopusEnergyProviderService createService(SchedulingExecutor serviceExecutor,
+                                                       RetryableOperationExecutor retryExecutor,
+                                                       Duration forwardWindow) {
         return new OctopusEnergyProviderService(() -> serviceExecutor,
                                                 clock,
                                                 octopusEnergy,
                                                 () -> octopusEnergy.account(ACCOUNT_ID, API_KEY),
+                                                OctopusEnergyProviderService.DEFAULT_ACCOUNT_POLL_INTERVAL,
+                                                forwardWindow,
                                                 retryExecutor,
-                                                octopusRegistry,
+                                                tariffRegistry,
                                                 priceForecastRegistry,
                                                 cache,
-                                                new ListenerBackedTaskExceptionHandlerRegistry());
+                                                taskFailureRegistry);
     }
 
     /// Runs a cache-backed query twice over the same range, draining the provider's executor after each so the futures complete deterministically.
     private void readTwice(Supplier<CompletableFuture<?>> query) {
         CompletableFuture<?> first = query.get();
         clock.tick();
-        first.join();
+        assertThat(first).succeedsWithin(Duration.ZERO);
         CompletableFuture<?> second = query.get();
         clock.tick();
-        second.join();
+        assertThat(second).succeedsWithin(Duration.ZERO);
+    }
+
+    private static CompletableFuture<TariffPriceSource> createPricedSource(OctopusTariffPriceService service,
+                                                                           TariffPricing pricing,
+                                                                           boolean supplierManagedCharging) {
+        return completedFuture(new TariffPriceSource.Priced(service, pricing, supplierManagedCharging));
+    }
+
+    /// @param to the period's exclusive end, `null` for an open-ended period
+    private static TariffPeriod createPeriod(Instant from, @Nullable Instant to, TariffPricing pricing, boolean supplierManagedCharging) {
+        return TariffPeriod.builder().setFrom(from).setTo(to).setPricing(pricing).setSupplierManagedCharging(supplierManagedCharging).build();
     }
 
     private static StandardUnitRate rate(String validFrom, String validTo, double valueIncVat) {
@@ -720,8 +1171,12 @@ class OctopusEnergyProviderServiceTest {
     }
 
     private static OctopusAccountData createAccountWithAgreements(Tariff... agreements) {
+        return createAccountWithMeterPoints(meterPoint(false, agreements));
+    }
+
+    private static OctopusAccountData createAccountWithMeterPoints(ElectricityMeterPoint... meterPoints) {
         return OctopusAccountData.builder()
-                                 .addProperties(AccountProperty.builder().addElectricityMeterPoints(meterPoint(false, agreements)).build())
+                                 .addProperties(AccountProperty.builder().addElectricityMeterPoints(meterPoints).build())
                                  .build();
     }
 
@@ -769,7 +1224,7 @@ class OctopusEnergyProviderServiceTest {
 
     private static Prices prices(String start, int idxOfPredictedPriceStart, Double... pricesPerSlot) {
         return new Prices(Instant.parse("2024-01-01T" + start + ":00Z"),
-                          new PriceProfile(1800, idxOfPredictedPriceStart, List.of(pricesPerSlot)));
+                          new PriceProfile(OctopusPriceSlots.SLOT_LENGTH_SEC, idxOfPredictedPriceStart, List.of(pricesPerSlot)));
     }
 
     /// Starts a service whose account poll retries once, subscribes to its account details and prices, and runs its first poll.
@@ -785,7 +1240,7 @@ class OctopusEnergyProviderServiceTest {
     }
 
     /// What a service started by [#startRetryingService()] has published to its subscribers.
-    private record Subscriptions(List<AccountFetchResult> accountResults, List<Either<Prices, EnergyPriceService.Failure>> priceResults) {
+    private record Subscriptions(List<AccountFetchResult> accountResults, List<PriceResult> priceResults) {
     }
 
     /// A [RetryableOperationExecutor] that retries a failed attempt once, passing the failure to `backoffEventConsumer` first, as a real executor does between
@@ -805,19 +1260,32 @@ class OctopusEnergyProviderServiceTest {
         }
     }
 
-    /// Hand-rolled fake of [EnergyPriceService] that lets tests observe the subscriber list and publish results synchronously.
-    private static final class FakeAgilePriceService implements EnergyPriceService {
-        private final List<Consumer<Either<Prices, Failure>>> subscribers = new ArrayList<>();
+    /// Hand-rolled fake of [OctopusTariffPriceService] that lets tests observe the subscriber list and publish results synchronously. A new subscriber
+    /// receives the latest result, as from the real services.
+    private static final class FakeTariffPriceService implements OctopusTariffPriceService {
+        private final List<Consumer<PriceResult>> subscribers = new ArrayList<>();
         private final List<Consumer<Instant>> refreshTimeSubscribers = new ArrayList<>();
+        private @Nullable PriceResult latestResult;
 
         @Override
-        public Optional<Either<Prices, Failure>> getPrices() {
-            return Optional.empty();
+        public void start() {
         }
 
         @Override
-        public Closeable subscribeToPrices(Consumer<Either<Prices, Failure>> consumer) {
+        public void stop() {
+        }
+
+        @Override
+        public Optional<PriceResult> getPrices() {
+            return Optional.ofNullable(latestResult);
+        }
+
+        @Override
+        public Closeable subscribeToPrices(Consumer<PriceResult> consumer) {
             subscribers.add(consumer);
+            if (latestResult != null) {
+                consumer.accept(latestResult);
+            }
             return () -> subscribers.remove(consumer);
         }
 
@@ -827,7 +1295,8 @@ class OctopusEnergyProviderServiceTest {
             return () -> refreshTimeSubscribers.remove(consumer);
         }
 
-        void publish(Either<Prices, Failure> result) {
+        void publish(PriceResult result) {
+            latestResult = result;
             for (var s : new ArrayList<>(subscribers)) {
                 s.accept(result);
             }

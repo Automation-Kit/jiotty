@@ -9,6 +9,7 @@ import net.yudichev.jiotty.connector.octopusenergy.ProductDetails;
 import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
 import net.yudichev.jiotty.connector.octopusenergy.StandingCharge;
 import net.yudichev.jiotty.energy.EnergyPriceService;
+import net.yudichev.jiotty.energy.PriceProfile;
 
 import java.time.Instant;
 import java.util.List;
@@ -23,7 +24,10 @@ import java.util.function.Consumer;
 ///
 /// @implSpec The `query*` methods over time-series data ([#queryConsumption], [#queryRates], [#queryStandingCharges]) are backed by a slot-level cache:
 /// historical slots, once fetched, are served from cache forever after, so repeated or overlapping queries only ever hit the provider for slots not yet
-/// cached. Implementations MUST NOT expose any path that fetches this data bypassing that cache.
+/// cached. Implementations MUST NOT expose any path that fetches this data bypassing that cache, with one exception: the retrieval of the forward
+/// [PriceProfile] delivered through [EnergyPriceService#subscribeToPrices] for a tariff with published rates fetches its few rate rows directly, because a
+/// rate with no end date covers future slots that the cache must never hold as final. That retrieval returns prices for the slots ahead, never rows for a
+/// slot that the cache holds as settled.
 public interface EnergyProviderService extends EnergyPriceService {
     /// Subscribes to authentication-state changes for the account's credentials. The current state is delivered to the new subscriber immediately. The
     /// returned [Closeable] cancels the subscription.
@@ -44,14 +48,16 @@ public interface EnergyProviderService extends EnergyPriceService {
     CompletableFuture<ImmutableMap<Instant, ConsumptionRow>> queryConsumption(String userId, String mpan, String meterSerial, Instant from, Instant to);
 
     /// Returns the half-hourly standard unit rates for the given tariff over `[from, to]`, keyed by slot start in chronological order. Each slot maps to the
-    /// rate whose validity window covers it; slots with no published rate are absent.
+    /// rate whose validity window covers it; slots with no published rate are absent. Where Octopus prices the tariff per payment method, the direct-debit
+    /// rate is returned. A slot that starts after now and falls under a rate with no end date is absent too, because Octopus can still end that rate first.
     ///
     /// @param productCode the Octopus product code (e.g. `AGILE-23-12-06`)
     /// @param tariffCode  the region-specific tariff code (e.g. `E-1R-AGILE-23-12-06-A`); its trailing letter is the supply region
     CompletableFuture<ImmutableMap<Instant, StandardUnitRate>> queryRates(String productCode, String tariffCode, Instant from, Instant to);
 
     /// Returns the daily standing charges for the given tariff over `[from, to]`, keyed by day start in chronological order. Each day maps to the charge whose
-    /// validity window covers it; days with no published charge are absent.
+    /// validity window covers it; days with no published charge are absent. Where Octopus prices the tariff per payment method, the direct-debit charge is
+    /// returned. A day that starts after now and falls under a charge with no end date is absent too.
     CompletableFuture<ImmutableMap<Instant, StandingCharge>> queryStandingCharges(String productCode, String tariffCode, Instant from, Instant to);
 
     /// Returns the products the provider lists as available at `availableAt`.

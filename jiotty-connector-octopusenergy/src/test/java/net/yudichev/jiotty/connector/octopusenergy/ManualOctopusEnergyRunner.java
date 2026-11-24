@@ -6,6 +6,8 @@ import net.yudichev.jiotty.common.misc.UpstreamHealthHandler;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /// Manual smoke test against the live Octopus API. Not run by CI — invoked from an IDE run configuration.
 ///
@@ -73,25 +75,24 @@ final class ManualOctopusEnergyRunner {
         Instant from = Instant.now().minus(6, ChronoUnit.DAYS);
         Instant to = Instant.now().plus(1, ChronoUnit.DAYS);
         try (OctopusRegionService region = oe.region(regionLetter)) {
-            region.getStandardUnitRates(productCode, tariffCode, from, to)
-                  .whenComplete((value, throwable) -> {
-                      if (value != null) {
-                          System.out.println("STANDARD UNIT RATES (" + value.size() + "):");
-                          value.forEach(System.out::println);
-                      } else {
-                          throwable.printStackTrace();
-                      }
-                  });
-            region.getStandingCharges(productCode, tariffCode, from, to)
-                  .whenComplete((value, throwable) -> {
-                      if (value != null) {
-                          System.out.println("STANDING CHARGES (" + value.size() + "):");
-                          value.forEach(System.out::println);
-                      } else {
-                          throwable.printStackTrace();
-                      }
-                  });
+            print("STANDARD UNIT RATES", region.getStandardUnitRates(productCode, tariffCode, from, to));
+            // Octopus serve these two only for a tariff with separate day and night rates, one listed under the product's
+            // dual_register_electricity_tariffs or four_rate_ev_electricity_tariffs (such as E-1R-IOG-SMB-VAR-26-11-04-K), and fail them for any other.
+            print("DAY UNIT RATES", region.getDayUnitRates(productCode, tariffCode, from, to));
+            print("NIGHT UNIT RATES", region.getNightUnitRates(productCode, tariffCode, from, to));
+            print("STANDING CHARGES", region.getStandingCharges(productCode, tariffCode, from, to));
         }
+    }
+
+    private static void print(String heading, CompletableFuture<? extends List<?>> rowsFuture) {
+        rowsFuture.whenComplete((value, throwable) -> {
+            if (value != null) {
+                System.out.println(heading + " (" + value.size() + "):");
+                value.forEach(System.out::println);
+            } else {
+                throwable.printStackTrace();
+            }
+        });
     }
 
     private static void getConsumption(OctopusAccountService account, MpanAndMeter pair) {

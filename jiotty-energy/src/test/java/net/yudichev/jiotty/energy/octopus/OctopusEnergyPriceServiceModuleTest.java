@@ -5,10 +5,15 @@ import com.google.inject.Binding;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.TypeLiteral;
-import net.yudichev.jiotty.common.async.ExecutorModule;
+import net.yudichev.jiotty.common.async.ExecutorFactory;
+import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
+import net.yudichev.jiotty.common.async.ProgrammableClock;
+import net.yudichev.jiotty.common.async.SchedulingExecutor;
+import net.yudichev.jiotty.common.async.TaskFailureReporter;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
-import net.yudichev.jiotty.common.time.TimeModule;
+import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
+import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountData;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusAccountService;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusEnergy;
 import net.yudichev.jiotty.timeseriescache.TimeSeriesCache;
@@ -21,15 +26,18 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import static java.util.concurrent.CompletableFuture.completedFuture;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -37,12 +45,13 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class OctopusEnergyPriceServiceModuleTest {
     private final List<LifecycleComponent> startedComponents = new ArrayList<>();
+    private final ProgrammableClock clock = new ProgrammableClock();
     @Mock
     private OctopusEnergy octopusEnergy;
     @Mock
     private OctopusAccountService accountService;
     @Mock
-    private OctopusAgilePriceService.Factory agilePriceServiceFactory;
+    private OctopusTariffPriceServiceFactory tariffPriceServiceFactory;
     @Mock
     private PriceForecastServiceRegistry priceForecastRegistry;
     @Mock
@@ -64,30 +73,45 @@ class OctopusEnergyPriceServiceModuleTest {
     void credentials_openTheAccountTheyName() {
         when(octopusEnergy.account("A-AAAAAAAA", "sk_test_xxxxxxxxxxxx")).thenReturn(accountService);
 
-        startAndSubscribeToAuthState(OctopusEnergyPriceServiceModule.builder()
-                                                                    .setOctopusAccountId(literally("A-AAAAAAAA"))
-                                                                    .setOctopusApiKey(literally("sk_test_xxxxxxxxxxxx"))
-                                                                    .build());
+        startAndSubscribeToAuthState(builder()
+                                             .setOctopusAccountId(literally("A-AAAAAAAA"))
+                                             .setOctopusApiKey(literally("sk_test_xxxxxxxxxxxx"))
+                                             .build());
 
         verify(accountService).subscribeToAuthState(any());
     }
 
     @Test
     void accountService_isUsedInsteadOfOpeningAnAccount() {
-        startAndSubscribeToAuthState(OctopusEnergyPriceServiceModule.builder()
-                                                                    .setAccountService(literally(accountService))
-                                                                    .build());
+        startAndSubscribeToAuthState(builder()
+                                             .setAccountService(literally(accountService))
+                                             .build());
 
         verify(accountService).subscribeToAuthState(any());
         verifyNoInteractions(octopusEnergy);
     }
 
     @Test
+    void accountPollInterval_setsHowOftenTheAccountIsFetched() {
+        Duration interval = Duration.ofSeconds(5);
+        when(accountService.getAccount()).thenReturn(completedFuture(OctopusAccountData.builder().build()));
+        startAndSubscribeToAuthState(builder()
+                                             .setAccountService(literally(accountService))
+                                             .withAccountPollInterval(literally(interval))
+                                             .build());
+        clock.tick();
+
+        clock.advanceTimeAndTick(interval.multipliedBy(2));
+
+        verify(accountService, times(3)).getAccount();
+    }
+
+    @Test
     void build_refusesBothAccountSources() {
-        OctopusEnergyPriceServiceModule.Builder builder = OctopusEnergyPriceServiceModule.builder()
-                                                                                         .setOctopusAccountId(literally("A-AAAAAAAA"))
-                                                                                         .setOctopusApiKey(literally("sk_test_xxxxxxxxxxxx"))
-                                                                                         .setAccountService(literally(accountService));
+        OctopusEnergyPriceServiceModule.Builder builder = builder()
+                .setOctopusAccountId(literally("A-AAAAAAAA"))
+                .setOctopusApiKey(literally("sk_test_xxxxxxxxxxxx"))
+                .setAccountService(literally(accountService));
 
         assertThatThrownBy(builder::build).isInstanceOf(IllegalArgumentException.class);
     }
@@ -95,7 +119,7 @@ class OctopusEnergyPriceServiceModuleTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void build_refusesOneCredentialBesideTheAccountService(boolean apiKey) {
-        OctopusEnergyPriceServiceModule.Builder builder = withOneCredential(OctopusEnergyPriceServiceModule.builder(), apiKey)
+        OctopusEnergyPriceServiceModule.Builder builder = withOneCredential(builder(), apiKey)
                 .setAccountService(literally(accountService));
 
         assertThatThrownBy(builder::build).isInstanceOf(IllegalArgumentException.class);
@@ -104,14 +128,36 @@ class OctopusEnergyPriceServiceModuleTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void build_refusesOneCredentialAlone(boolean apiKey) {
-        OctopusEnergyPriceServiceModule.Builder builder = withOneCredential(OctopusEnergyPriceServiceModule.builder(), apiKey);
+        OctopusEnergyPriceServiceModule.Builder builder = withOneCredential(builder(), apiKey);
 
         assertThatThrownBy(builder::build).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void build_refusesNoAccountSource() {
-        assertThatThrownBy(() -> OctopusEnergyPriceServiceModule.builder().build()).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> builder().build()).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void build_refusesNoForwardWindow() {
+        OctopusEnergyPriceServiceModule.Builder builder = OctopusEnergyPriceServiceModule.builder().setAccountService(literally(accountService));
+
+        assertThatThrownBy(builder::build).isInstanceOf(NullPointerException.class).hasMessage("setForwardWindow was not called");
+    }
+
+    @Test
+    void nonPositiveForwardWindow_failsTheStart() {
+        ExposedKeyModule<EnergyProviderService> module = OctopusEnergyPriceServiceModule.builder()
+                                                                                        .setAccountService(literally(accountService))
+                                                                                        .setForwardWindow(literally(Duration.ZERO))
+                                                                                        .build();
+
+        assertThatThrownBy(() -> startAndSubscribeToAuthState(module)).hasRootCauseInstanceOf(IllegalArgumentException.class)
+                                                                      .hasRootCauseMessage("forwardWindow must be positive: PT0S");
+    }
+
+    private static OctopusEnergyPriceServiceModule.Builder builder() {
+        return OctopusEnergyPriceServiceModule.builder().setForwardWindow(literally(TestPrices.FORWARD_WINDOW));
     }
 
     private static OctopusEnergyPriceServiceModule.Builder withOneCredential(OctopusEnergyPriceServiceModule.Builder builder, boolean apiKey) {
@@ -119,11 +165,17 @@ class OctopusEnergyPriceServiceModuleTest {
     }
 
     private void startAndSubscribeToAuthState(ExposedKeyModule<EnergyProviderService> module) {
-        Injector injector = Guice.createInjector(ExecutorModule.builder().build(), TimeModule.builder().build(), new AbstractModule() {
+        Injector injector = Guice.createInjector(new AbstractModule() {
             @Override
             protected void configure() {
+                bind(ExecutorFactory.class).toInstance(clock);
+                bind(CurrentDateTimeProvider.class).toInstance(clock);
+                bind(TaskFailureReporter.class).toInstance(new ListenerBackedTaskExceptionHandlerRegistry());
                 bind(OctopusEnergy.class).toInstance(octopusEnergy);
-                bind(OctopusAgilePriceServiceRegistry.class).toInstance(new OctopusAgilePriceServiceRegistry(octopusEnergy, agilePriceServiceFactory));
+                SchedulingExecutor registryExecutor = clock.createSingleThreadedSchedulingExecutor("registry");
+                bind(OctopusTariffPriceServiceRegistry.class).toInstance(new OctopusTariffPriceServiceRegistry(() -> registryExecutor,
+                                                                                                               octopusEnergy,
+                                                                                                               tariffPriceServiceFactory));
                 bind(PriceForecastServiceRegistry.class).toInstance(priceForecastRegistry);
                 bind(TimeSeriesCache.class).toInstance(cache);
             }

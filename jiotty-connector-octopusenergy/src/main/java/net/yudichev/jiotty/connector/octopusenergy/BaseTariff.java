@@ -1,5 +1,6 @@
 package net.yudichev.jiotty.connector.octopusenergy;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import net.yudichev.jiotty.common.lang.PublicImmutablesStyle;
@@ -12,6 +13,7 @@ import java.util.Optional;
 @Value.Immutable
 @PublicImmutablesStyle
 @JsonDeserialize
+@JsonIgnoreProperties(ignoreUnknown = true)
 interface BaseTariff {
     /// The Octopus tariff code (e.g. `E-1R-AGILE-23-12-06-A`); the trailing letter is the supply region.
     @JsonProperty("tariff_code")

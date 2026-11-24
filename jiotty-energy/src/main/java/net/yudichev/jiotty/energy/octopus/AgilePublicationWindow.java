@@ -1,55 +1,53 @@
 package net.yudichev.jiotty.energy.octopus;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.time.ZoneId;
 import java.time.ZonedDateTime;
 
-/// Octopus's publication contract for Agile day-ahead prices, stated once because retrieval consults it from several places and boils it down to the one
-/// instant consumers see. Octopus publish tomorrow's rates from [#WINDOW_START] — usually within minutes, occasionally as late as 20:00 — against an Agile day
-/// that rolls over at [#DAY_BOUNDARY].
-final class AgilePublicationWindow {
-    /// Octopus publish on UK time wherever the process happens to run.
-    static final ZoneId ZONE = ZoneId.of("Europe/London");
-    /// The earliest Octopus publish tomorrow's rates; before this, a profile covering only today is expected rather than late.
+import static net.yudichev.jiotty.energy.octopus.OctopusPriceSlots.UK_ZONE;
+
+/// Octopus' schedule for publishing Agile prices. An Agile day runs from 23:00 to 23:00 UK time, and Octopus publish the prices of each Agile day from 16:00 UK
+/// time on the day before, usually within minutes and occasionally as late as 20:00.
+public final class AgilePublicationWindow {
+    /// The earliest time of day, UK time, at which Octopus publish the next Agile day's prices.
     static final LocalTime WINDOW_START = LocalTime.of(16, 0);
-    /// The time of day an Agile day rolls over, so also the point past which "tomorrow's prices" names a different day.
+    /// The time of day, UK time, at which one Agile day ends and the next begins.
     private static final LocalTime DAY_BOUNDARY = LocalTime.of(23, 0);
 
     private AgilePublicationWindow() {
     }
 
-    /// @return whether `now` falls at or after [#WINDOW_START] and before [#DAY_BOUNDARY], the band in which tomorrow's prices may appear at any moment
+    /// @return the time up to which Octopus should have published Agile prices by `now`: 23:00 UK time tomorrow if `now` is between 16:00 and 23:00 UK
+    ///         time, and the next 23:00 UK time otherwise
+    public static Instant expectedCoverage(Instant now) {
+        Instant closesAt = closesAt(now);
+        return isOpen(now) ? closesAt.atZone(UK_ZONE).plusDays(1).toInstant() : closesAt;
+    }
+
+    /// @return whether `now` is between [#WINDOW_START] and [#DAY_BOUNDARY], when Octopus may publish the next Agile day's prices at any moment
     static boolean isOpen(Instant now) {
-        LocalTime localTime = now.atZone(ZONE).toLocalTime();
+        LocalTime localTime = now.atZone(UK_ZONE).toLocalTime();
         return !localTime.isBefore(WINDOW_START) && localTime.isBefore(DAY_BOUNDARY);
     }
 
-    /// @return the end of the Agile day containing `now` — the first [#DAY_BOUNDARY] strictly after it
+    /// @return the end of the Agile day that `now` is in: the next [#DAY_BOUNDARY] after `now`
+    @VisibleForTesting
     static Instant closesAt(Instant now) {
-        ZonedDateTime localNow = now.atZone(ZONE);
+        ZonedDateTime localNow = now.atZone(UK_ZONE);
         LocalDate day = localNow.toLocalTime().isBefore(DAY_BOUNDARY) ? localNow.toLocalDate() : localNow.toLocalDate().plusDays(1);
-        return day.atTime(DAY_BOUNDARY).atZone(ZONE).toInstant();
+        return day.atTime(DAY_BOUNDARY).atZone(UK_ZONE).toInstant();
     }
 
-    /// @return how far a profile should reach given everything Octopus ought to have published by `now` — one Agile day past [#closesAt] once a window has
-    /// opened, [#closesAt] itself before that. The value is continuous across [#DAY_BOUNDARY]: the day that rolls over there is the one just published.
-    static Instant expectedCoverage(Instant now) {
-        Instant closesAt = closesAt(now);
-        return isOpen(now) ? closesAt.atZone(ZONE).plusDays(1).toInstant() : closesAt;
-    }
-
-    /// @return where the Agile day named by [#expectedCoverage] begins — one day earlier. A profile ending before this has a gap that the publication in
-    /// question starts after, so waiting for that publication will not close it.
+    /// @return the start of the last Agile day whose prices Octopus should have published by `now`: one day before [#expectedCoverage]
     static Instant expectedPublicationStart(Instant now) {
-        return expectedCoverage(now).atZone(ZONE).minusDays(1).toInstant();
+        return expectedCoverage(now).atZone(UK_ZONE).minusDays(1).toInstant();
     }
 
-    /// @return the start of the first publication window beginning strictly after `now`, so a `now` already inside one yields the following day's
+    /// @return the next [#WINDOW_START] after `now`
     static Instant nextWindowStartAfter(Instant now) {
-        ZonedDateTime localNow = now.atZone(ZONE);
-        ZonedDateTime todaysStart = localNow.toLocalDate().atTime(WINDOW_START).atZone(ZONE);
-        return (localNow.isBefore(todaysStart) ? todaysStart : todaysStart.plusDays(1)).toInstant();
+        return OctopusPriceSlots.nextUkTimeOfDayAfter(now, WINDOW_START);
     }
 }

@@ -23,4 +23,9 @@ public final class OctopusTariffCode {
         int lastDash = tariffCode.lastIndexOf('-');
         return secondDash > 0 && lastDash > secondDash ? tariffCode.substring(secondDash + 1, lastDash) : tariffCode;
     }
+
+    /// @return the supply region of a tariff code, its trailing letter (`E-1R-AGILE-24-10-01-A` → `A`)
+    public static char region(String tariffCode) {
+        return tariffCode.charAt(tariffCode.length() - 1);
+    }
 }

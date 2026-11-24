@@ -4,13 +4,14 @@ import net.yudichev.jiotty.common.async.JobSchedulerImpl;
 import net.yudichev.jiotty.common.async.ListenerBackedTaskExceptionHandlerRegistry;
 import net.yudichev.jiotty.common.async.ProgrammableClock;
 import net.yudichev.jiotty.common.lang.Closeable;
-import net.yudichev.jiotty.common.lang.CompletableFutures;
-import net.yudichev.jiotty.common.lang.Either;
+import net.yudichev.jiotty.common.testutil.LogCapture;
 import net.yudichev.jiotty.connector.octopusenergy.OctopusRegionService;
 import net.yudichev.jiotty.connector.octopusenergy.StandardUnitRate;
 import net.yudichev.jiotty.energy.EnergyPriceService;
+import net.yudichev.jiotty.energy.PriceResult;
 import net.yudichev.jiotty.energy.Prices;
 import net.yudichev.jiotty.timeseriescache.InMemoryTimeSeriesCache;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,9 +23,11 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static java.time.temporal.ChronoUnit.MINUTES;
 import static java.util.concurrent.CompletableFuture.completedFuture;
+import static net.yudichev.jiotty.common.lang.CompletableFutures.failure;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -206,13 +209,37 @@ class OctopusAgilePriceServiceImplTest {
         verify(regionService, never()).getStandardUnitRates(any(), any(), any(), any());
     }
 
+    /// A fetch that is still in flight when the service stops, and then completes with prices that end before the expected publication does, arms no poll.
+    @Test
+    void fetchCompletingAfterStop_armsNoPoll() {
+        service.start();
+        clock.tick();
+
+        reset(regionService);
+        var inFlightFetch = new CompletableFuture<List<StandardUnitRate>>();
+        when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any())).thenReturn(inFlightFetch);
+        clock.setTimeAndTick(time(1, 16, 00).plusNanos(12));
+        verify(regionService).getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any());
+
+        service.stop();
+        clock.tick();
+        inFlightFetch.complete(prices(time(1, 16, 00), time(1, 23, 00)));
+        clock.tick();
+
+        reset(regionService);
+        lenient().when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any()))
+                 .thenReturn(completedFuture(prices(time(1, 16, 00), time(2, 23, 00))));
+        clock.setTimeAndTick(time(1, 16, 00).plusNanos(12).plus(OctopusAgilePriceServiceImpl.PUBLICATION_POLL_INTERVAL));
+        verify(regionService, never()).getStandardUnitRates(any(), any(), any(), any());
+    }
+
     /// Polling over a profile Octopus has not extended yet must not wake every subscriber every five minutes.
     @Test
     void unchangedPricesAreNotRepublished() {
         service.start();
         clock.tick();
 
-        var notifications = new ArrayList<Either<Prices, EnergyPriceService.Failure>>();
+        var notifications = new ArrayList<PriceResult>();
         Closeable subscription = service.subscribeToPrices(notifications::add);
         assertThat(notifications).describedAs("image on subscribe").hasSize(1);
 
@@ -266,6 +293,37 @@ class OctopusAgilePriceServiceImplTest {
         assertThat(received).last().isEqualTo(time(2, 16, 00));
     }
 
+    /// While the fetched prices end before the expected publication does, the service polls again every
+    /// [OctopusAgilePriceServiceImpl#PUBLICATION_POLL_INTERVAL]. Each poll computes the same next refresh time, and subscribers receive it once.
+    @Test
+    void unchangedNextRefreshTime_isDeliveredOnce() {
+        clock.setTime(time(1, 16, 30));
+        when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any()))
+                .thenReturn(completedFuture(prices(time(1, 16, 00), time(1, 22, 00))));
+        List<Instant> refreshTimes = new ArrayList<>();
+        service.start();
+        service.subscribeToNextRefreshTime(refreshTimes::add);
+        clock.tick();
+
+        clock.advanceTimeAndTick(OctopusAgilePriceServiceImpl.PUBLICATION_POLL_INTERVAL);
+
+        verify(regionService, atLeast(2)).getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any());
+        assertThat(refreshTimes).containsExactly(time(2, 16, 00));
+    }
+
+    @Test
+    void octopusFailure_isLoggedNoHigherThanInfo() {
+        when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any())).thenReturn(failure("oops"));
+
+        try (LogCapture log = LogCapture.capture(OctopusAgilePriceServiceImpl.class, Level.DEBUG)) {
+            service.start();
+            clock.tick();
+            clock.advanceTimeAndTick(OctopusPriceSlots.FAILURE_RETRY_DELAY);
+
+            assertThat(log.lines()).isNotEmpty().allSatisfy(line -> assertThat(line.level().isLessSpecificThan(Level.INFO)).isTrue());
+        }
+    }
+
     @Test
     void octopusFailure() {
         service.start();
@@ -273,15 +331,14 @@ class OctopusAgilePriceServiceImplTest {
         assertPricesAvailable(time(1, 14, 00), time(1, 23, 00));
 
         reset(regionService);
-        when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any())).thenReturn(CompletableFutures.failure("oops"));
+        when(regionService.getStandardUnitRates(eq(PRODUCT_CODE), eq(TARIFF_CODE), any(), any())).thenReturn(failure("oops"));
         clock.setTimeAndTick(time(1, 16, 00));
         // then no new prices as octopus call failed
         assertPricesAvailable(time(1, 14, 00), time(1, 23, 00));
 
         // problems continue until day 2's regular call — and the retries-overran point lands a `PriceRetrievalError` on the result stream
         clock.setTimeAndTick(time(2, 16, 00));
-        Either<Prices, EnergyPriceService.Failure> lastResult = service.getPrices().orElseThrow();
-        assertThat(lastResult.getRight()).hasValueSatisfying(failure -> assertThat(failure)
+        assertThat(service.getPrices()).hasValueSatisfying(result -> assertThat(result)
                 .isInstanceOfSatisfying(EnergyPriceService.Failure.PriceRetrievalError.class,
                                         error -> assertThat(error.cause()).hasMessageContaining("oops")));
 
@@ -294,10 +351,10 @@ class OctopusAgilePriceServiceImplTest {
     }
 
     private void assertPricesAvailable(Instant from, Instant to) {
-        Either<Prices, EnergyPriceService.Failure> result = service.getPrices().orElseThrow();
-        Prices prices = result.getLeft().orElseThrow();
-        assertThat(prices.profileStart()).describedAs("profile start").isEqualTo(from);
-        assertThat(prices.profileEnd()).describedAs("profile end").isEqualTo(to);
+        assertThat(service.getPrices()).hasValueSatisfying(result -> assertThat(result).isInstanceOfSatisfying(Prices.class, prices -> {
+            assertThat(prices.profileStart()).describedAs("profile start").isEqualTo(from);
+            assertThat(prices.profileEnd()).describedAs("profile end").isEqualTo(to);
+        }));
     }
 
     private static List<StandardUnitRate> prices(Instant from, Instant to) {
@@ -311,11 +368,11 @@ class OctopusAgilePriceServiceImplTest {
     }
 
     private static Instant time(int day, int hour, int min) {
-        return LocalDateTime.of(2024, 1, day, hour, min, 00).atZone(AgilePublicationWindow.ZONE).toInstant();
+        return LocalDateTime.of(2024, 1, day, hour, min, 00).atZone(OctopusPriceSlots.UK_ZONE).toInstant();
     }
 
     /// The same wall clock as [#time], in July — where Europe/London is an hour ahead of UTC and a job resolved in the wrong zone shows up.
     private static Instant bstTime(int day, int hour, int min) {
-        return LocalDateTime.of(2024, 7, day, hour, min, 00).atZone(AgilePublicationWindow.ZONE).toInstant();
+        return LocalDateTime.of(2024, 7, day, hour, min, 00).atZone(OctopusPriceSlots.UK_ZONE).toInstant();
     }
 }

@@ -19,6 +19,11 @@ final class OctopusTariffCodeTest {
     }
 
     @Test
+    void regionIsTheTrailingLetter() {
+        assertThat(OctopusTariffCode.region("E-1R-AGILE-24-10-01-A")).isEqualTo('A');
+    }
+
+    @Test
     void createSingleRateElectricityCodeBuildsTheTariffCodeProductCodeReadsBack() {
         String tariffCode = OctopusTariffCode.createSingleRateElectricityCode("AGILE-24-10-01", 'C');
 

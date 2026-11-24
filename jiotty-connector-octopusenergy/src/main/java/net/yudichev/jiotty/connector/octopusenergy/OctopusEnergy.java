@@ -17,6 +17,9 @@ import java.util.concurrent.CompletableFuture;
 /// In addition to the per-handle sub-services, this interface exposes endpoints that are not bound to either region or account — product discovery. They are
 /// open endpoints (no authentication) and return the same data for every caller, so they live at the top level rather than under one of the sub-services.
 public interface OctopusEnergy {
+    /// The payment-method key, in the tariff matrix of [ProductDetails], of the variant for a customer who pays monthly by direct debit.
+    String DIRECT_DEBIT_MONTHLY_PAYMENT_METHOD = "direct_debit_monthly";
+
     /// Returns the per-region handle for the given Octopus tariff region letter (A–P minus I/O — see [MpanRegionResolver#isValidRegion]).
     ///
     /// @throws IllegalArgumentException if `regionLetter` is not one of the known region letters

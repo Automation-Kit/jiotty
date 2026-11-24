@@ -10,25 +10,32 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
-final class Bindings {
+public final class Bindings {
     private Bindings() {
     }
 
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
-    @interface PriceForecast {
+    public @interface PriceForecast {
     }
 
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
-    @interface ExecutorProvider {
+    public @interface ExecutorProvider {
+    }
+
+    /// Qualifies how far ahead of now the prices of a tariff are fetched and the agreements of an account are joined.
+    @BindingAnnotation
+    @Target({FIELD, PARAMETER, METHOD})
+    @Retention(RUNTIME)
+    public @interface ForwardWindow {
     }
 
     @BindingAnnotation
     @Target({FIELD, PARAMETER, METHOD})
     @Retention(RUNTIME)
-    @interface Dependency {
+    public @interface Dependency {
     }
 }

@@ -25,24 +25,32 @@ import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
 import static net.yudichev.jiotty.common.inject.SpecifiedAnnotation.forAnnotation;
 import static net.yudichev.jiotty.energy.octopus.Bindings.ExecutorProvider;
+import static net.yudichev.jiotty.energy.octopus.Bindings.ForwardWindow;
 
 /// Account-scoped module that installs the [OctopusEnergyProviderService] and exposes it as [EnergyProviderService]. Requires
-/// [OctopusAgilePriceServiceRegistry] and [PriceForecastServiceRegistry] (plus [OctopusEnergy], [CurrentDateTimeProvider]) to be present in the parent
+/// [OctopusTariffPriceServiceRegistry] and [PriceForecastServiceRegistry] (plus [OctopusEnergy], [CurrentDateTimeProvider]) to be present in the parent
 /// injector.
 public final class OctopusEnergyPriceServiceModule extends BaseExposedKeyModule<EnergyProviderService> {
     private final @Nullable BindingSpec<String> octopusApiKeySpec;
     private final @Nullable BindingSpec<String> octopusAccountIdSpec;
     private final @Nullable BindingSpec<OctopusAccountService> accountServiceSpec;
     private final BindingSpec<SchedulingExecutor> executorSpec;
+    private final BindingSpec<Duration> accountPollIntervalSpec;
+    private final BindingSpec<Duration> forwardWindowSpec;
 
-    /// @param octopusApiKeySpec    the Octopus account's API key, or `null` when `accountServiceSpec` supplies the account
-    /// @param octopusAccountIdSpec the Octopus account's id, or `null` when `accountServiceSpec` supplies the account
-    /// @param accountServiceSpec   the Octopus account, or `null` when the module opens the account from `octopusApiKeySpec` and `octopusAccountIdSpec`
+    /// @param octopusApiKeySpec       the Octopus account's API key, or `null` when `accountServiceSpec` supplies the account
+    /// @param octopusAccountIdSpec    the Octopus account's id, or `null` when `accountServiceSpec` supplies the account
+    /// @param accountServiceSpec      the Octopus account, or `null` when the module opens the account from `octopusApiKeySpec` and `octopusAccountIdSpec`
+    /// @param accountPollIntervalSpec the interval between account fetches
+    /// @param forwardWindowSpec       the period ahead of now whose agreements are joined into the prices; `null` when [Builder#setForwardWindow] was not
+    ///                                called, which this constructor rejects
     private OctopusEnergyPriceServiceModule(SpecifiedAnnotation specifiedAnnotation,
                                             @Nullable BindingSpec<String> octopusApiKeySpec,
                                             @Nullable BindingSpec<String> octopusAccountIdSpec,
                                             @Nullable BindingSpec<OctopusAccountService> accountServiceSpec,
-                                            BindingSpec<SchedulingExecutor> executorSpec) {
+                                            BindingSpec<SchedulingExecutor> executorSpec,
+                                            BindingSpec<Duration> accountPollIntervalSpec,
+                                            @Nullable BindingSpec<Duration> forwardWindowSpec) {
         super(specifiedAnnotation);
         checkArgument(accountServiceSpec == null
                       ? octopusApiKeySpec != null && octopusAccountIdSpec != null
@@ -52,6 +60,8 @@ public final class OctopusEnergyPriceServiceModule extends BaseExposedKeyModule<
         this.octopusAccountIdSpec = octopusAccountIdSpec;
         this.accountServiceSpec = accountServiceSpec;
         this.executorSpec = checkNotNull(executorSpec);
+        this.accountPollIntervalSpec = checkNotNull(accountPollIntervalSpec);
+        this.forwardWindowSpec = checkNotNull(forwardWindowSpec, "setForwardWindow was not called");
     }
 
     public static Builder builder() {
@@ -61,12 +71,18 @@ public final class OctopusEnergyPriceServiceModule extends BaseExposedKeyModule<
     @Override
     protected void configure() {
         executorSpec.bind(SchedulingExecutor.class).annotatedWith(ExecutorProvider.class).installedBy(this::installLifecycleComponentModule);
-        // Retry the account fetch with exponential backoff capped at half the poll interval (≈6h) — long enough to ride out lengthy Octopus outages without
-        // leaving the user stuck for the full ACCOUNT_POLL_INTERVAL between polls. The predicate retries everything except a response that could not be
-        // parsed (see OctopusEnergyProviderService.isRetryablePollFailure): each attempt fetches the account again, and an unchanged payload fails the same
-        // way. Permanent 401/403 failures surface via OctopusAccountService.subscribeToAuthState, so wasting one backoff window on those is acceptable. This
-        // deliberately layers over the Octopus connector's own shared-outage retry: the connector smooths transient blips over minutes, this window keeps the
-        // background poll alive over hours. The interactive query* calls rely on the connector's retry alone.
+        accountPollIntervalSpec.bind(Duration.class)
+                               .annotatedWith(OctopusEnergyProviderService.AccountPollInterval.class)
+                               .installedBy(this::installLifecycleComponentModule);
+        forwardWindowSpec.bind(Duration.class).annotatedWith(ForwardWindow.class).installedBy(this::installLifecycleComponentModule);
+        // Retry the account fetch with exponential backoff for up to half of DEFAULT_ACCOUNT_POLL_INTERVAL (about 6 hours), long enough to cover a long
+        // Octopus outage without leaving the user waiting a whole poll interval. A shorter poll interval keeps this bound, since
+        // OctopusEnergyProviderService skips a poll while the previous fetch is still retrying. The predicate, OctopusEnergyProviderService
+        // .isRetryablePollFailure, retries every failure except a response that could not be parsed: each attempt fetches the account again, and an
+        // unchanged payload fails the same way. The predicate also retries a 401 or 403 response, although OctopusAccountService.subscribeToAuthState
+        // reports those separately.
+        // This backoff retry sits on top of the Octopus connector's own retry: the connector retries brief failures over minutes, and this retry keeps the
+        // background poll going over hours.
         var backoffConfig = BackOffConfig.builder()
                                          .setInitialInterval(Duration.ofSeconds(5))
                                          .setMaxInterval(Duration.ofMinutes(30))
@@ -109,6 +125,8 @@ public final class OctopusEnergyPriceServiceModule extends BaseExposedKeyModule<
                                                                                                .setThreadName(literally("Energy"))
                                                                                                .withAnnotation(forAnnotation(uniqueAnnotation()))
                                                                                                .build());
+        private BindingSpec<Duration> accountPollIntervalSpec = literally(OctopusEnergyProviderService.DEFAULT_ACCOUNT_POLL_INTERVAL);
+        private @Nullable BindingSpec<Duration> forwardWindowSpec;
 
         public Builder setOctopusAccountId(BindingSpec<String> octopusAccountIdSpec) {
             this.octopusAccountIdSpec = checkNotNull(octopusAccountIdSpec);
@@ -127,15 +145,36 @@ public final class OctopusEnergyPriceServiceModule extends BaseExposedKeyModule<
             return this;
         }
 
+        /// Sets how far ahead of now the agreements that are joined into the prices may start. This setting is required, and its value must be positive. The
+        /// prices of a tariff reach only as far as the value set with [OctopusTariffPriceServiceRegistryModule.Builder#setForwardWindow], so pass the same
+        /// value to both.
+        public Builder setForwardWindow(BindingSpec<Duration> forwardWindowSpec) {
+            this.forwardWindowSpec = checkNotNull(forwardWindowSpec);
+            return this;
+        }
+
         /// Reuses the specified executor for the service poll and retries. If not specified, uses own dedicated thread.
         public Builder withExecutor(BindingSpec<SchedulingExecutor> executorSpec) {
             this.executorSpec = checkNotNull(executorSpec);
             return this;
         }
 
+        /// Sets the interval between account fetches, 12 hours by default. A shorter interval makes a change to the account's agreements reach the prices
+        /// sooner; a poll is skipped while the previous fetch is still retrying.
+        public Builder withAccountPollInterval(BindingSpec<Duration> accountPollIntervalSpec) {
+            this.accountPollIntervalSpec = checkNotNull(accountPollIntervalSpec);
+            return this;
+        }
+
         @Override
         public ExposedKeyModule<EnergyProviderService> build() {
-            return new OctopusEnergyPriceServiceModule(specifiedAnnotation(), octopusApiKeySpec, octopusAccountIdSpec, accountServiceSpec, executorSpec);
+            return new OctopusEnergyPriceServiceModule(specifiedAnnotation(),
+                                                       octopusApiKeySpec,
+                                                       octopusAccountIdSpec,
+                                                       accountServiceSpec,
+                                                       executorSpec,
+                                                       accountPollIntervalSpec,
+                                                       forwardWindowSpec);
         }
     }
 }
