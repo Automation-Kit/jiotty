@@ -44,6 +44,8 @@ public class Graph extends BaseIdempotentCloseable {
         this.exceptionHandler = checkNotNull(exceptionHandler);
     }
 
+    /// Registers `node` and calls [NodeContext#triggerInNextWave()] for `node`, so that the next wave calls [Node#wave()] on `node` whether or not a parent
+    /// of `node` has changed.
     public <T extends Node> T registerNode(String name, T node) {
         checkState(!isClosed(), "Closed");
         assertCallingThreadConsistent();

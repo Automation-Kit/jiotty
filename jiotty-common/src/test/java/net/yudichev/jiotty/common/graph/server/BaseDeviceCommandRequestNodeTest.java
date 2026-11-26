@@ -1,7 +1,6 @@
 package net.yudichev.jiotty.common.graph.server;
 
 import net.yudichev.jiotty.common.async.ProgrammableClock;
-import net.yudichev.jiotty.common.async.SchedulingExecutor;
 import net.yudichev.jiotty.common.graph.Graph;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Assertions;
@@ -15,7 +14,6 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assertions.fail;
 
 class BaseDeviceCommandRequestNodeTest {
     private static final Duration RETRY_DELAY = Duration.ofMinutes(10);
@@ -336,7 +334,7 @@ class BaseDeviceCommandRequestNodeTest {
 
     @Test
     void retriesExhaustedWithPanic_panicsAndKeepsTheRequestAsFailed() {
-        graphRunner.panicsExpected = true;
+        graphRunner.expectPanics();
         var panickingNode = new PlainRequestNode(graphRunner, stateNode, true);
         panickingNode.registerInGraph();
         stateNode.set("OFF");
@@ -345,7 +343,7 @@ class BaseDeviceCommandRequestNodeTest {
 
         letEveryRetryFallDue();
 
-        assertThat(graphRunner.panicMessage).contains("retried " + MAX_RETRIES + " times");
+        assertThat(graphRunner.panicReason()).contains("retried " + MAX_RETRIES + " times");
         assertThat(panickingNode.currentRequest()).isNotNull().satisfies(request -> assertThat(request.toString()).contains("FAILED"));
     }
 
@@ -382,31 +380,6 @@ class BaseDeviceCommandRequestNodeTest {
     private void runWave() {
         graphRunner.scheduleNewWave("test");
         clock.tick();
-    }
-
-    private static final class TestGraphRunner extends GraphRunner {
-        /// Whether a panic is recorded rather than failing the test, for a test that expects one.
-        boolean panicsExpected;
-        /// The message of the last recorded panic, or `null` when none has been recorded or the panic carried no message.
-        @Nullable String panicMessage;
-
-        TestGraphRunner(Graph graph, SchedulingExecutor executor) {
-            super(graph, executor);
-        }
-
-        @Override
-        protected void doRunWaves(String triggeredBy) {
-            graph().runWaves();
-        }
-
-        @Override
-        protected void onPanic(@Nullable String message, @Nullable Throwable cause) {
-            if (panicsExpected) {
-                panicMessage = message;
-            } else {
-                fail(message != null ? message : String.valueOf(cause), cause);
-            }
-        }
     }
 
     /// A request node that records every command it sends and counts a request done once [TestStateNode] holds the requested payload.

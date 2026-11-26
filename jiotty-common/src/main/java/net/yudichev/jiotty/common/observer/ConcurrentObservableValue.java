@@ -7,6 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -28,21 +29,28 @@ public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
     private final AtomicInteger wip = new AtomicInteger();
     private final Consumer<? super RuntimeException> listenerFailureHandler;
 
-    @SuppressWarnings("FieldAccessedSynchronizedAndUnsynchronized")
-    private volatile T value;
+    private final AtomicReference<T> value;
     private volatile LinkedHashSet<Consumer<? super T>> listeners = new LinkedHashSet<>();
 
     /// @param listenerFailureHandler invoked with each exception that a listener subscribed through [#subscribe(Consumer)] throws, on the thread on which that
     ///                               listener is called; the other listeners still receive the value, and every listener receives later values. Must not
     ///                               throw.
     public ConcurrentObservableValue(T initialValue, Consumer<? super RuntimeException> listenerFailureHandler) {
-        value = initialValue;
+        // Every action may read initialValue plainly: value is final and is set here, before the constructor returns.
+        value = new AtomicReference<>(initialValue);
         this.listenerFailureHandler = checkNotNull(listenerFailureHandler, "listenerFailureHandler");
     }
 
+    /// Returns the current value.
+    ///
+    /// A value passed to [#accept] becomes the current value either before [#accept] returns or later, on the thread of a concurrent call of [#accept],
+    /// [#subscribe(Consumer)] or a handle's [Closeable#close()]. Until then, this method returns the earlier value, on every thread, including the one that
+    /// called [#accept].
     @Override
     public T get() {
-        return value;
+        // Acquire: every write to value after construction is the release in accept(), and this read pairs with it, so the caller reads the latest value
+        // written and sees everything written before that value.
+        return value.getAcquire();
     }
 
     @Override
@@ -51,7 +59,8 @@ public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
             var newListeners = new LinkedHashSet<>(listeners);
             newListeners.add(listener);
             listeners = newListeners;
-            listener.accept(value);
+            // Plain: the actions run one at a time, and wip orders every earlier action, the write in accept() included, before this one.
+            listener.accept(value.getPlain());
         });
         drainAfterAddingAction();
         return Closeable.idempotent(() -> {
@@ -75,10 +84,12 @@ public final class ConcurrentObservableValue<T> implements ObservableValue<T> {
     }
 
     @Override
-    public void accept(T value) {
+    public void accept(T newValue) {
         actionQueue.add(() -> {
-            this.value = value;
-            runForAll(listeners, listener -> listener.accept(value));
+            // Release: get() reads value with an acquire that pairs with this write, and the actions, which wip runs one after another, read it plainly.
+            // Both reads see this write and everything written before it.
+            value.setRelease(newValue);
+            runForAll(listeners, listener -> listener.accept(newValue));
         });
         drainAfterAddingAction();
     }

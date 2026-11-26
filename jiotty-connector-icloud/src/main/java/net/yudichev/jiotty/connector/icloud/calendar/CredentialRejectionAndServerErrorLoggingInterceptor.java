@@ -65,9 +65,9 @@ final class CredentialRejectionAndServerErrorLoggingInterceptor implements Inter
     ///
     /// @return a description of the body's length, which is:
     ///
-    ///         - for a body of at most 64 KiB, its length;
-    ///         - for a longer body, the number of its bytes buffered, which is at least 64 KiB;
-    ///         - when the measurement fails, that failure
+    /// - for a body of at most 64 KiB, its length;
+    /// - for a longer body, the number of its bytes buffered, which is at least 64 KiB;
+    /// - when the measurement fails, that failure
     private static StringFormattable describeBodyLength(Response response) {
         BufferedSource source = response.body().source();
         try {

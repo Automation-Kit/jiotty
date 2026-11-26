@@ -44,6 +44,12 @@ public final class LogCapture implements AutoCloseable {
         return new LogCapture(loggerOwner.getName(), level);
     }
 
+    /// Starts capturing what the logger named `loggerName`, and every logger below it in the name hierarchy, logs at `level` or above. A package name
+    /// captures every class of the package and its sub-packages.
+    public static LogCapture capture(String loggerName, Level level) {
+        return new LogCapture(loggerName, level);
+    }
+
     /// @return the lines captured so far, in the order they were logged
     public List<CapturedLine> lines() {
         return ImmutableList.copyOf(lines);

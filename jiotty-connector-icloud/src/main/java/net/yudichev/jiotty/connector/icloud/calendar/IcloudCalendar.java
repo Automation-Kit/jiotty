@@ -109,8 +109,8 @@ final class IcloudCalendar implements Calendar, StringFormattable {
     /// @return the event, or empty when `event` has no {@value Property#DTSTART}, or neither a {@value Property#DTEND} nor a
     ///         {@value Property#DURATION}. The event has:
     ///
-    ///         - an empty summary when `event` has none
-    ///         - an end at its {@value Property#DTSTART} plus its {@value Property#DURATION} when `event` has no {@value Property#DTEND}
+    /// - an empty summary when `event` has none
+    /// - an end at its {@value Property#DTSTART} plus its {@value Property#DURATION} when `event` has no {@value Property#DTEND}
     @VisibleForTesting
     static Optional<CalendarEvent> toCalendarEvent(VEvent event) {
         DtStart<Temporal> start = event.getDateTimeStart();

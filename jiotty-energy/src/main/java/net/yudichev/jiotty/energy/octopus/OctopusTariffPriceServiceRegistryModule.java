@@ -1,12 +1,11 @@
 package net.yudichev.jiotty.energy.octopus;
 
-import com.google.inject.Key;
 import com.google.inject.assistedinject.FactoryModuleBuilder;
 import net.yudichev.jiotty.common.async.ExecutorProviderModule;
-import net.yudichev.jiotty.common.async.JobScheduler;
 import net.yudichev.jiotty.common.inject.BaseExposedKeyModule;
 import net.yudichev.jiotty.common.inject.BaseModuleBuilder;
 import net.yudichev.jiotty.common.inject.BindingSpec;
+import net.yudichev.jiotty.common.inject.Bindings.Rng;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.SpecifiedAnnotation;
 import net.yudichev.jiotty.common.time.CurrentDateTimeProvider;
@@ -15,6 +14,7 @@ import net.yudichev.jiotty.timeseriescache.TimeSeriesCache;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.function.DoubleSupplier;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
@@ -23,8 +23,8 @@ import static net.yudichev.jiotty.energy.octopus.Bindings.ExecutorProvider;
 import static net.yudichev.jiotty.energy.octopus.Bindings.ForwardWindow;
 
 /// Exposes an [OctopusTariffPriceServiceRegistry] whose price services run on an executor of their own. One registry is meant to serve every account, so that
-/// the accounts on a tariff share its retrieval. Requires [OctopusEnergy], [TimeSeriesCache], [JobScheduler] and [CurrentDateTimeProvider] in the parent
-/// injector.
+/// the accounts on a tariff share its retrieval. Requires [OctopusEnergy], [TimeSeriesCache], [CurrentDateTimeProvider] and a [Rng] [DoubleSupplier] in
+/// the parent injector.
 public final class OctopusTariffPriceServiceRegistryModule extends BaseExposedKeyModule<OctopusTariffPriceServiceRegistry> {
     private final BindingSpec<Duration> forwardWindowSpec;
 
@@ -46,12 +46,7 @@ public final class OctopusTariffPriceServiceRegistryModule extends BaseExposedKe
                                                               .build());
         forwardWindowSpec.bind(Duration.class).annotatedWith(ForwardWindow.class).installedBy(this::installLifecycleComponentModule);
         install(new FactoryModuleBuilder().build(OctopusTariffPriceServiceFactory.class));
-        Key<OctopusTariffPriceServiceRegistry> implKey = registerLifecycleComponent(OctopusTariffPriceServiceRegistry.class);
-        // The registry has no separate interface, so an unannotated caller's exposed key is the registry's own key, and Guice rejects binding that key to
-        // itself.
-        if (!exposedKey.equals(implKey)) {
-            bind(exposedKey).to(implKey);
-        }
+        bind(exposedKey).to(registerLifecycleComponent(OctopusTariffPriceServiceRegistryImpl.class));
         expose(exposedKey);
     }
 

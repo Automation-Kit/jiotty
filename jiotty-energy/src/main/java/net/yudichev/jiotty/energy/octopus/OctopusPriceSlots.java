@@ -8,7 +8,7 @@ import java.time.ZonedDateTime;
 
 import static java.lang.Math.floorMod;
 
-final class OctopusPriceSlots {
+public final class OctopusPriceSlots {
     /// The time zone of Octopus' rates, and of the time bands of a time-of-use tariff, wherever the process runs.
     public static final ZoneId UK_ZONE = ZoneId.of("Europe/London");
     /// The length of one price slot, in seconds: every price that an [OctopusTariffPriceService] publishes covers one half hour.

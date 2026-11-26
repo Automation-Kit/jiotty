@@ -105,6 +105,8 @@ public abstract class BaseGraphBasedServer extends BaseLifecycleComponent {
     protected void doStop0() {
     }
 
+    /// Creates the nodes of a new graph and passes each to `registrator`. Once every node is registered, this server runs a wave that calls
+    /// [BaseServerNode#doWave()] on every node.
     protected abstract void createNodes(GraphRunner graphRunner, NodeRegistrator registrator);
 
     protected abstract void recordState();

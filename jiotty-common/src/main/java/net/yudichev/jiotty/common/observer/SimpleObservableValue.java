@@ -13,7 +13,17 @@ import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-final class SimpleObservableValue<T> implements ObservableValue<T> {
+/// The single-threaded [ObservableValue] that [ObservableValue#simple] creates. Its methods must all be called on one thread, except for these, which may be
+/// called on any thread:
+///
+/// - [#subscribe(TaskExecutor, Consumer)];
+/// - [Closeable#close()] on the handle that [#subscribe(TaskExecutor, Consumer)] returns.
+///
+/// The tasks of the executor passed to [#subscribe(TaskExecutor, Consumer)] must be strictly sequential with the calls to the other methods (same thread, or
+/// synchronised), and so must every call that a listener makes to this value.
+///
+/// @param <T> the type of the value
+public final class SimpleObservableValue<T> implements ObservableValue<T> {
     private final ListenerList<SuppressableListener<? super T>> listeners = new ListenerList<>();
     /// The values passed to [#accept] while a notification ran, in the order of the calls, each waiting to become the current value until no notification
     /// is in progress; `null` until the first such value.

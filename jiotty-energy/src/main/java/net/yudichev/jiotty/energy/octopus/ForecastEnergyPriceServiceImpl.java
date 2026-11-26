@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -34,6 +35,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static net.yudichev.jiotty.common.lang.FilteringConsumer.filtering;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.concurrent.CompletableFuture.failedFuture;
 import static net.yudichev.jiotty.common.lang.Closeable.closeSafelyIfNotNull;
@@ -130,11 +132,7 @@ public final class ForecastEnergyPriceServiceImpl extends BaseLifecycleComponent
     @Override
     public Closeable subscribeToPrices(Consumer<Prices> consumer) {
         checkNotNull(consumer);
-        return whenStartedAndNotLifecycling(() -> latestForecast.subscribe(executor, prices -> {
-            if (prices != null) {
-                consumer.accept(prices);
-            }
-        }));
+        return whenStartedAndNotLifecycling(() -> latestForecast.subscribe(executor, filtering(consumer, Objects::nonNull)));
     }
 
     private void refresh() {

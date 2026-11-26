@@ -5,15 +5,11 @@ import net.yudichev.jiotty.common.lang.Closeable;
 import net.yudichev.jiotty.energy.PriceResult;
 
 import java.time.Instant;
-import java.util.Optional;
 import java.util.function.Consumer;
 
 /// The prices of a single Octopus tariff. Each instance is bound to one `(productCode, tariffCode)` and serves the prices of that tariff to every subscriber,
 /// whichever account holds it and for whatever part of time.
 public interface OctopusTariffPriceService extends LifecycleComponent {
-    /// @return the latest result, or empty if none has been produced yet
-    Optional<PriceResult> getPrices();
-
     /// Subscribes to results. The current result (if any) is delivered to the new subscriber immediately. The returned [Closeable] cancels the subscription.
     Closeable subscribeToPrices(Consumer<PriceResult> consumer);
 

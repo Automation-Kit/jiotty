@@ -8,7 +8,7 @@ import org.jspecify.annotations.Nullable;
 import static net.yudichev.jiotty.common.lang.HumanReadableExceptionMessage.humanReadableMessage;
 
 /// A utility for comparing [PriceResult]s.
-final class PriceResults {
+public final class PriceResults {
     private PriceResults() {
     }
 

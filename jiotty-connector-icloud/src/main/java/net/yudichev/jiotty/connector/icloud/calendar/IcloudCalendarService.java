@@ -234,10 +234,10 @@ public class IcloudCalendarService extends BaseLifecycleComponent implements Cal
     ///
     /// @return what the retrieval fails with, which is:
     ///
-    ///         - for a rejection, the [CalendarAuthorisationException] that [#onRejection] returns;
-    ///         - for any other failure of a retrieval that is not a [#retryAuthentication()], while this service is suspended, the
-    ///           [CalendarAuthorisationException] of the rejection that suspended this service;
-    ///         - otherwise `failure`, wrapped in a [RuntimeException]
+    /// - for a rejection, the [CalendarAuthorisationException] that [#onRejection] returns;
+    /// - for any other failure of a retrieval that is not a [#retryAuthentication()], while this service is suspended, the
+    ///   [CalendarAuthorisationException] of the rejection that suspended this service;
+    /// - otherwise `failure`, wrapped in a [RuntimeException]
     private RetrievalOutcome.Failed onRetrievalFailure(Throwable failure, boolean authenticationRetry, int endedSuspensionCountWhenSent) {
         HttpResponseException httpFailure = HttpResponseException.findIn(failure).orElse(null);
         if (isRejection(httpFailure)) {

@@ -7,7 +7,7 @@ import com.google.inject.Key;
 import com.google.inject.TypeLiteral;
 import com.google.inject.spi.ExposedBinding;
 import net.yudichev.jiotty.common.async.ExecutorModule;
-import net.yudichev.jiotty.common.async.JobScheduler;
+import net.yudichev.jiotty.common.inject.Bindings.Rng;
 import net.yudichev.jiotty.common.inject.ExposedKeyModule;
 import net.yudichev.jiotty.common.inject.LifecycleComponent;
 import net.yudichev.jiotty.common.time.TimeModule;
@@ -20,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
+import java.util.function.DoubleSupplier;
 
 import static net.yudichev.jiotty.common.inject.BindingSpec.literally;
 import static net.yudichev.jiotty.common.inject.GuiceUtil.uniqueAnnotation;
@@ -33,8 +34,6 @@ class OctopusTariffPriceServiceRegistryModuleTest {
     private OctopusEnergy octopusEnergy;
     @Mock
     private TimeSeriesCache cache;
-    @Mock
-    private JobScheduler jobScheduler;
 
     @Test
     void build_default_exposesTheRegistryUnderTheBareKey() {
@@ -84,7 +83,7 @@ class OctopusTariffPriceServiceRegistryModuleTest {
             protected void configure() {
                 bind(OctopusEnergy.class).toInstance(octopusEnergy);
                 bind(TimeSeriesCache.class).toInstance(cache);
-                bind(JobScheduler.class).toInstance(jobScheduler);
+                bind(DoubleSupplier.class).annotatedWith(Rng.class).toInstance(() -> 0.5);
             }
         }, module);
     }

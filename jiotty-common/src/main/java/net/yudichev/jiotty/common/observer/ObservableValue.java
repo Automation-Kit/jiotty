@@ -14,6 +14,8 @@ import java.util.function.Consumer;
 /// and different performance characteristics.
 ///
 /// @param <T> the type of the value
+// ClassReferencesSubclass: the factories return the implementation class, so a field's type states the threading contract of the value it holds.
+@SuppressWarnings("ClassReferencesSubclass")
 public interface ObservableValue<T> extends Consumer<T>, Observable<T> {
     /// Creates an [ObservableValue] whose methods may be called on any thread. For purely single-threaded use, prefer the [single-threaded][#simple]
     /// implementation, which is more efficient.
@@ -29,7 +31,7 @@ public interface ObservableValue<T> extends Consumer<T>, Observable<T> {
     /// @param listenerFailureHandler invoked with each exception that a listener subscribed through [#subscribe(Consumer)] throws, on the thread on which that
     ///                               listener is called; the other listeners still receive the value, and every listener receives later values. Must not
     ///                               throw.
-    static <T> ObservableValue<T> concurrent(T initialValue, Consumer<? super RuntimeException> listenerFailureHandler) {
+    static <T> ConcurrentObservableValue<T> concurrent(T initialValue, Consumer<? super RuntimeException> listenerFailureHandler) {
         return new ConcurrentObservableValue<>(initialValue, listenerFailureHandler);
     }
 
@@ -52,7 +54,7 @@ public interface ObservableValue<T> extends Consumer<T>, Observable<T> {
     /// [#subscribe(TaskExecutor, Consumer)] passes it to the failure handler of the executor.
     ///
     /// @param <T> the type of the value
-    static <T> ObservableValue<T> simple(T initialValue) {
+    static <T> SimpleObservableValue<T> simple(T initialValue) {
         return new SimpleObservableValue<>(initialValue);
     }
 

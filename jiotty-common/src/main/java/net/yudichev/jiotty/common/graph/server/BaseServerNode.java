@@ -2,6 +2,7 @@ package net.yudichev.jiotty.common.graph.server;
 
 import com.google.errorprone.annotations.OverridingMethodsMustInvokeSuper;
 import net.yudichev.jiotty.common.graph.BaseNode;
+import net.yudichev.jiotty.common.graph.Node;
 import net.yudichev.jiotty.common.lang.BaseIdempotentCloseable;
 import net.yudichev.jiotty.common.lang.Closeable;
 import org.apache.logging.log4j.LogManager;
@@ -49,6 +50,11 @@ public abstract class BaseServerNode extends BaseNode implements ServerNode {
         runner.graph().registerNode(name, this);
     }
 
+    /// Implements [Node#wave()]. The graph calls this method in the first wave after [#registerInGraph()], whether or not a parent has changed, and then in
+    /// each wave in which a parent reports a change or that follows a call of [#triggerInNewWave] or [#triggerMeAndParentsInNewWave] for this node.
+    ///
+    /// @return whether this node's externally visible state, the values that its children can read, changed; `true` makes the graph call [Node#wave()]
+    ///         on this node's children in the same wave
     protected abstract boolean doWave();
 
     protected void triggerMeAndParentsInNewWave(String triggeredBy) {

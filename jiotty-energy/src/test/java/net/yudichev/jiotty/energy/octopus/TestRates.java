@@ -8,24 +8,24 @@ import java.time.Instant;
 import static net.yudichev.jiotty.common.lang.EvenMoreObjects.mapIfNotNull;
 
 /// A utility for building Octopus standard unit rate rows in tests. Each row has the same price with and without VAT.
-final class TestRates {
+public final class TestRates {
     private TestRates() {
     }
 
     /// @return a row with no end date that applies to every payment method
-    static StandardUnitRate createRate(String validFrom, double price) {
+    public static StandardUnitRate createRate(String validFrom, double price) {
         return buildRate(validFrom, null, price, null);
     }
 
     /// @param validTo the row's exclusive end
     /// @return a row that applies to every payment method
-    static StandardUnitRate createRate(String validFrom, String validTo, double price) {
+    public static StandardUnitRate createRate(String validFrom, String validTo, double price) {
         return buildRate(validFrom, validTo, price, null);
     }
 
     /// @param paymentMethod the payment method to which the row applies
     /// @return a row with no end date
-    static StandardUnitRate createRate(String validFrom, double price, String paymentMethod) {
+    public static StandardUnitRate createRate(String validFrom, double price, String paymentMethod) {
         return buildRate(validFrom, null, price, paymentMethod);
     }
 

@@ -5,7 +5,7 @@ import net.yudichev.jiotty.energy.TariffPricing;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 /// Where the prices of one Octopus tariff come from.
-sealed interface TariffPriceSource {
+public sealed interface TariffPriceSource {
     /// A tariff whose prices can be retrieved.
     ///
     /// @param service                 the service that publishes the tariff's prices
